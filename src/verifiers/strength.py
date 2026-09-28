@@ -1,42 +1,39 @@
-"""Suite strength verifier: evaluates assertion rigor and test depth."""
+"""Mutation testing & suite strength verifier.
+
+Real suite strength is determined by Mutation Score (mutants_killed / total_mutants),
+NOT by parsing stdout strings. A test suite that passes when patch logic is mutated
+has a Mutation Score of 0.0 (weak/superficial test suite).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass(frozen=True)
 class SuiteStrength:
-    assertions_count: int
-    boundary_checks: int
-    score: float
+    mutants_total: int
+    mutants_killed: int
+    mutation_score: float
+    is_measured: bool
 
     @property
     def is_strong(self) -> bool:
-        return self.score >= 0.75
+        return self.mutation_score >= 0.75 if self.is_measured else False
 
 
-def calculate_suite_strength(
-    diff_coverage_ratio: float,
-    output_text: str = "",
-    assertion_count: int = 1,
+def calculate_mutation_score(
+    mutants_total: int,
+    mutants_killed: int,
 ) -> SuiteStrength:
-    """Calculate suite strength score.
-
-    Evaluates whether the test suite has real assertions and sufficient
-    depth rather than superficial execution.
-    """
-    if diff_coverage_ratio <= 0.0:
-        return SuiteStrength(0, 0, 0.0)
-
-    base_score = diff_coverage_ratio
-    has_assertions = "assert" in output_text.lower() or assertion_count > 0 or "passed" in output_text.lower()
-    if not has_assertions:
-        base_score *= 0.5
-
-    final_score = round(max(0.0, min(1.0, base_score)), 4)
+    """Calculate real mutation testing score from execution evidence."""
+    if mutants_total <= 0:
+        return SuiteStrength(0, 0, 0.0, is_measured=False)
+    score = round(max(0.0, min(1.0, mutants_killed / mutants_total)), 4)
     return SuiteStrength(
-        assertions_count=assertion_count if has_assertions else 0,
-        boundary_checks=1 if has_assertions else 0,
-        score=final_score,
+        mutants_total=mutants_total,
+        mutants_killed=mutants_killed,
+        mutation_score=score,
+        is_measured=True,
     )
