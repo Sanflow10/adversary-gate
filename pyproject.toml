@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/adversary-gate/adversary-gate"
-Documentation = "https://github.com/adversary-gate/adversary-gate#readme"
-Repository = "https://github.com/adversary-gate/adversary-gate.git"
-Issues = "https://github.com/adversary-gate/adversary-gate/issues"
+Homepage = "https://github.com/Sanflow10/adversary-gate"
+Documentation = "https://github.com/Sanflow10/adversary-gate#readme"
+Repository = "https://github.com/Sanflow10/adversary-gate.git"
+Issues = "https://github.com/Sanflow10/adversary-gate/issues"
 
 [project.scripts]
 adversary-gate = "cli:main"

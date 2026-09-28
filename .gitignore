@@ -34,3 +34,6 @@ ENV/
 
 # Evidence logs
 *.jsonl
+
+# Build artifacts (publishing a stale dist/ breaks the release)
+dist/
