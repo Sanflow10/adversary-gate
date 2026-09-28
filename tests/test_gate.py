@@ -771,8 +771,7 @@ class TestEndToEndRegression(unittest.TestCase):
             CriticClaim("t.py", "t1"),
             ExecutionOutcome(base, patch_state, run_count=3, baseline_exit_codes=(0, 0, 0), patch_exit_codes=(0, 0, 0)),
         )
-        v.suite_strength = 0.50
-        self.assertIs(gate.decide([v], 4, 1.0), Decision.INCONCLUSIVE)
+        self.assertIs(gate.decide([v], 4, 1.0, suite_strength=0.50), Decision.INCONCLUSIVE)
 
     def test_failed_full_suite_returns_block(self):
         """Full suite regression collateral failure blocks merge."""
@@ -784,8 +783,8 @@ class TestEndToEndRegression(unittest.TestCase):
             CriticClaim("t.py", "t1"),
             ExecutionOutcome(base, patch_state, run_count=3, baseline_exit_codes=(0, 0, 0), patch_exit_codes=(0, 0, 0)),
         )
-        v.suite_strength = 1.0
         self.assertIs(gate.decide([v], 4, 1.0, full_suite_passed=False), Decision.BLOCK)
+
 
 
 if __name__ == "__main__":

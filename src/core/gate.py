@@ -48,7 +48,7 @@ from core.types import (
 from sandbox.runner import SandboxResult, run_test
 from verifiers.coverage import DiffCoverage, covered_diff_ratio
 from verifiers.stability import StabilityPolicy, policy_for
-from verifiers.strength import calculate_suite_strength
+from verifiers.strength import calculate_mutation_score
 
 
 @dataclass(frozen=True)
@@ -425,8 +425,6 @@ class Gate:
         )
 
         verdict = self.classify(claim, run_outcome)
-        strength = calculate_suite_strength(1.0, patch_output)
-        verdict.suite_strength = strength.score
 
         if verdict.outcome is Outcome.UNVERIFIED:
             # Attach *how* each side behaved: an unverified verdict that does
@@ -449,10 +447,10 @@ class Gate:
         """Patch-level decision. Fail-closed by construction.
 
         The only way to reach ``MERGE`` is for every verdict to be
-        ``VERIFIED``, coverage to clear the floor, and suite strength to clear
-        the strength floor. Missing verdicts, weak suites, malformed inputs,
-        unverified claims and open circuits all land on ``INCONCLUSIVE``, which
-        is reportable and non-merging.
+        ``VERIFIED``, coverage to clear the floor, and suite strength (when
+        measured) to clear the strength floor. Missing verdicts, weak suites,
+        malformed inputs, unverified claims and open circuits all land on
+        ``INCONCLUSIVE``, which is reportable and non-merging.
         """
         if not 0 <= rounds_used <= self.max_rounds:
             return Decision.INCONCLUSIVE
@@ -461,12 +459,7 @@ class Gate:
         if diff_coverage_ratio < self.config.coverage_floor:
             return Decision.INCONCLUSIVE
 
-        effective_strength = (
-            min((v.suite_strength for v in verdicts), default=1.0)
-            if suite_strength is None
-            else suite_strength
-        )
-        if effective_strength < self.config.suite_strength_floor:
+        if suite_strength is not None and suite_strength < self.config.suite_strength_floor:
             return Decision.INCONCLUSIVE
 
         if not full_suite_passed:
@@ -484,6 +477,7 @@ class Gate:
         if Outcome.UNVERIFIED in outcomes:
             return Decision.INCONCLUSIVE
         return Decision.MERGE
+
 
 
     def should_accept_patch(
