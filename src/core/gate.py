@@ -48,7 +48,6 @@ from core.types import (
 from sandbox.runner import SandboxResult, run_test
 from verifiers.coverage import DiffCoverage, covered_diff_ratio
 from verifiers.stability import StabilityPolicy, policy_for
-from verifiers.strength import calculate_mutation_score
 
 
 @dataclass(frozen=True)
@@ -443,14 +442,39 @@ class Gate:
         diff_coverage_ratio: float,
         suite_strength: Optional[float] = None,
         full_suite_passed: bool = True,
+        full_suite_exit_codes: Optional[Sequence[int]] = None,
+        suite_strength_unverified: bool = False,
     ) -> Decision:
         """Patch-level decision. Fail-closed by construction.
 
         The only way to reach ``MERGE`` is for every verdict to be
-        ``VERIFIED``, coverage to clear the floor, and suite strength (when
-        measured) to clear the strength floor. Missing verdicts, weak suites,
-        malformed inputs, unverified claims and open circuits all land on
-        ``INCONCLUSIVE``, which is reportable and non-merging.
+        ``VERIFIED``, coverage to clear the floor, suite strength to clear the
+        strength floor, and the full suite to still pass on the patch side.
+        Missing verdicts, weak suites, malformed inputs, unverified claims and
+        open circuits all land on ``INCONCLUSIVE``, which is reportable and
+        non-merging.
+
+        Precedence is deliberate and is ``BLOCK`` > ``INCONCLUSIVE`` >
+        ``MERGE``, ordered so that direct evidence always outranks missing
+        evidence:
+
+        1. malformed input, coverage below floor  -> ``INCONCLUSIVE``
+        2. any verdict ``REFUTED``               -> ``BLOCK``   (we *saw* it break)
+        3. full suite regressed                  -> ``BLOCK``   (we saw it break elsewhere)
+        4. weak / unmeasured suite strength      -> ``INCONCLUSIVE``
+        5. any verdict ``UNVERIFIED``            -> ``INCONCLUSIVE``
+        6. suite could not be judged             -> ``INCONCLUSIVE``
+        7. exhausted budget, no verdicts         -> ``INCONCLUSIVE``
+
+        ``full_suite_exit_codes`` is ``(baseline, patch)`` and supersedes the
+        boolean ``full_suite_passed`` when present. Both sides are needed: a
+        single ``exit != 0`` would blame the patch for failures that were
+        already there, which is the same collapse ``exitmap.py`` documents for
+        claim execution.
+
+        ``suite_strength_unverified`` says "there was code to judge and we
+        could not judge it". It is distinct from ``suite_strength is None``,
+        which means "no code changed, the question does not apply".
         """
         if not 0 <= rounds_used <= self.max_rounds:
             return Decision.INCONCLUSIVE
@@ -459,22 +483,46 @@ class Gate:
         if diff_coverage_ratio < self.config.coverage_floor:
             return Decision.INCONCLUSIVE
 
+        outcomes = {verdict.outcome for verdict in verdicts}
+
+        # Direct evidence of breakage outranks everything below it.
+        if Outcome.REFUTED in outcomes:
+            return Decision.BLOCK
+
+        full_suite_unverifiable = False
+        if full_suite_exit_codes is not None:
+            if len(full_suite_exit_codes) != 2:
+                return Decision.INCONCLUSIVE
+            baseline_code, patch_code = full_suite_exit_codes
+            if patch_code == 0:
+                pass  # patch side clean: nothing regressed there, whatever baseline did
+            elif baseline_code == 0:
+                # Only the patch fails the suite it used to pass: collateral
+                # regression, and we watched it happen.
+                return Decision.BLOCK
+            else:
+                # Neither side is clean, so the failure cannot be attributed to
+                # the patch. Blocking would blame it for what was already there;
+                # merging would ignore that we still do not know. Both reasons
+                # this check needs two sides instead of one ``exit != 0``.
+                full_suite_unverifiable = True
+        elif not full_suite_passed:
+            return Decision.BLOCK
+
         if suite_strength is not None and suite_strength < self.config.suite_strength_floor:
             return Decision.INCONCLUSIVE
+        if suite_strength_unverified:
+            return Decision.INCONCLUSIVE
 
-        if not full_suite_passed:
-            return Decision.BLOCK
+        if Outcome.UNVERIFIED in outcomes:
+            return Decision.INCONCLUSIVE
+        if full_suite_unverifiable:
+            return Decision.INCONCLUSIVE
 
         if self.aggression is AggressionLevel.NUCLEAR and rounds_used < self.max_rounds:
             return Decision.INCONCLUSIVE
         if not verdicts:
             # Nothing was ever checked. "No verdicts" is not "no problems".
-            return Decision.INCONCLUSIVE
-
-        outcomes = {verdict.outcome for verdict in verdicts}
-        if Outcome.REFUTED in outcomes:
-            return Decision.BLOCK
-        if Outcome.UNVERIFIED in outcomes:
             return Decision.INCONCLUSIVE
         return Decision.MERGE
 

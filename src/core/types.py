@@ -151,7 +151,11 @@ class GateVerdict:
     reason: str
     outcome_run: Optional[ExecutionOutcome] = None
     duration_seconds: float = 0.0
-    suite_strength: float = 1.0
+    # No ``suite_strength`` here on purpose. It used to be a field defaulting
+    # to 1.0, it was never assigned anything else, and patch-level strength is
+    # now measured in ``verifiers.strength.measure_mutation_score`` and passed
+    # to ``Gate.decide`` by the CLI. A field that reads "perfect" when nobody
+    # measured it is how a floor becomes unreachable.
 
     # Kept as a property so existing call sites still read naturally, but it
     # is now derived -- there is no independent bool to drift out of sync.

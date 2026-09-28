@@ -29,9 +29,22 @@ A single invariant governs the entire system:
 
 ### Patch Decision Matrix
 
-- **`Decision.MERGE`**: Requires **every** verdict to be `VERIFIED`, `diff_coverage >= 80%`, `suite_strength >= 75%`, and the full repository test suite to pass.
-- **`Decision.BLOCK`**: Triggered if any claim is `REFUTED` or if the full test suite fails (*collateral regression*).
-- **`Decision.INCONCLUSIVE`**: Triggered on `UNVERIFIED` outcomes, open circuit breakers, or weak test suites (`suite_strength < 0.75`). **Never merges.**
+- **`Decision.MERGE`**: Requires **every** verdict to be `VERIFIED`, `diff_coverage >= 80%`, `suite_strength >= 75%` when strength was measurable, and the full repository test suite to pass on the patch side.
+- **`Decision.BLOCK`**: Triggered if any claim is `REFUTED`, or if the patch fails the full test suite **that the baseline passed** (*collateral regression*).
+- **`Decision.INCONCLUSIVE`**: Triggered on `UNVERIFIED` outcomes, open circuit breakers, a weak test suite (`suite_strength < 0.75`), a strength that could not be measured even though source changed, or a full suite that was already red before the patch. **Never merges.**
+
+Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always outranks missing evidence: a patch whose claim could not be executed but whose collateral run broke the suite is `BLOCK`, not a shrug.
+
+### How `suite_strength` is measured
+
+It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claim's tests against them. It is not derived from coverage or from parsing pytest output.
+
+- Mutants are limited to lines the patch actually wrote; mutating untouched lines would let tests covering unrelated code inflate the score.
+- A mutant that no longer runs at all (syntax/collection error) is *stillborn* and excluded from both sides of the ratio rather than counted as a kill.
+- `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
+- If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
+
+`--mutation-max N` bounds the cost (`0` disables the measurement entirely, which is recorded as such in the evidence artefact).
 
 ---
 
