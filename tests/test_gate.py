@@ -50,6 +50,13 @@ from core.types import (
 )
 from sandbox.runner import SandboxResult, build_target
 from verifiers.stability import policy_for
+from verifiers.strength import (
+    _is_test_path,
+    calculate_mutation_score,
+    changed_lines,
+    changed_source_files,
+    measure_mutation_score,
+)
 
 
 def make_gate(**kwargs) -> Gate:
@@ -651,18 +658,49 @@ class TestCliExitCodes(unittest.TestCase):
             self.assertEqual(code, EXIT_MERGE)
 
     def test_missing_test_file_exits_inconclusive_not_merge(self):
+        """Claim we cannot execute, on a patch with no other damage -> INCONCLUSIVE.
+
+        Split from the BLOCK case below: the original test paired an
+        unverifiable claim with ``break_patch=True``, so it asserted
+        INCONCLUSIVE while the fixture was also breaking the suite. Which of
+        the two answers is correct depends on that second condition, and
+        testing both under one name hid it.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=False)
+            code = self._invoke(root, ["--test-path", "nao_existe.py"])
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+
+    def test_missing_test_file_with_regressed_full_suite_exits_block(self):
+        """Unverifiable claim, but the collateral run proves the patch broke tests.
+
+        Direct evidence outranks missing evidence. We could not check the
+        claim, yet baseline passed the full suite and patch did not -- that is
+        a regression we watched happen, and reporting it as a shrug would
+        understate what we know.
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=True)
             code = self._invoke(root, ["--test-path", "nao_existe.py"])
-            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertEqual(code, EXIT_BLOCK)
 
     def test_protected_path_exits_inconclusive_not_merge(self):
+        """Protected path on a patch with no other damage -> INCONCLUSIVE."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=False)
+            code = self._invoke(root, ["--changed-path", "conftest.py"])
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+
+    def test_protected_path_with_regressed_full_suite_exits_block(self):
+        """Protected path plus a real collateral regression -> BLOCK."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=True)
             code = self._invoke(root, ["--changed-path", "conftest.py"])
-            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertEqual(code, EXIT_BLOCK)
 
     def test_usage_error_is_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -785,6 +823,197 @@ class TestEndToEndRegression(unittest.TestCase):
         )
         self.assertIs(gate.decide([v], 4, 1.0, full_suite_passed=False), Decision.BLOCK)
 
+
+
+class TestSuiteStrengthIsMeasured(unittest.TestCase):
+    """Regression for two gates that existed but could never fire.
+
+    ``suite_strength`` was computed as ``calculate_suite_strength(1.0,
+    patch_output)``: coverage hardcoded to 1.0 and ``assertion_count``
+    defaulting to 1, so ``has_assertions`` was unconditionally true and the
+    score came out 1.0 for every input -- including an empty one. The only
+    two tests covering the area asserted ``decide(..., suite_strength=0.50)``
+    and ``decide(..., full_suite_passed=False)``, which proved the branches
+    were correct while proving nothing about whether a value ever reached
+    them. Both were unreachable in production.
+
+    Everything below asserts on the value *produced* by execution.
+    """
+
+    BASE = "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n"
+    TEST = "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+
+    def _tree(self, root: Path, patch_source: str) -> None:
+        for side in ("baseline", "patch"):
+            (root / side).mkdir(parents=True, exist_ok=True)
+            (root / side / "test_sum.py").write_text(self.TEST)
+        (root / "baseline" / "calc.py").write_text(self.BASE)
+        (root / "patch" / "calc.py").write_text(patch_source)
+
+    def _strength(self, root: Path, **kwargs):
+        return measure_mutation_score(
+            root / "baseline", root / "patch", "test_sum.py", **kwargs
+        )
+
+    def test_score_comes_from_execution_and_is_not_always_one(self):
+        """The bug: a suite nobody exercises must not read as perfect."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # patch edits `sub`, which no test touches
+            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            score, detail = self._strength(root, max_mutants=2)
+            self.assertTrue(score.is_measured, detail)
+            self.assertLess(score.mutation_score, 1.0)
+            self.assertLess(score.mutation_score, 0.75)
+            self.assertFalse(score.is_strong)
+            self.assertEqual(detail["survivors"], ["calc.py:5"])
+
+    def test_change_the_suite_covers_scores_at_or_above_the_floor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE.replace("return a + b", "return (a + b)"))
+            score, detail = self._strength(root, max_mutants=2)
+            self.assertTrue(score.is_measured, detail)
+            self.assertGreaterEqual(score.mutation_score, 0.75)
+            self.assertTrue(score.is_strong)
+            self.assertEqual(score.mutants_killed, score.mutants_total)
+
+    def test_unchanged_source_is_unknown_not_strong(self):
+        """No code changed -> nothing to measure. ``is_strong`` must stay False."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE)
+            self.assertEqual(changed_source_files(root / "baseline", root / "patch"), [])
+            score, detail = self._strength(root)
+            self.assertFalse(score.is_measured)
+            self.assertFalse(score.is_strong)
+            self.assertIn("reason", detail)
+
+    def test_detail_shape_is_identical_on_every_exit_path(self):
+        """An artefact whose keys vanish when nothing was measured is unqueryable."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE)
+            _, unmeasured = self._strength(root)
+            self._tree(root, self.BASE.replace("return a + b", "return (a + b)"))
+            _, measured = self._strength(root, max_mutants=2)
+            self.assertEqual(set(unmeasured), set(measured))
+            for key in ("measured", "reason", "changed_files", "mutants",
+                        "survivors", "mutants_counted", "stillborn"):
+                self.assertIn(key, unmeasured)
+                self.assertIn(key, measured)
+
+    def test_only_lines_the_patch_wrote_are_mutated(self):
+        """File granularity would mutate code the patch never touched."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE.replace("return a + b", "return (a + b)"))
+            before = (root / "baseline" / "calc.py").read_text()
+            after = (root / "patch" / "calc.py").read_text()
+            self.assertEqual(changed_lines(before, after), {2})
+            score, detail = self._strength(root, max_mutants=5)
+            self.assertTrue(score.is_measured, detail)
+            for mutant in detail["mutants"]:
+                self.assertEqual(mutant["line"], 2)
+
+    def test_evidence_artifact_carries_the_measured_value(self):
+        """A strength the log cannot show is as unauditable as no strength."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            log_path = root / "evidence.jsonl"
+            code = main([
+                "--baseline", str(root / "baseline"),
+                "--patch", str(root / "patch"),
+                "--test-path", "test_sum.py",
+                "--test-id", "test_add",
+                "--evidence-log", str(log_path),
+            ])
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decisions = [r for r in records if r.get("kind") == "decision"]
+            self.assertTrue(decisions, records)
+            record = decisions[-1]
+            self.assertIn("suite_strength", record)
+            self.assertIsInstance(record["suite_strength"], float)
+            self.assertLess(record["suite_strength"], 1.0)
+            self.assertIn("mutation", record)
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+
+    def test_is_test_path_recognizes_all_test_patterns(self):
+        """Standard pytest discovery recognizes both test_*.py and *_test.py."""
+        self.assertTrue(_is_test_path("test_calc.py"))
+        self.assertTrue(_is_test_path("calc_test.py"))
+        self.assertTrue(_is_test_path("tests/sub/util.py"))
+        self.assertTrue(_is_test_path("conftest.py"))
+        self.assertFalse(_is_test_path("src/calc.py"))
+        self.assertFalse(_is_test_path("calc.py"))
+
+
+class TestFullSuiteUsesBothSides(unittest.TestCase):
+    """``full_suite_passed`` defaulted to True and was never assigned.
+
+    Checking only the patch side would repeat the collapse ``exitmap.py``
+    documents for claim execution: blaming the patch for failures that were
+    already in the baseline.
+    """
+
+    def _verified(self) -> GateVerdict:
+        gate = make_gate()
+        policy = policy_for(BugKind.DETERMINISTIC)
+        base, _, _ = gate._resolve_side([0, 0, 0], policy, label="baseline")
+        patched, _, _ = gate._resolve_side([0, 0, 0], policy, label="patch")
+        return gate.classify(
+            CriticClaim("t.py", "t1"),
+            ExecutionOutcome(
+                base, patched, run_count=3,
+                baseline_exit_codes=(0, 0, 0), patch_exit_codes=(0, 0, 0),
+            ),
+        )
+
+    def _decide(self, codes):
+        return make_gate().decide([self._verified()], 4, 1.0, full_suite_exit_codes=codes)
+
+    def test_baseline_ok_patch_broken_is_block(self):
+        self.assertIs(self._decide((0, 1)), Decision.BLOCK)
+
+    def test_already_broken_on_both_sides_is_not_attributable(self):
+        self.assertIs(self._decide((1, 1)), Decision.INCONCLUSIVE)
+
+    def test_patch_fixing_a_broken_baseline_is_not_a_regression(self):
+        self.assertIs(self._decide((1, 0)), Decision.MERGE)
+
+    def test_both_clean_is_merge(self):
+        self.assertIs(self._decide((0, 0)), Decision.MERGE)
+
+    def test_unrunnable_full_suite_is_inconclusive(self):
+        for codes in ((2, 1), (0, 2), (5, 1)):
+            with self.subTest(codes=codes):
+                if codes[0] == 0:
+                    # patch side unrunnable while baseline passed: the patch
+                    # destroyed the suite's ability to run at all -> BLOCK
+                    self.assertIs(self._decide(codes), Decision.BLOCK)
+                else:
+                    self.assertIs(self._decide(codes), Decision.INCONCLUSIVE)
+
+    def test_unmeasured_strength_blocks_merge(self):
+        """Unknown is not strong: it must not be able to reach MERGE."""
+        gate = make_gate()
+        policy = policy_for(BugKind.DETERMINISTIC)
+        base, _, _ = gate._resolve_side([0, 0, 0], policy, label="baseline")
+        patched, _, _ = gate._resolve_side([0, 0, 0], policy, label="patch")
+        verdict = gate.classify(
+            CriticClaim("t.py", "t1"),
+            ExecutionOutcome(
+                base, patched, run_count=3,
+                baseline_exit_codes=(0, 0, 0), patch_exit_codes=(0, 0, 0),
+            ),
+        )
+        self.assertIs(verdict.outcome, Outcome.VERIFIED)
+        self.assertIs(gate.decide([verdict], 4, 1.0), Decision.MERGE)
+        self.assertIs(
+            gate.decide([verdict], 4, 1.0, suite_strength_unverified=True),
+            Decision.INCONCLUSIVE,
+        )
 
 
 if __name__ == "__main__":

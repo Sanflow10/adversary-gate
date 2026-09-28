@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from core.exitmap import PYTEST_OK
 from core.gate import Gate, GateConfig
 from core.metrics import compute_metrics, format_report
 from core.types import (
@@ -24,7 +26,10 @@ from core.types import (
     BugKind,
     CriticClaim,
     Decision,
+    Outcome,
 )
+from sandbox.runner import run_test
+from verifiers.strength import changed_source_files, measure_mutation_score
 
 EXIT_MERGE = 0
 EXIT_BLOCK = 1
@@ -104,6 +109,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-ratio", type=float, default=1.0)
     parser.add_argument("--coverage-floor", type=float, default=0.80)
     parser.add_argument("--suite-strength-floor", type=float, default=0.75)
+    parser.add_argument(
+        "--mutation-max",
+        type=int,
+        default=6,
+        metavar="N",
+        help="max mutants to execute when measuring suite strength (0 disables the measurement)",
+    )
+    parser.add_argument(
+        "--full-suite-path",
+        default=".",
+        metavar="DIR",
+        help="where the collateral full-suite run happens ('' disables it)",
+    )
     parser.add_argument("--rounds-used", type=int, default=4)
     parser.add_argument("--evidence-log", help="path to the evidence artefact (JSONL)")
     parser.add_argument("--model", help="model that produced the patch")
@@ -157,11 +175,55 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             changed_paths=args.changed_path,
         )
 
+        # ------------------------------------------------------------------
+        # Patch-level measurements. Both used to be parameters that defaulted
+        # to "fine" and were never assigned anything else, so the two gates in
+        # ``decide`` that consume them were unreachable. They are computed
+        # here, from execution, and recorded -- a strength value that never
+        # reaches the evidence artefact cannot be audited either.
+        # ------------------------------------------------------------------
+        started = time.monotonic()
+        strength: Optional[float] = None
+        strength_unverified = False
+        mutation_detail: Dict[str, Any]
+
+        if args.mutation_max <= 0:
+            mutation_detail = {"measured": False, "reason": "disabled (--mutation-max 0)"}
+        else:
+            strength_obj, mutation_detail = measure_mutation_score(
+                Path(args.baseline),
+                Path(args.patch),
+                claim.test_path,
+                test_id="",
+                max_mutants=args.mutation_max,
+            )
+            if strength_obj.is_measured:
+                strength = strength_obj.mutation_score
+            elif mutation_detail.get("changed_files") and verdict.outcome is Outcome.VERIFIED:
+                # There was code to judge, the claim itself executed and came
+                # back VERIFIED, and we still could not produce a score. That
+                # is *unknown*, not strong, so it must not reach MERGE. When
+                # the claim did not verify, its own outcome already decides and
+                # strength would only add noise to the reason.
+                strength_unverified = True
+
+        full_codes: Optional[Sequence[int]] = None
+        if args.full_suite_path:
+            # Only pay for the baseline run when the patch side actually failed;
+            # a passing patch side is not a collateral regression either way.
+            patch_full = run_test(Path(args.patch), args.full_suite_path, "")
+            if patch_full.exit_code != PYTEST_OK:
+                base_full = run_test(Path(args.baseline), args.full_suite_path, "")
+                full_codes = (base_full.exit_code, patch_full.exit_code)
+        mutation_seconds = time.monotonic() - started
+
         decision = gate.decide(
             [verdict],
             args.rounds_used,
             args.coverage_ratio,
-            suite_strength=verdict.suite_strength,
+            suite_strength=strength,
+            full_suite_exit_codes=full_codes,
+            suite_strength_unverified=strength_unverified,
         )
 
         if log is not None:
@@ -169,7 +231,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 decision.value,
                 args.rounds_used,
                 args.coverage_ratio,
-                _summary([verdict]),
+                {
+                    **_summary([verdict]),
+                    # The floor only ever receives a real measurement, so a
+                    # reader can tell "strong" from "not measured" from "weak".
+                    "suite_strength": strength,
+                    "suite_strength_unverified": strength_unverified,
+                    "suite_strength_floor": args.suite_strength_floor,
+                    "mutation": mutation_detail,
+                    "full_suite_exit_codes": list(full_codes) if full_codes else None,
+                },
             )
 
         payload = {
@@ -178,7 +249,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "decision": decision.value,
             "reason": verdict.reason,
             "duration_seconds": round(verdict.duration_seconds, 6),
+            # None means "not measured", never "perfect".
+            "suite_strength": strength,
+            "suite_strength_unverified": strength_unverified,
+            "suite_strength_floor": args.suite_strength_floor,
+            "mutation": mutation_detail,
+            "measurement_seconds": round(mutation_seconds, 6),
         }
+        if full_codes is not None:
+            payload["full_suite_exit_codes"] = list(full_codes)
         if verdict.outcome_run is not None:
             payload["evidence"] = {
                 "baseline": verdict.outcome_run.baseline.value,
@@ -186,7 +265,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "baseline_exit_codes": list(verdict.outcome_run.baseline_exit_codes),
                 "patch_exit_codes": list(verdict.outcome_run.patch_exit_codes),
             }
-        print(json.dumps(payload, indent=2))
+        print(json.dumps(payload, indent=2, default=str))
 
         if args.report and log is not None:
             print(file=sys.stderr)
