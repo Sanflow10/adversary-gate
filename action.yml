@@ -73,9 +73,9 @@ runs:
           --test-path "${{ inputs.test-path }}"
           --test-id "${{ inputs.test-id }}"
           --bug-kind "${{ inputs.bug-kind }}"
-          --coverage-ratio "${{ inputs.coverage-floor }}"
+          --coverage-floor "${{ inputs.coverage-floor }}"
+          --suite-strength-floor "${{ inputs.suite-strength-floor }}"
           --evidence-log "${{ inputs.evidence-log }}"
-          --report
         )
         if [ -n "${{ inputs.criterion-id }}" ]; then
           ARGS+=(--criterion-id "${{ inputs.criterion-id }}")
@@ -90,4 +90,14 @@ runs:
           ARGS+=(--commit "${{ inputs.commit }}")
         fi
 
-        PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}"
+        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}")
+        EXIT_CODE=$?
+        echo "$JSON_OUT"
+
+        DECISION=$(echo "$JSON_OUT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('decision', 'inconclusive'))" 2>/dev/null || echo "inconclusive")
+        OUTCOME=$(echo "$JSON_OUT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('outcome', 'unverified'))" 2>/dev/null || echo "unverified")
+
+        echo "decision=${DECISION}" >> $GITHUB_OUTPUT
+        echo "outcome=${OUTCOME}" >> $GITHUB_OUTPUT
+
+        exit $EXIT_CODE
