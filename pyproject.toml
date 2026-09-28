@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adversary-gate"
+version = "2.0.0"
+description = "Evidence-based verification gate for AI coding agents (fail-closed)"
+readme = "README.md"
+authors = [
+    {name = "AdversaryGate Authors"}
+]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "pytest>=8.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/adversary-gate/adversary-gate"
+Documentation = "https://github.com/adversary-gate/adversary-gate#readme"
+Repository = "https://github.com/adversary-gate/adversary-gate.git"
+Issues = "https://github.com/adversary-gate/adversary-gate/issues"
+
+[project.scripts]
+adversary-gate = "cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["cli"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
