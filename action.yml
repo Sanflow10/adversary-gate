@@ -1,0 +1,93 @@
+name: 'AdversaryGate'
+description: 'Evidence-based fail-closed verification gate for AI coding agents'
+author: 'AdversaryGate Authors'
+branding:
+  icon: 'shield-check'
+  color: 'blue'
+
+inputs:
+  baseline:
+    description: 'Path to baseline repository state (before patch)'
+    required: true
+  patch:
+    description: 'Path to patch repository state (after patch)'
+    required: true
+  test-path:
+    description: 'Relative path to target test file'
+    required: true
+  test-id:
+    description: 'Node ID or test name to verify'
+    required: true
+  bug-kind:
+    description: 'Bug category: deterministic, concurrency, or performance'
+    required: false
+    default: 'deterministic'
+  criterion-id:
+    description: 'ID of cited acceptance criterion'
+    required: false
+  criterion:
+    description: 'Acceptance criterion text in ID:TEXT format'
+    required: false
+  coverage-floor:
+    description: 'Minimum required diff coverage ratio (0.0 to 1.0)'
+    required: false
+    default: '0.80'
+  suite-strength-floor:
+    description: 'Minimum required suite strength ratio (0.0 to 1.0)'
+    required: false
+    default: '0.75'
+  evidence-log:
+    description: 'Path to save JSONL evidence log artefact'
+    required: false
+    default: 'evidence.jsonl'
+  model:
+    description: 'Dynamic identifier of the model or coding agent that produced the patch'
+    required: false
+  commit:
+    description: 'Commit SHA of the patch'
+    required: false
+
+outputs:
+  decision:
+    description: 'Final decision: merge, block, or inconclusive'
+    value: ${{ steps.gate.outputs.decision }}
+  outcome:
+    description: 'Verdict outcome: verified, refuted, or unverified'
+    value: ${{ steps.gate.outputs.outcome }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Execute AdversaryGate Verification
+      id: gate
+      shell: bash
+      run: |
+        ARGS=(
+          --baseline "${{ inputs.baseline }}"
+          --patch "${{ inputs.patch }}"
+          --test-path "${{ inputs.test-path }}"
+          --test-id "${{ inputs.test-id }}"
+          --bug-kind "${{ inputs.bug-kind }}"
+          --coverage-ratio "${{ inputs.coverage-floor }}"
+          --evidence-log "${{ inputs.evidence-log }}"
+          --report
+        )
+        if [ -n "${{ inputs.criterion-id }}" ]; then
+          ARGS+=(--criterion-id "${{ inputs.criterion-id }}")
+        fi
+        if [ -n "${{ inputs.criterion }}" ]; then
+          ARGS+=(--criterion "${{ inputs.criterion }}")
+        fi
+        if [ -n "${{ inputs.model }}" ]; then
+          ARGS+=(--model "${{ inputs.model }}")
+        fi
+        if [ -n "${{ inputs.commit }}" ]; then
+          ARGS+=(--commit "${{ inputs.commit }}")
+        fi
+
+        PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}"
