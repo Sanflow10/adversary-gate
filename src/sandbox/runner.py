@@ -148,7 +148,8 @@ def run_test(
             start_new_session=True,
         )
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        return SandboxResult(proc.returncode, stdout, stderr, False)
+        code = _detect_harness_error(proc.returncode, stdout, stderr)
+        return SandboxResult(code, stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:
         assert proc is not None
         try:
@@ -165,3 +166,14 @@ def run_test(
         # -1 is deliberately distinct from pytest's own codes: a timeout is
         # the harness giving up, not pytest reporting a failure.
         return SandboxResult(-1, out or "", err or "", True)
+
+
+def _detect_harness_error(exit_code: int, stdout: str, stderr: str) -> int:
+    """Ensure missing pytest or harness crashes become UNRUNNABLE (3/4)."""
+    combined = f"{stdout}\n{stderr}".lower()
+    if "no module named pytest" in combined or "no module named 'pytest'" in combined:
+        return 3
+    if "pytest: error:" in combined:
+        return 4
+    return exit_code
+

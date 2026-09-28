@@ -5,13 +5,7 @@ Exit codes are part of the contract, because CI reads them:
     0  -> MERGE       every claim executed and none condemned the patch
     1  -> BLOCK       at least one claim was REFUTED by execution
     2  -> INCONCLUSIVE something could not be verified (does not merge)
-    3  -> usage / input error
-
-The original returned ``0 if verdict.accepted else 1``, i.e. a *confirmed
-regression* produced exit 0. Plugged into a CI step that treats 0 as success,
-a proven bug authorized the merge -- the opposite of a gate. A second flaw:
-``--aggression`` and ``--max-rounds`` were parsed and passed to ``Gate`` but
-never read, because ``should_accept_patch`` was never called. Both are gone.
+    3  -> USAGE       argument or input error
 """
 
 from __future__ import annotations
@@ -22,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from core.gate import Gate
+from core.gate import Gate, GateConfig
 from core.metrics import compute_metrics, format_report
 from core.types import (
     AcceptanceCriterion,
@@ -42,6 +36,15 @@ DECISION_EXIT = {
     Decision.BLOCK: EXIT_BLOCK,
     Decision.INCONCLUSIVE: EXIT_INCONCLUSIVE,
 }
+
+
+class _Parser(argparse.ArgumentParser):
+    """Custom ArgumentParser that exits with EXIT_USAGE (3) on error."""
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        print(f"error: {message}", file=sys.stderr)
+        sys.exit(EXIT_USAGE)
 
 
 def _claim_from_args(args: argparse.Namespace) -> CriticClaim:
@@ -81,7 +84,7 @@ def _summary(verdicts) -> Dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="adversary-gate")
+    parser = _Parser(prog="adversary-gate")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--patch", required=True)
     parser.add_argument("--test-path")
@@ -99,19 +102,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--changed-path", action="append", default=[])
     parser.add_argument("--coverage-ratio", type=float, default=1.0)
+    parser.add_argument("--coverage-floor", type=float, default=0.80)
+    parser.add_argument("--suite-strength-floor", type=float, default=0.75)
     parser.add_argument("--rounds-used", type=int, default=4)
     parser.add_argument("--evidence-log", help="path to the evidence artefact (JSONL)")
     parser.add_argument("--model", help="model that produced the patch")
     parser.add_argument("--commit", help="commit sha of the patch")
-    parser.add_argument("--report", action="store_true", help="print the metrics report")
+    parser.add_argument("--report", action="store_true", help="print the metrics report to stderr")
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
     try:
+        parser = build_parser()
+        args = parser.parse_args(argv)
+
         criteria: List[AcceptanceCriterion] = []
         for raw in args.criterion:
             if ":" not in raw:
@@ -134,10 +139,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 context["commit"] = args.commit
             log = EvidenceLog(Path(args.evidence_log), context=context)
 
+        config = GateConfig(
+            coverage_floor=args.coverage_floor,
+            suite_strength_floor=args.suite_strength_floor,
+        )
         gate = Gate(
             criteria,
             AggressionLevel(args.aggression),
             args.max_rounds,
+            config=config,
             evidence_log=log,
         )
         verdict = gate.verify_claim(
@@ -147,7 +157,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             changed_paths=args.changed_path,
         )
 
-        decision = gate.decide([verdict], args.rounds_used, args.coverage_ratio)
+        decision = gate.decide(
+            [verdict],
+            args.rounds_used,
+            args.coverage_ratio,
+            suite_strength=verdict.suite_strength,
+        )
 
         if log is not None:
             log.append_decision(
@@ -174,14 +189,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(payload, indent=2))
 
         if args.report and log is not None:
-            print()
-            print(format_report(compute_metrics(log.read_all())))
+            print(file=sys.stderr)
+            print(format_report(compute_metrics(log.read_all())), file=sys.stderr)
 
         return DECISION_EXIT[decision]
 
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_USAGE
     except (ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    except Exception as exc:
+        print(f"uncaught error: {exc}", file=sys.stderr)
+        return EXIT_INCONCLUSIVE
 
 
 if __name__ == "__main__":
