@@ -52,3 +52,19 @@ Este documento registra erros, divergências de ambiente e inconsistências iden
   * `(0, 1)`: Regressão colateral direta -> `Decision.BLOCK`.
   * `(1, 1)`: Falhas preexistentes em ambos os lados -> `Decision.INCONCLUSIVE` (não atribuível ao patch).
   * `(0, 0)` ou `(1, 0)`: Suíte íntegra no patch -> autoriza prosseguimento para `Decision.MERGE`.
+
+---
+
+## 6. Falha no Trusted Publishing (OIDC) do PyPI (`invalid-publisher`)
+
+* **Inconsistência**: O workflow do GitHub Actions disparado pela tag `v2.0.1` falhou no step `Publish package distributions to PyPI`.
+* **Causa Raiz**: O PyPI recusou a troca de token OIDC com o erro `invalid-publisher: valid token, but no corresponding publisher (Publisher with matching claims was not found)`.
+  * Claims recebidas pelo PyPI:
+    * `repository`: `Sanflow10/adversary-gate`
+    * `workflow_ref`: `Sanflow10/adversary-gate/.github/workflows/pypi-publish.yml@refs/tags/v2.0.1`
+    * `environment`: `MISSING`
+  * O PyPI exige que o projeto em `https://pypi.org/manage/project/adversary-gate/settings/publishing/` tenha o GitHub Actions cadastrado como Trusted Publisher. Além disso, se um `environment` (ex.: `pypi`) for especificado no PyPI, o workflow deve declarar `environment: { name: pypi, url: https://pypi.org/p/adversary-gate }` para casar com a claim.
+* **Soluções Possíveis**:
+  1. **Configuração OIDC no PyPI**: Adicionar o Trusted Publisher nas configurações do projeto no PyPI com `workflow: pypi-publish.yml`.
+  2. **Publicação via API Token (`twine upload`)**: Alternativa direta e imediata usando um token de API gerado no PyPI.
+
