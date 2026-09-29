@@ -1352,6 +1352,47 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             self.assertTrue(decision["suite_strength_unverified"])
             self.assertIsNone(decision["suite_strength"])
 
+    def test_mixed_python_and_cpp_patch_cannot_reach_merge(self):
+        """The half the first fix missed: Python measures, C++ still does not.
+
+        When Python changed too, ``is_measured`` became true and the foreign
+        files were recorded but never acted on, so a mixed patch merged with
+        half of its change never executed. Coverage can mask this (the untested
+        ``.cpp`` lines drag the ratio down), which is why the case has to be
+        pinned with coverage deliberately declared good.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calc.py").write_text(
+                "def add(a, b):\n    return (a + b)\n"
+            )
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decision = [r for r in records if r.get("kind") == "decision"][-1]
+
+            # The Python half really was measured -- it is not a null score.
+            self.assertIsNotNone(decision["suite_strength"])
+            self.assertEqual(decision["mutation"]["changed_files"], ["calc.py"])
+            # ...and that is precisely why the flag has to fire anyway.
+            self.assertEqual(
+                decision["mutation"]["foreign_changed_files"], ["calculator.cpp"]
+            )
+            self.assertTrue(decision["suite_strength_unverified"])
+            self.assertIn("never judged", decision["mutation"]["reason"])
+
     def test_reason_never_claims_nothing_changed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
