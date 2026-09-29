@@ -337,7 +337,23 @@ Os 23 checks de verificação cobrem cada achado em dois níveis: o estado da ar
 ## Pendências
 
 1. **Trusted Publishing do PyPI (AG-008).** As execuções de `Publish to PyPI` falham com `invalid-publisher`. O passo de build passa, o de publish falha — é cadastro em `pypi.org/manage/project/adversary-gate/settings/publishing/`, **fora do repositório**. Não foi alterado; exige decisão de quem administra o projeto.
-2. **Isolamento real de execução (AG-003).** Container/VM/network-namespace são infraestrutura do executor. O README agora diz isso explicitamente, mas o runner continua sem isolamento de segurança.
+2. **Isolamento real de execução (AG-003).** *Parcialmente endereçado:* existe agora `--sandbox bwrap`, que dá sem rede, PID e `/tmp` próprios, sistema somente-leitura e só o repositório gravável — e que **recusa a partida** (exit 3) se `bwrap` não existir, em vez de rodar sem isolamento. Continua **não sendo** um sandbox de segurança: não há seccomp, não há drop de privilégio, e o diretório pai do repositório continua visível. Para código hostil de verdade, container/VM seguem sendo infraestrutura do executor, e o README diz isso explicitamente. O que mudou é que o cenário "nada de infraestrutura, patch provavelmente limpo" deixou de ser coberto apenas por documentação.
 3. **Cobertura de patches com alteração mista.** Um patch que modifica um arquivo e deleta outro tem o primeiro medido e o segundo não; o artefato registra `deleted_files`, mas a decisão só é forçada a `INCONCLUSIVE` quando a deleção é a única mudança. A salvaguarda restante é a suíte completa.
-4. **`DiffCoverage.ratio` é `1.0` quando não há linhas adicionadas.** Um patch puramente deletante reporta cobertura perfeita por vacuidade — a mesma cegueira de AG-001 aplicada à cobertura. Mantido por ser o comportamento documentado da propriedade; registrado aqui como dívida.
+4. **`DiffCoverage.ratio` é `1.0` quando não há linhas adicionadas.** Um patch puramente deletante reporta cobertura perfeita por vacuidade — a mesma cegueira de AG-001 aplicada à cobertura. Mantido por ser o comportamento documentado da propriedade; registrado aqui como dívida. (O caso *parecido* em que o parser não achava nenhum arquivo — uma deleção de arquivo inteiro — **foi** corrigido como AG-017.)
 5. **Nenhuma tag desde `v2.0.1`.** Empurrar uma `v*` dispara `pypi-publish.yml` e deixaria uma run vermelha a cada release enquanto o AG-008 estiver aberto — então nem `v2.0.2` nem `v2.1.0` foram criados. O `release.yml` novo contorna isso (cria a tag com o próprio token, que não dispara outros workflows), mas **ainda não rodou nenhuma vez**: `workflow_dispatch` exige um clique em *Actions → Release → Run workflow*. Enquanto isso `pip install git+https://…` resolve, pois segue `main`.
+6. **Nenhuma verificação adversarial independente.** As correções AG-001..AG-017 foram verificadas por *execução* (exit code real, antes e depois) e por leitura, mas não por terceiro. Auditoria interna não substitui auditoria externa: as falhas AG-012..AG-015 existiam justamente por serem invisíveis de dentro. Resolvelível só com tempo e usuários reais.
+7. **Release não assinada.** Não há tag GPG/Sigstore. Somado ao AG-008, a cadeia de suprimento não é reproduzível por terceiro hoje. Fora do escopo do repositório: exige chaves de identidade do mantenedor.
+
+## Re-auditoria seguinte (AG-013..AG-017)
+
+Uma re-auditoria posterior a este documento não repetiu AG-001..AG-012 —
+verificou-os e procurou *caminhos residuais* ao redor deles. Achou cinco,
+todos reproduzidos por exit code antes de corrigidos: a allowlist de sufixos
+de origem (AG-013), o guard do AG-012 dentro do ramo de mutação (AG-014), o
+parser de diff só reconhecer `+++ b/` (AG-015), o `--test-id` obrigatório para
+suíte sem node id (AG-016) e a recusa de deleção de arquivo inteiro (AG-017).
+
+O detalhamento está em
+[`ERRORS_AND_INCONSISTENCIES.md`](../ERRORS_AND_INCONSISTENCIES.md), secção 8.
+Os dois primeiros e o terceiro eram **fail-open**: produziam `MERGE` que a
+evidência não sustentava, que é exatamente a classe de falha deste produto.

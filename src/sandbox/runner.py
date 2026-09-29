@@ -19,12 +19,14 @@ Two changes from the previous runner, both driven by measured failures:
 from __future__ import annotations
 
 import os
+import shutil
 import signal
+import site
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 try:
     import resource
@@ -63,6 +65,108 @@ def build_target(test_path: str, test_id: str) -> str:
     return f"{test_path}::{test_id}"
 
 
+#: Directories a test process needs to read to start at all. Bound read-only,
+#: so "the code under test can rewrite /usr" stops being a thing that needs
+#: arguing about.
+_SYSTEM_RO = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc")
+
+
+def bwrap_available() -> bool:
+    """Whether an optional real sandbox can be requested at all."""
+    return shutil.which("bwrap") is not None
+
+
+def bwrap_prefix(repo_dir: Path) -> List[str]:
+    """``bwrap`` argv that runs the next command inside a restricted namespace.
+
+    This is *optional defence in depth* over the resource limits, not a
+    replacement for them: it denies network (``--unshare-net``), hides the
+    host's processes (``--unshare-pid``), makes the system tree read-only and
+    gives the guest a private ``/tmp``. What it still does not do is make
+    hostile code safe -- there is no seccomp profile, no user drop and no
+    read-only view of the repository's own parent, so treat it as "the casual
+    damage is contained", which is a different promise from "this is a VM".
+
+    Raises ``ValueError`` when ``bwrap`` is missing, so a caller who asked for
+    isolation learns that rather than silently getting none.
+    """
+    if not bwrap_available():
+        raise ValueError(
+            "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
+            "install bubblewrap or drop the flag (the resource limits still apply)"
+        )
+
+    root = Path(repo_dir).resolve()
+    argv: List[str] = [
+        "bwrap",
+        "--unshare-net",
+        "--unshare-pid",
+        "--die-with-parent",
+        "--new-session",
+        # The guest gets its own /tmp so a test cannot leave files behind for
+        # the next run to read, and HOME points into it so tools that insist
+        # on writing *somewhere* do not write into the repository. Both are
+        # bwrap mount/env specifications, not tempfile calls -- hence nosec.
+        "--tmpfs", "/tmp",  # nosec B108
+        "--setenv", "HOME", "/tmp",  # nosec B108
+        "--proc", "/proc",
+        "--dev", "/dev",
+        # Read-only system, read-write only the repository under test.
+        "--bind", str(root), str(root),
+        "--chdir", str(root),
+    ]
+    for path in _SYSTEM_RO:
+        candidate = Path(path)
+        if not candidate.exists():
+            continue
+        if candidate.resolve() == root or candidate.resolve().is_relative_to(root):
+            continue
+        argv += ["--ro-bind", path, path]
+
+    # pytest and any third-party plugin usually live in the *user* site, which
+    # Python derives from $HOME -- and HOME is /tmp inside the guest, so the
+    # guest would look in /tmp/.local and die with "No module named pytest".
+    # Bind the real user base read-only and point PYTHONUSERBASE at it, which
+    # is resolved at interpreter start and so does not follow HOME.
+    user_base = Path(site.USER_BASE) if site.USER_BASE else None
+    if user_base and user_base.exists() and not user_base.is_relative_to(root):
+        argv += [
+            "--ro-bind", str(user_base), str(user_base),
+            "--setenv", "PYTHONUSERBASE", str(user_base),
+        ]
+
+    # A venv interpreter is outside /usr as well; bind exactly its prefix
+    # rather than the whole home directory it may sit in.
+    for prefix in (sys.base_prefix, sys.prefix):
+        resolved = Path(prefix).resolve() if prefix else None
+        if not resolved or not resolved.exists() or resolved == Path("/usr"):
+            continue
+        if resolved.is_relative_to(root) or resolved in (Path("/usr"), Path("/bin")):
+            continue
+        if any(part == str(resolved) for part in argv):
+            continue
+        argv += ["--ro-bind", str(resolved), str(resolved)]
+
+    argv += ["--"]
+    return argv
+
+
+def _argv(repo_dir: Path, test_path: str, test_id: str, command: Optional[str]) -> List[str]:
+    """What actually gets executed: a caller's command, or pytest on a target.
+
+    ``--test-command`` exists because "run my suite" is not always "run
+    pytest", and a gate that can only execute pytest is a gate that reports
+    *no tests collected* (exit 5 -> UNVERIFIED -> INCONCLUSIVE) for any
+    repository that is not Python/pytest. The convention is documented at the
+    flag: 0 passes, 1 fails, 2/3/4 are harness errors, and anything else is
+    neither, exactly as the pytest table already says.
+    """
+    if command:
+        return ["/bin/sh", "-c", command]
+    return [sys.executable, "-m", "pytest", build_target(test_path, test_id), "-q",
+            "-p", "no:cacheprovider"]
+
+
 def _limit_resources(
     cpu_seconds: int,
     mem_bytes: int,
@@ -96,12 +200,19 @@ def run_test(
     open_files: int = 256,
     processes: int = DEFAULT_PROCESSES,
     require_network_isolation: bool = False,
+    command: Optional[str] = None,
+    sandbox: Optional[str] = None,
 ) -> SandboxResult:
-    """Run one pytest target under resource limits and return raw evidence.
+    """Run one test target under resource limits and return raw evidence.
 
     Output is *kept*, not discarded: callers persist it. The previous version
     threw ``stdout``/``stderr`` away and logged only exit-code counts, which
     made the "evidence log" contain no evidence.
+
+    ``command`` replaces pytest with the caller's own command (see
+    :func:`_argv` for the pass/fail/harness convention). ``sandbox`` wraps
+    the whole thing in ``bwrap`` when asked; it is opt-in because it needs a
+    binary this package cannot install for you.
     """
     for name, value in (
         ("timeout_seconds", timeout_seconds),
@@ -128,7 +239,14 @@ def run_test(
     if env:
         safe_env.update(env)
 
-    target = build_target(test_path, test_id)
+    argv = _argv(root, test_path, test_id, command)
+    if sandbox == "bwrap":
+        # Resolved *before* Popen so a missing binary is a usage error the
+        # caller sees, not a run that quietly happened unsandboxed.
+        argv = bwrap_prefix(root) + argv
+    elif sandbox not in (None, "", "none"):
+        raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none' or 'bwrap')")
+
     preexec = (
         _limit_resources(cpu_seconds, mem_bytes, file_bytes, open_files, processes)
         if resource
@@ -138,7 +256,7 @@ def run_test(
     proc: Optional[subprocess.Popen[str]] = None
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "pytest", target, "-q", "-p", "no:cacheprovider"],
+            argv,
             cwd=str(root),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -148,7 +266,14 @@ def run_test(
             start_new_session=True,
         )
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
-        code = _detect_harness_error(proc.returncode, stdout, stderr)
+        # The pytest heuristics below look for pytest's own error strings;
+        # applying them to an arbitrary caller command would rewrite that
+        # command's real exit code on the strength of unrelated text.
+        code = (
+            proc.returncode
+            if command
+            else _detect_harness_error(proc.returncode, stdout, stderr)
+        )
         return SandboxResult(code, stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:
         assert proc is not None

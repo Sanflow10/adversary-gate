@@ -1,0 +1,23 @@
+# One owner, because there is one maintainer.
+# A second reviewer is the goal, not the current state -- this file exists so
+# that "who signs off" is written down rather than implied. When a CODEOWNERS
+# entry names only an unavailable owner, GitHub still requests the review; it
+# does not let the PR self-approve silently.
+#
+# See SECURITY.md for the vulnerability route, which is a GitHub Security
+# Advisory and deliberately does not go through a public PR.
+*       @Sanflow10
+
+# Anything that decides whether a patch merges is the highest-risk surface in
+# this repository: a defect here fails open, on someone else's code, in their
+# CI. These need review even when nothing else does.
+/src/core/gate.py        @Sanflow10
+/src/verifiers/          @Sanflow10
+/src/cli.py              @Sanflow10
+/action.yml              @Sanflow10
+
+# The file that actually spawns the code under test.
+/src/sandbox/runner.py   @Sanflow10
+
+# CI is the only thing currently attesting to any of the above.
+/.github/workflows/      @Sanflow10

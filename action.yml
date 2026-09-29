@@ -33,11 +33,34 @@ inputs:
     required: false
     default: 'coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
   test-path:
-    description: 'Relative path to target test file'
+    description: 'Relative path to target test file (any file that exists in the patch tree)'
     required: true
   test-id:
-    description: 'Node ID or test name to verify'
-    required: true
+    description: >-
+      Node ID or test name to verify. Optional when test-command is given --
+      a suite that is one command has no node IDs to name.
+    required: false
+  test-command:
+    description: >-
+      Shell command run instead of pytest, on both the baseline and the patch.
+      Convention: 0 passes, 1 fails, 2/3/4 are harness errors (-> UNVERIFIED),
+      anything else is neither. Unlocks non-pytest and non-Python suites.
+      Feeds the collateral full-suite run too unless full-suite-command is set.
+    required: false
+  full-suite-command:
+    description: >-
+      Command for the collateral full-suite regression check. Defaults to
+      test-command when that is given, else pytest on the whole tree.
+    required: false
+  sandbox:
+    description: >-
+      'none' (default) or 'bwrap'. bwrap wraps every run in bubblewrap: no
+      network, private PID and /tmp, read-only system, only the repository
+      writable. Requires bubblewrap on the runner; the gate refuses to start
+      without it rather than running unsandboxed. Not a substitute for a
+      container or VM -- see "Execution boundary" in the README.
+    required: false
+    default: 'none'
   bug-kind:
     description: 'Bug category: deterministic, concurrency, or performance'
     required: false
@@ -169,6 +192,9 @@ runs:
         AG_BASE_SHA: ${{ inputs.base-sha }}
         AG_TEST_PATH: ${{ inputs.test-path }}
         AG_TEST_ID: ${{ inputs.test-id }}
+        AG_TEST_COMMAND: ${{ inputs.test-command }}
+        AG_FULL_SUITE_COMMAND: ${{ inputs.full-suite-command }}
+        AG_SANDBOX: ${{ inputs.sandbox }}
         AG_BUG_KIND: ${{ inputs.bug-kind }}
         AG_COVERAGE_FLOOR: ${{ inputs.coverage-floor }}
         AG_COVERAGE_SOURCE: ${{ inputs.coverage-source }}
@@ -213,13 +239,26 @@ runs:
           --baseline "$BASELINE"
           --patch "$PATCH"
           --test-path "$AG_TEST_PATH"
-          --test-id "$AG_TEST_ID"
           --bug-kind "$AG_BUG_KIND"
           --coverage-floor "$AG_COVERAGE_FLOOR"
           --coverage-source "$AG_COVERAGE_SOURCE"
           --suite-strength-floor "$AG_STRENGTH_FLOOR"
           --evidence-log "$AG_EVIDENCE_LOG"
         )
+        # Omitted rather than passed empty: with no test-command a missing
+        # test-id is a usage error the gate should report, not silently fill in.
+        if [ -n "$AG_TEST_ID" ]; then
+          ARGS+=(--test-id "$AG_TEST_ID")
+        fi
+        if [ -n "$AG_TEST_COMMAND" ]; then
+          ARGS+=(--test-command "$AG_TEST_COMMAND")
+        fi
+        if [ -n "$AG_FULL_SUITE_COMMAND" ]; then
+          ARGS+=(--full-suite-command "$AG_FULL_SUITE_COMMAND")
+        fi
+        if [ "$AG_SANDBOX" != "none" ]; then
+          ARGS+=(--sandbox "$AG_SANDBOX")
+        fi
         if [ -n "$DIFF" ]; then
           ARGS+=(--diff "$DIFF")
         fi

@@ -5,6 +5,12 @@
 
 An evidence-based fail-closed verification gate for AI coding agents where **uncertainty is a first-class result (`INCONCLUSIVE`)** instead of a silent approval.
 
+| Document | What it is |
+| --- | --- |
+| 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
+| 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
+| 📋 **[Findings AG-001…AG-017](ERRORS_AND_INCONSISTENCIES.md)** | every finding, each reproduced by real exit code before being fixed |
+
 ---
 
 ## 🎬 Watch it decide (60 seconds)
@@ -84,7 +90,7 @@ It is a **mutation score** — `mutants killed / mutants executable` — produce
 - `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
 - If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
 
-`--mutation-max N` bounds the cost (`0` disables the measurement entirely, which is recorded as such in the evidence artefact).
+`--mutation-max N` bounds the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
 
 ---
 
@@ -165,30 +171,82 @@ mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
 
 ### Which files count as "source we cannot judge"
 
-`FOREIGN_SOURCE_SUFFIXES` in `src/verifiers/strength.py`: C/C++, Rust, Go, JVM,
-.NET, Swift, Ruby, PHP, JS/TS, shell and the rest of the common compiled and
-interpreted set. Files that are not code (`.md`, `.yml`, `.json`, images) and
-files that are tests (`test_*`, anything under `tests/`) are excluded, so a
-documentation-only patch is unaffected.
+`NON_SOURCE_SUFFIXES` in `src/verifiers/strength.py` — a **denylist**, not an
+allowlist. Anything that is not Python, not a test, and not on the list of
+things that are plainly not code (`.md`, `.yml`, `.json`, images, archives,
+compiled artefacts) counts as source we cannot judge. That direction is
+deliberate: the previous shape was an allowlist of languages somebody had
+remembered to type, and every suffix outside it was invisible.
 
-### What full support actually requires
+That is not a hypothetical. Until AG-013, a patch whose entire effect was in
+`schema.sql` reported:
 
-Three adapters, in this order of value:
+~~~
+decision: merge                                   # changed schema.sql
+suite_strength: null
+mutation.reason: "no source file changed between baseline and patch"
+~~~
 
-1. **`--test-command`** — run an arbitrary command instead of pytest, with a
-   documented pass/fail/harness-error convention. Unlocks execution first, and
-   is worth having even for Python repos with a non-pytest suite.
-2. **A coverage adapter** — `llvm-cov export`, `grcov`, `cargo-llvm-cov` and
-   `cargo tarpaulin` all emit different shapes; normalise them to
-   `{files: {path: {executed_lines: [...]}}}` and `covered_diff_ratio` needs no
-   change at all.
-3. **A mutation adapter** — `cargo-mutants` is mature for Rust; for C++ the
-   options (`mull`, LLVM pass-based) are much thinner. Without this layer
-   `suite_strength` stays `null` and every patch is `INCONCLUSIVE`, so **this
-   one is a hard requirement for MERGE, not an optimisation.**
+— the exact false statement AG-012 was opened to remove, still reachable
+through a suffix nobody had listed. `.proto`, `.pyi`, `.vue`, `.sol`, `.tf`
+and `.r` were all in the same hole, and the **mixed** patch (a measured
+`calc.py` plus an unmeasured `schema.sql`) merged with `suite_strength: 1.0`
+and `suite_strength_unverified: false`.
 
-Until all three exist, the honest answer for a non-Python repo stays
-`INCONCLUSIVE`.
+A list of remembered languages has an end; a list of what is *not* code does
+not. Unrecognised now fails closed.
+
+Two sources are unioned, so either alone being wrong cannot open a hole:
+
+| Source | Catches |
+| --- | --- |
+| directory scan (denylist) | changes a hand-written or partial diff left out |
+| `--diff` paths (authoritative) | anything the scan cannot see — generated files, paths absent from both trees |
+
+A documentation-only patch is still unaffected, because `.md` is on the list.
+
+### What shipped, and what still requires
+
+**1. Execution on any stack — `--test-command` (shipped).**
+
+```bash
+adversary-gate --baseline before --patch after \
+      --test-path run_tests.sh --test-command "./run_tests.sh"
+```
+
+Replaces pytest with a command you supply, on the baseline side and the patch
+side. The convention is the table below with the pytest names stripped out:
+
+| Exit | Meaning | ExecState |
+| --- | --- | --- |
+| `0` | passed | `PASS` |
+| `1` | failed | `FAIL` — the only code that counts as evidence |
+| `2`/`3`/`4` | the harness itself broke | `UNRUNNABLE` → `UNVERIFIED` |
+| timeout | gave up | `TIMED_OUT` → `UNVERIFIED` |
+
+`--test-id` is no longer required when `--test-command` is given: a suite that
+is one command has no node IDs to name, so the claim is labelled
+`(test-command)`. The collateral full-suite run uses the same command unless
+`--full-suite-command` says otherwise — declaring a non-pytest suite does not
+silently cost you the collateral-regression check.
+
+**2. A coverage adapter — not yet.** `llvm-cov export`, `grcov`,
+`cargo-llvm-cov` and `cargo tarpaulin` all emit different shapes; normalise
+them to `{files: {path: {executed_lines: [...]}}}` and `covered_diff_ratio`
+needs no change at all.
+
+**3. A mutation adapter — not yet, and this one is the hard one.**
+`cargo-mutants` is mature for Rust; for C++ the options (`mull`, LLVM
+pass-based) are much thinner. Without it `suite_strength` stays `null` and
+every non-Python patch is `INCONCLUSIVE`, so **this is a requirement for
+MERGE, not an optimisation.**
+
+The distinction between (1) and (3) matters. `--test-command` turns *"the
+gate cannot run my suite"* into *"the gate ran it"*, which converts
+`UNVERIFIED` into a genuine `PASS` or `FAIL` — a real `BLOCK` becomes
+possible. Only a mutation adapter converts `INCONCLUSIVE` into `MERGE`.
+Until it exists the honest answer for a non-Python repo stays
+`INCONCLUSIVE`, and that is the product working rather than failing.
 
 ---
 
@@ -313,6 +371,29 @@ git diff --no-ext-diff baseline...patch > changes.diff
 coverage json -o coverage.json          # after: coverage run -m pytest
 ```
 
+#### Not a pytest suite, or running a patch you have not seen?
+
+```bash
+# 1. run your own command instead of pytest (any language, any runner)
+adversary-gate --baseline before --patch after \
+      --test-path run_tests.sh --test-command "./run_tests.sh"
+
+# 2. wrap every run in bubblewrap: no network, private PID//tmp,
+#    read-only system, only the repo writable
+adversary-gate ... --sandbox bwrap
+
+# 3. both together -- the usual shape for a patch from someone else
+adversary-gate ... --test-command "make check" --sandbox bwrap \
+      --require-network-isolation
+```
+
+`--test-command` needs no `--test-id` (there are no node IDs to name), and it
+feeds the collateral full-suite run too unless you pass `--full-suite-command`.
+`--sandbox bwrap` needs [bubblewrap](https://github.com/containers/bubblewrap)
+installed and refuses to start without it — see
+[Execution boundary](#execution-boundary)
+for exactly what it does and does not contain.
+
 Exit Codes for CI Integration:
 - `0` — **`MERGE`**: Every claim executed cleanly and cleared coverage & suite strength floors.
 - `1` — **`BLOCK`**: Regressions or collateral suite failures detected.
@@ -402,15 +483,53 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 
 ---
 
+<a name="execution-boundary" id="execution-boundary"></a>
+
 ## 🛡️ Execution boundary (read this before trusting it with untrusted code)
 
-`src/sandbox/runner.py` applies POSIX resource limits only: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. That is a **resource-limited runner, not a security sandbox**.
+`src/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
 
-What it does *not* provide: network namespaces, seccomp, chroot, containers, an unprivileged user, a read-only filesystem, or any restriction on what the test code may do. The test code runs arbitrary code from the repository with the runner's own privileges.
+### `--sandbox bwrap` — opt-in, and what it honestly buys
 
-The network flag is a **declaration, not a mechanism**: `--require-network-isolation` refuses to start unless `ADVERSARY_NETWORK_ISOLATED=1`, which is an assertion made by *you* about *your* environment. It cannot verify itself.
+```bash
+adversary-gate ... --sandbox bwrap
+```
 
-**Run untrusted patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
+Wraps every claim run and the collateral suite in [bubblewrap](https://github.com/containers/bubblewrap):
+
+| Property | Effect |
+| --- | --- |
+| `--unshare-net` | no network at all — exfiltration has nowhere to go |
+| `--unshare-pid` | the guest cannot see or signal host processes |
+| `--tmpfs /tmp` + `HOME=/tmp` | nothing persists between runs, nothing lands in the repo |
+| system tree read-only | `/usr`, `/bin`, `/lib`, `/etc` cannot be written |
+| only the repo is writable | a test cannot touch anything outside the patch |
+
+If `bwrap` is missing the gate **refuses to start** (exit 3) rather than quietly running unsandboxed — asking for isolation and not getting it is the failure mode the flag exists to prevent.
+
+**What it is still not.** There is no seccomp profile, no privilege drop, no unprivileged user, and the repository's parent directory is not hidden. It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
+
+`--require-network-isolation` now has something real to point at: under `--sandbox bwrap` the network genuinely is gone, so `ADVERSARY_NETWORK_ISOLATED=1` becomes a statement you can make honestly instead of a wish. Outside bwrap it remains a **declaration, not a mechanism** — an assertion by *you* about *your* environment, which the tool cannot verify about itself.
+
+### What no mode of this tool provides
+
+Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged user, or any restriction on what the test code may do *by design*. The test code runs arbitrary code from the repository, with whatever privileges you gave the process.
+
+**Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
+
+---
+
+## 🤝 What this decision is, and what it is not
+
+`MERGE` means *every claim the gate was asked to check executed, and the evidence it could produce cleared the floors you configured*. That is a statement about **measurements**, and nothing else.
+
+It is not:
+
+- a judgement about design, naming, security posture, or whether the change should exist;
+- a substitute for human review — `MERGE` is permission for your team to look, not an instruction to merge;
+- proof about code the gate could not execute. Where it could not measure, it said `INCONCLUSIVE` rather than guessing, and that silence is the product working.
+
+**The decision to merge belongs to the person who signs the PR.** The gate's job is to make sure that person is not being lied to by their own pipeline. If a `MERGE` here becomes "the gate said yes, ship it", you have rebuilt the exact self-deception this project exists to remove — just with a better audit trail.
 
 ---
 
@@ -421,6 +540,91 @@ Every execution logs `ctx_model` and `ctx_commit` into the audit trail. Running 
 $$\text{self\_deception\_index} = \frac{\text{unverified\_merges}}{\text{merge\_count}}$$
 
 If your product pitch is *"menos autoengano no pipeline"*, this is the dashboard tile that proves it and the metric to watch drop to zero.
+
+---
+
+## ⏱️ Performance
+
+```bash
+python3 scripts/benchmark.py --runs 5          # add --sandbox bwrap to include it
+```
+
+Measured on this machine (Linux 6.8, x86_64, CPython 3.12.3, no sandbox), on
+the same fixture the CI Action smoke test uses — 3 repetitions, one warm-up
+discarded:
+
+| | |
+| --- | --- |
+| median | **20,7 s** |
+| p95 | 21,1 s |
+| range | 20,7 – 21,1 s |
+| decision | `exit 0` / `merge` |
+
+**Read the breakdown before you judge that number.** One decision is **8 pytest
+invocations**, not 3:
+
+```
+1 baseline   1 patch   4 stability rounds (--rounds-used)   ≥1 mutant   1 collateral full-suite
+```
+
+Each one pays Python + pytest startup — **2,29 s here**, because this machine
+auto-loads **9 pytest plugins** (seleniumbase, pytest-html, xdist, metadata,
+rerunfailures, ordering…). The test itself executes in **0,01 s**. So:
+
+```
+8 runs × 2,29 s = 18,3 s  → environment, not gate
+                    ≈2,4 s  → AdversaryGate
+```
+
+Disabling plugin autoload takes a single start from `2,47 s` to `0,53 s` on
+this box — that step is measured; a ~5–6 s total on a clean machine is
+**arithmetic, not a measurement**, and is labelled as such.
+
+There is a real limitation here worth stating: the runner hands the child a
+minimal environment by design, so `PYTEST_DISABLE_PLUGIN_AUTOLOAD` **cannot
+reach it**. On a machine with a heavy plugin set the gate inherits the full
+cost eight times over with no way to opt out. That is an honest constraint of
+"isolation means the child sees only what I pass it", not a bug — but it is why
+the environment has to be printed next to the number.
+
+**This is not a CI performance gate.** Timing on a shared runner is noisy
+enough that any threshold is either too loose to test anything or tight enough
+to go red on somebody else's load. Run it by hand, and keep the machine next to
+the figure. A latency number with no environment attached is not a
+measurement — it is an advertisement.
+
+---
+
+## 🧭 Compatibility & deprecation
+
+**What counts as breaking.** Anything a caller or a parser depends on:
+
+| Surface | Why it is a contract |
+| --- | --- |
+| exit codes `0` / `1` / `2` / `3` | CI branches on them |
+| `decision` and `outcome` values | dashboards and status checks match on them |
+| field names in `evidence.jsonl` and the decision artefact | they are parsed, diffed and archived |
+| CLI flags and `action.yml` inputs | pipelines pass them |
+| the `0` / `1` / `2`/`3`/`4` test-command convention | every adapter is written against it |
+
+**What is not.** Prose, argument help, comments, module layout inside `src/`,
+and anything the docs never promised.
+
+**How a deprecation happens.** At least one minor release with the old surface
+still working **and a warning naming the replacement**, then removal in the
+following minor release. A breaking change is a major bump.
+
+**The rule that matters here, and it is the opposite of the usual one:**
+
+> A deprecated input must **fail loudly** — exit 3, with the replacement named —
+> and must never be quietly ignored.
+
+That is not etiquette, it is the same thesis as everything else in this
+repository. A flag that stops being read while the CLI keeps accepting it means
+someone passes `--coverage-ratio 0.95`, gets no coverage floor, and reaches
+`MERGE` on evidence they thought they had gated. Silent deprecation *is*
+fail-open, wearing the costume of good manners. So an unknown or retired flag
+is a usage error, always.
 
 ---
 

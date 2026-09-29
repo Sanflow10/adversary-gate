@@ -9,6 +9,16 @@ from pathlib import Path
 from typing import Mapping
 
 
+class UnparseableDiff(ValueError):
+    """The diff carries hunks but no file header this parser can attribute.
+
+    Raised instead of returning "zero changed lines", because a ratio derived
+    from an empty parse is *not* an empty measurement -- it is a measurement
+    that never happened, and ``DiffCoverage(0, 0).ratio`` would report it as
+    a perfect ``1.0``.
+    """
+
+
 @dataclass(frozen=True)
 class DiffCoverage:
     changed_lines: int
@@ -19,15 +29,58 @@ class DiffCoverage:
         return 1.0 if self.changed_lines == 0 else self.covered_lines / self.changed_lines
 
 
+def _diff_target(header: str) -> str | None:
+    """``+++ b/calc.py\\t2026-01-01`` -> ``calc.py``; ``/dev/null`` -> ``None``.
+
+    Accepts both git's ``b/`` prefix and the bare ``+++ calc.py`` that plain
+    ``diff -u`` emits. Only the git form used to be recognised, so a standard
+    unified diff parsed to *zero* files -- and measured as perfect coverage,
+    fail-open, in a gate whose whole thesis is fail-closed.
+    """
+    path = header.split("\t", 1)[0].strip()
+    if path == "/dev/null":
+        return None
+    if path.startswith("b/"):
+        path = path[2:]
+    elif path.startswith("a/"):
+        path = path[2:]
+    return path or None
+
+
 def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
+    """Added line numbers per file.
+
+    A ``+++`` line is a file header only when the line before it was ``---``:
+    that pairing is what the unified format guarantees, and it keeps an added
+    line whose *content* starts with ``++`` from being mistaken for one.
+
+    The ``---`` side is kept as a fallback because ``+++ /dev/null`` is how a
+    deleted file is spelled: there is no new path to attribute the hunk to, and
+    the only name that exists is the old one. Dropping it made every whole-file
+    deletion parse to zero files and then be refused as unparseable (AG-017).
+    """
     files: dict[str, set[int]] = {}
     current: str | None = None
+    previous_path: str | None = None
     new_line = 0
+    previous_was_removed_header = False
     for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
-            current = line[6:]
-            files.setdefault(current, set())
-        elif line.startswith("@@"):
+        if line.startswith("--- "):
+            previous_was_removed_header = True
+            previous_path = _diff_target(line[4:])
+        elif line.startswith("+++ ") and previous_was_removed_header:
+            previous_was_removed_header = False
+            current = _diff_target(line[4:])
+            if current is None:
+                # A deletion: attribute the hunk to the file that was removed.
+                current = previous_path
+            if current is not None:
+                files.setdefault(current, set())
+        else:
+            previous_was_removed_header = False
+        if line.startswith("+++ ") or line.startswith("--- "):
+            continue
+        if line.startswith("@@"):
             match = re.search(r"\+(\d+)(?:,(\d+))?", line)
             if match:
                 new_line = int(match.group(1))
@@ -39,8 +92,26 @@ def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
     return files
 
 
+def validate_diff(diff_text: str) -> dict[str, set[int]]:
+    """Parse the diff, or refuse to.
+
+    Hunks with no attributable file header means the parser and the input
+    disagree about the format. Returning an empty mapping there would flow
+    into ``DiffCoverage(0, 0)`` and come out as ``ratio == 1.0`` -- perfect
+    coverage computed from nothing. Refusing turns a silent false pass into
+    exit 3, which CI reads as "the input was bad", not as "the patch is clean".
+    """
+    files = changed_lines_from_unified_diff(diff_text)
+    if not files and "@@" in diff_text:
+        raise UnparseableDiff(
+            "diff contains hunk headers but no '--- / +++' file pair this parser "
+            "could attribute; re-generate it with 'git diff' or 'diff -u'"
+        )
+    return files
+
+
 def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCoverage:
-    changed = changed_lines_from_unified_diff(diff_text)
+    changed = validate_diff(diff_text)
     payload = (
         json.loads(Path(coverage_json).read_text())
         if isinstance(coverage_json, (str, Path))

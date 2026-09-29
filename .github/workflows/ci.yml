@@ -132,6 +132,35 @@ jobs:
           test "${{ steps.gate.outputs.outcome }}" = "verified"
           test -s evidence.jsonl
 
+      # AG-016: a suite that is one command has no node IDs, so the Action
+      # must not go on demanding `test-id`. Passing neither is still a usage
+      # error -- this is the case where one of the two must be supplied.
+      - name: Build a suite that is not pytest
+        run: |
+          for d in baseline patch; do
+            printf '#!/bin/sh\nexit 0\n' > "$d/run_tests.sh"
+            chmod +x "$d/run_tests.sh"
+          done
+
+      - name: Run the gate with test-command and no test-id
+        id: gate_cmd
+        uses: ./
+        with:
+          baseline: 'baseline'
+          patch: 'patch'
+          test-path: 'run_tests.sh'
+          test-command: './run_tests.sh'
+          diff: 'change.diff'
+          coverage-json: 'cov.json'
+          evidence-log: 'evidence-cmd.jsonl'
+
+      - name: A command-driven run must reach the same measured decision
+        run: |
+          echo "decision=${{ steps.gate_cmd.outputs.decision }}"
+          echo "outcome=${{ steps.gate_cmd.outputs.outcome }}"
+          test "${{ steps.gate_cmd.outputs.decision }}" = "merge"
+          test "${{ steps.gate_cmd.outputs.outcome }}" = "verified"
+
   prepare-evidence:
     # base-sha's plumbing lives in a script so it can be tested without a
     # runner. This asserts the artefacts it writes *and* that the gate accepts
@@ -220,6 +249,79 @@ jobs:
           assert decision["mutation"]["foreign_changed_files"] == []
           print("coverage:", decision["diff_coverage_source"],
                 "| strength:", decision["suite_strength"])
+          PY
+
+  static-analysis:
+    # Belt and braces for a gate that runs other people's code: the tool that
+    # decides whether a patch is safe should not itself be shipping an obvious
+    # injection. bandit at MEDIUM+ (LOW is dominated by "subprocess exists",
+    # which is this program's entire job); semgrep on the security-audit pack.
+    name: Static analysis (bandit + semgrep)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install analysers
+        run: python -m pip install bandit semgrep
+
+      - name: bandit (MEDIUM and above)
+        # The two B108 hits on the bwrap argv are mount specifications, not
+        # tempfile calls; they carry `# nosec` in the source with the reason
+        # on the line above, so this stays a real gate rather than a suppressed one.
+        run: bandit -r src -ll
+
+      - name: semgrep (security-audit)
+        run: semgrep scan --error --config p/security-audit src/
+
+  coverage:
+    # A fail-closed gate with an unmeasured own-suite is the same self-deception
+    # it exists to catch. This floors the number so it cannot quietly drop.
+    name: Own-suite coverage floor
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          python -m pip install . pytest coverage
+
+      - name: Measure coverage of src
+        # bubblewrap is installed on purpose: without it the bwrap tests skip
+        # and the same commit measures ~6 points lower, which would make this
+        # floor depend on the runner's package list rather than on the code.
+        run: |
+          coverage run --source=src -m pytest -q
+          coverage json -o coverage.json
+          coverage report --fail-under=87
+
+      - name: Publish the per-module breakdown
+        run: |
+          python - <<'PY'
+          import json
+
+          data = json.load(open("coverage.json"))
+          rows = sorted(
+              (path, summary["percent_covered"])
+              for path, summary in data["files"].items()
+          )
+          print(f'{"module":<40} {"coverage":>8}')
+          for path, pct in rows:
+              print(f"{path:<40} {pct:>7.1f}%")
+          print(f'{"TOTAL":<40} {data["totals"]["percent_covered"]:>7.1f}%')
           PY
 
   demo:

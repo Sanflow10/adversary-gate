@@ -49,6 +49,7 @@ from core.types import (
     Outcome,
 )
 from sandbox.runner import SandboxResult, build_target
+from verifiers.coverage import UnparseableDiff, covered_diff_ratio, validate_diff
 from verifiers.stability import policy_for
 from verifiers.strength import (
     _is_test_path,
@@ -56,6 +57,7 @@ from verifiers.strength import (
     changed_foreign_source_files,
     changed_lines,
     changed_source_files,
+    classify_changes,
     deleted_source_files,
     measure_mutation_score,
 )
@@ -1416,6 +1418,290 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             )
             self.assertEqual(detail["foreign_changed_files"], [])
             self.assertEqual(detail["reason"], "no source file changed between baseline and patch")
+
+
+class TestAg012ResidualPaths(unittest.TestCase):
+    """The two ways the AG-012 guard could still be walked around.
+
+    Both were reproduced against v2.1.0 before being fixed, and neither is
+    listed in ``ERRORS_AND_INCONSISTENCIES.md``:
+
+    * the guard recognised source through an **allowlist** of languages
+      somebody had typed, so ``.sql`` -- and every other suffix outside it --
+      was invisible, and a patch changing only ``schema.sql`` wrote the exact
+      false statement AG-012 was opened to remove while reaching MERGE;
+    * the guard's evaluation lived **inside** the mutation branch, so
+      ``--mutation-max 0`` skipped it entirely and a pure-C++ patch merged.
+    """
+
+    def _tree(self, root: Path, extra: str = "calculator.cpp") -> None:
+        for side in ("baseline", "patch"):
+            (root / side).mkdir(parents=True, exist_ok=True)
+            (root / side / "test_sum.py").write_text(
+                "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+            )
+            (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        (root / "baseline" / extra).write_text("old\n")
+        (root / "patch" / extra).write_text("new\n")
+
+    # ------------------------------------------------------------------
+    # A1: allowlist -> denylist
+    # ------------------------------------------------------------------
+    def test_unlisted_source_suffix_is_still_foreign(self):
+        """`.sql` was the suffix that reproduced the original bug."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="schema.sql")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["schema.sql"],
+            )
+            # The false claim must not be reachable any more.
+            detail = classify_changes(root / "baseline", root / "patch")
+            self.assertEqual(detail["changed_files"], [])
+            self.assertEqual(detail["foreign_changed_files"], ["schema.sql"])
+
+    def test_every_common_source_suffix_is_recognised(self):
+        """The allowlist's whole failure mode: forgetting a language."""
+        for name in (
+            "a.proto", "b.pyi", "c.sol", "d.vue", "e.svelte", "f.scss",
+            "g.r", "h.tmpl", "i.jinja", "j.tf", "k.sql", "l.hcl",
+        ):
+            with self.subTest(suffix=Path(name).suffix):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self._tree(root, extra=name)
+                    self.assertEqual(
+                        changed_foreign_source_files(root / "baseline", root / "patch"),
+                        [name],
+                        f"{name} must count as source we cannot judge",
+                    )
+
+    def test_documents_are_still_not_foreign(self):
+        """A denylist only helps if the denylist is right."""
+        for name in ("README.md", "CHANGELOG", "LICENSE", "data.json", "ci.yml"):
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self._tree(root, extra=name)
+                    self.assertEqual(
+                        changed_foreign_source_files(root / "baseline", root / "patch"),
+                        [],
+                        f"{name} is not code under test",
+                    )
+
+    def test_diff_paths_are_unioned_with_the_scan(self):
+        """The caller's diff is authoritative about what the patch touched."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            # Not present on either side for the scan to find.
+            self.assertEqual(
+                changed_foreign_source_files(
+                    root / "baseline", root / "patch", ["generated/migration.sql"]
+                ),
+                ["calculator.cpp", "generated/migration.sql"],
+            )
+
+    def test_sql_only_patch_cannot_reach_merge(self):
+        """The end-to-end consequence: before, this exited 0."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="schema.sql")
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            decision = self._decision(log_path)
+            self.assertEqual(
+                decision["mutation"]["foreign_changed_files"], ["schema.sql"]
+            )
+            self.assertTrue(decision["suite_strength_unverified"])
+
+    # ------------------------------------------------------------------
+    # A2: --mutation-max 0 must not disable the guard
+    # ------------------------------------------------------------------
+    def test_mutation_budget_zero_keeps_the_foreign_guard(self):
+        """Reproduced: `--mutation-max 0` returned exit 0 for this fixture."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--mutation-max", "0",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            decision = self._decision(log_path)
+            self.assertEqual(
+                decision["mutation"]["foreign_changed_files"], ["calculator.cpp"]
+            )
+            self.assertTrue(decision["suite_strength_unverified"])
+            # The measurement really was disabled -- that part is honoured.
+            self.assertFalse(decision["mutation"]["measured"])
+            self.assertIsNone(decision["suite_strength"])
+
+    def test_mutation_budget_zero_keeps_the_full_artefact_shape(self):
+        """`strength.py` promises "fixed shape on every return path"."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log_path = Path(directory) / "ev.jsonl"
+            main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--mutation-max", "0",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            mutation = self._decision(log_path)["mutation"]
+            for key in (
+                "measured", "reason", "changed_files", "foreign_changed_files",
+                "deleted_files", "mutants", "survivors", "mutants_counted",
+                "stillborn",
+            ):
+                self.assertIn(key, mutation, f"{key} disappeared from the artefact")
+
+    def test_mutation_budget_zero_still_merges_a_clean_python_patch(self):
+        """The budget opt-out must keep working; only the guard was at fault."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir(parents=True, exist_ok=True)
+                (root / side / "test_sum.py").write_text(
+                    "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+                )
+                (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--mutation-max", "0",
+                ]
+            )
+            self.assertEqual(code, EXIT_MERGE)
+
+    # ------------------------------------------------------------------
+    # A3: the diff parser assumed git's `+++ b/` prefix
+    # ------------------------------------------------------------------
+    GIT_DIFF = (
+        "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,3 @@\n"
+        " def add(a, b):\n     return a + b\n+    # note\n"
+    )
+    PLAIN_DIFF = (
+        "--- calc.py\t2026-01-01\n+++ calc.py\t2026-01-01\n@@ -1,2 +1,3 @@\n"
+        " def add(a, b):\n     return a + b\n+    # note\n"
+    )
+
+    def test_plain_diff_u_is_parsed(self):
+        """`diff -u` output used to parse to zero files and measure 1.0."""
+        cov = {"files": {"calc.py": {"executed_lines": []}}}
+        self.assertEqual(covered_diff_ratio(self.PLAIN_DIFF, cov).ratio, 0.0)
+        # ...where git's form gives the identical answer.
+        self.assertEqual(covered_diff_ratio(self.GIT_DIFF, cov).ratio, 0.0)
+
+    def test_both_prefixes_agree_on_the_path(self):
+        self.assertEqual(
+            validate_diff(self.PLAIN_DIFF),
+            validate_diff(self.GIT_DIFF),
+        )
+
+    def test_unattributable_hunks_are_refused_not_measured_as_perfect(self):
+        """A failed parse used to become `changed_lines: 0` -> ratio 1.0."""
+        with self.assertRaises(UnparseableDiff):
+            validate_diff("@@ -1,2 +1,3 @@\n+orphan line\n")
+
+    def test_empty_diff_is_still_not_a_failed_parse(self):
+        self.assertEqual(validate_diff(""), {})
+        self.assertEqual(validate_diff("sem hunk aqui\n"), {})
+
+    def test_deletion_only_diff_keeps_its_documented_vacuous_ratio(self):
+        cov = {"files": {}}
+        diff = "--- a/x\n+++ b/x\n@@ -1,2 +0,0 @@\n-old\n-older\n"
+        self.assertEqual(covered_diff_ratio(diff, cov).ratio, 1.0)
+
+    def test_whole_file_deletion_is_parsed_not_refused(self):
+        """`+++ /dev/null` is how a deleted file is spelled.
+
+        The old header was ignored, so the hunk had no file to belong to and
+        `validate_diff` rejected a perfectly good diff as unparseable -- the
+        gate telling you your *input* was bad when it was fine.
+        """
+        diff = (
+            "--- a/legacy.py\n+++ /dev/null\n@@ -1,3 +0,0 @@\n"
+            "-def a():\n-    pass\n-def b():\n"
+        )
+        self.assertEqual(validate_diff(diff), {"legacy.py": set()})
+        # Same vacuous ratio as any other deletion-only patch: nothing added.
+        self.assertEqual(covered_diff_ratio(diff, {"files": {}}).ratio, 1.0)
+
+    def test_file_added_out_of_nothing_still_attributes_to_the_new_path(self):
+        """`--- /dev/null` has no old path, so the new one must win."""
+        diff = (
+            "--- /dev/null\n+++ b/novo.py\n@@ -0,0 +1,2 @@\n+x = 1\n+y = 2\n"
+        )
+        self.assertEqual(validate_diff(diff), {"novo.py": {1, 2}})
+
+    def test_deletion_and_modification_in_one_patch(self):
+        """The realistic case: the deleted file must not swallow the other."""
+        diff = (
+            "--- a/legacy.py\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-gone()\n"
+            "--- a/calc.py\n+++ b/calc.py\n@@ -1,1 +1,2 @@\n def x():\n+    y = 1\n"
+        )
+        self.assertEqual(
+            validate_diff(diff), {"legacy.py": set(), "calc.py": {2}}
+        )
+
+    def test_cli_refuses_an_unattributable_diff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            diff_path = Path(directory) / "bad.diff"
+            diff_path.write_text("@@ -1,2 +1,3 @@\n+orphan line\n")
+            cov_path = Path(directory) / "cov.json"
+            cov_path.write_text(json.dumps({"files": {}}))
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--diff", str(diff_path),
+                    "--coverage-json", str(cov_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_USAGE)
+
+    @staticmethod
+    def _decision(log_path: Path) -> dict:
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        return [r for r in records if r.get("kind") == "decision"][-1]
 
 
 class TestBaselineNotApplicable(unittest.TestCase):

@@ -50,7 +50,7 @@ import tempfile
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
 from sandbox.runner import DEFAULT_PROCESSES, run_test
@@ -117,18 +117,57 @@ def calculate_mutation_score(
 # ----------------------------------------------------------------------
 # what changed
 # ----------------------------------------------------------------------
-# Source the mutation engine recognises but cannot judge. ``_mutants_in``
-# tokenizes Python, so there is no way to break a .cpp or a .rs and watch the
-# suite notice -- and a change to one of these files is still a change to the
-# behaviour under test. Recognising them is what keeps the artefact from
-# claiming "no source changed" when source plainly did.
-FOREIGN_SOURCE_SUFFIXES = frozenset({
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".inl",
-    ".rs", ".go", ".java", ".kt", ".kts", ".scala", ".swift", ".zig",
-    ".cs", ".fs", ".m", ".mm", ".jl", ".nim", ".d", ".ex", ".exs",
-    ".rb", ".php", ".pl", ".pm", ".lua", ".sh", ".bash",
-    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+# Everything the mutation engine *cannot* break: ``_mutants_in`` tokenizes
+# Python, so there is no way to break a .cpp or a .sql and watch the suite
+# notice -- but a change to one of those files still changes the behaviour
+# under test, and the artefact must not claim "no source changed" when it did.
+#
+# This is a **denylist**, deliberately. The previous shape was an allowlist
+# (``FOREIGN_SOURCE_SUFFIXES``) of languages somebody had remembered to type:
+# ``.sql``, ``.proto``, ``.pyi``, ``.vue``, ``.sol`` and every other suffix
+# outside that list were invisible, so a patch changing only ``schema.sql``
+# reported ``"no source file changed between baseline and patch"`` -- the
+# exact false statement AG-012 was opened to remove -- and a mixed
+# ``calc.py`` + ``schema.sql`` patch reached MERGE with
+# ``foreign_changed_files: []``. A list of remembered languages has an end;
+# a list of things that are *not* code does not, and anything unrecognised
+# fails closed instead of open.
+NON_SOURCE_SUFFIXES = frozenset({
+    # documents
+    ".md", ".markdown", ".rst", ".txt", ".adoc", ".org", ".tex", ".pdf",
+    # data and configuration
+    ".json", ".jsonc", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf",
+    ".lock", ".csv", ".tsv", ".xml", ".properties", ".env", ".schema",
+    # images, media, fonts
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+    ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    # packaged or compiled artefacts
+    ".zip", ".gz", ".tar", ".bz2", ".xz", ".jar", ".war", ".class",
+    ".so", ".dll", ".dylib", ".a", ".o", ".obj", ".lib", ".exe",
+    ".pyc", ".pyo", ".pyd", ".wasm", ".min", ".map", ".cache",
+    # version-control and editor noise
+    ".orig", ".rej", ".bak", ".swp", ".swo", ".tmp", ".log",
 })
+
+#: Suffixless files that name a document rather than a build input.
+#: ``Makefile``, ``Dockerfile``, ``Procfile`` and friends are deliberately
+#: absent: a change to them is a change we cannot judge, and guessing
+#: "not code" is exactly what made AG-012 possible in the first place.
+NON_SOURCE_NAMES = frozenset({
+    "license", "licence", "copying", "notice", "authors", "contributors",
+    "changelog", "changes", "readme", "code_of_conduct", "codeowners",
+    "security",
+})
+
+
+def _is_non_source(rel: str) -> bool:
+    """True for things that are plainly not code under test."""
+    path = Path(rel)
+    if path.suffix.lower() in NON_SOURCE_SUFFIXES:
+        return True
+    if not path.suffix and path.name.lower().replace(" ", "_") in NON_SOURCE_NAMES:
+        return True
+    return False
 
 
 def _is_test_path(rel: str) -> bool:
@@ -196,7 +235,11 @@ def deleted_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
     return sorted(names(Path(baseline_dir)) - names(Path(patch_dir)))
 
 
-def changed_foreign_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+def changed_foreign_source_files(
+    baseline_dir: Path,
+    patch_dir: Path,
+    changed_paths: Optional[Iterable[str]] = None,
+) -> List[str]:
     """Relative paths of **non-Python** source files the patch changed.
 
     These are files whose behaviour the patch altered and that the mutation
@@ -214,6 +257,13 @@ def changed_foreign_source_files(baseline_dir: Path, patch_dir: Path) -> List[st
     ``reason: "no non-test source file changed"`` -- a false statement -- left
     ``suite_strength_unverified`` false, and reached MERGE on the strength of
     a Python test that never looked at the C++.
+
+    ``changed_paths`` are the paths the caller's own unified diff names.
+    They are *unioned* with the directory scan rather than replacing it: the
+    diff is authoritative about what changed, and the scan catches anything a
+    partial or hand-written diff left out. Either source alone can be wrong;
+    their union can only be more conservative, and more conservative is the
+    safe direction for a question whose answer is "we could not judge this".
     """
 
     def snapshot(root: Path) -> Dict[str, bytes]:
@@ -223,10 +273,8 @@ def changed_foreign_source_files(baseline_dir: Path, patch_dir: Path) -> List[st
         for path in sorted(root.rglob("*")):
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
-            if path.suffix.lower() not in FOREIGN_SOURCE_SUFFIXES:
-                continue
             rel = path.relative_to(root).as_posix()
-            if _is_test_path(rel):
+            if _is_test_path(rel) or _is_non_source(rel):
                 continue
             try:
                 out[rel] = path.read_bytes()
@@ -236,7 +284,44 @@ def changed_foreign_source_files(baseline_dir: Path, patch_dir: Path) -> List[st
 
     base = snapshot(Path(baseline_dir))
     patch = snapshot(Path(patch_dir))
-    return sorted(rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel))
+    candidates = {rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel)}
+    if changed_paths:
+        # A path from the diff counts even if it no longer exists on either
+        # side or the scan cannot see it: the diff says the patch touched it.
+        candidates.update(
+            rel for rel in changed_paths if rel and not rel.startswith(("/", "../"))
+        )
+    return sorted(
+        rel
+        for rel in candidates
+        # .py is judged by the mutation engine, tests are not code under test,
+        # and documented non-code should not force an INCONCLUSIVE on its own.
+        if not rel.endswith(".py")
+        and not _is_test_path(rel)
+        and not _is_non_source(rel)
+    )
+
+
+def classify_changes(
+    baseline_dir: Path,
+    patch_dir: Path,
+    changed_paths: Optional[Iterable[str]] = None,
+) -> Dict[str, object]:
+    """The "what changed" half of the evidence artefact.
+
+    Exposed separately from :func:`measure_mutation_score` so that *every*
+    code path can write the same three keys. It used to be reachable only
+    from inside the mutation branch, which is why ``--mutation-max 0``
+    produced an artefact missing ``changed_files`` and -- worse -- never
+    evaluated the AG-012 guard that stops unjudged source reaching MERGE.
+    """
+    return {
+        "changed_files": changed_source_files(Path(baseline_dir), Path(patch_dir)),
+        "foreign_changed_files": changed_foreign_source_files(
+            Path(baseline_dir), Path(patch_dir), changed_paths
+        ),
+        "deleted_files": deleted_source_files(Path(baseline_dir), Path(patch_dir)),
+    }
 
 
 def changed_lines(baseline_text: str, patch_text: str) -> set:
@@ -311,6 +396,7 @@ def measure_mutation_score(
     cpu_seconds: int = 10,
     mem_bytes: int = 512 * 1024 * 1024,
     processes: int = DEFAULT_PROCESSES,
+    changed_paths: Optional[Iterable[str]] = None,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -330,21 +416,22 @@ def measure_mutation_score(
         raise ValueError("test_path is required to measure suite strength")
 
     patch_dir = Path(patch_dir)
-    changed = changed_source_files(baseline_dir, patch_dir)
-    foreign = changed_foreign_source_files(baseline_dir, patch_dir)
     # Fixed shape on every return path: an artefact whose optional keys
-    # disappear when nothing was measured cannot be queried reliably.
+    # disappear when nothing was measured cannot be queried reliably. The
+    # three "what changed" keys come from :func:`classify_changes`, which the
+    # CLI also calls on the ``--mutation-max 0`` path, so both routes describe
+    # the same patch the same way.
     detail: Dict[str, object] = {
         "measured": False,
         "reason": "",
-        "changed_files": changed,
-        "foreign_changed_files": foreign,
-        "deleted_files": deleted_source_files(baseline_dir, patch_dir),
+        **classify_changes(baseline_dir, patch_dir, changed_paths),
         "mutants": [],
         "survivors": [],
         "mutants_counted": 0,
         "stillborn": 0,
     }
+    changed = list(detail["changed_files"])  # type: ignore[arg-type]
+    foreign = list(detail["foreign_changed_files"])  # type: ignore[arg-type]
 
     def finish(result: SuiteStrength, reason: str = "") -> Tuple[SuiteStrength, Dict[str, object]]:
         detail["measured"] = result.is_measured
