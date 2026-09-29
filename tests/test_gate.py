@@ -1490,6 +1490,69 @@ class TestAg012ResidualPaths(unittest.TestCase):
                         f"{name} is not code under test",
                     )
 
+    def test_vcs_internals_and_caches_are_not_source_we_cannot_judge(self):
+        """Regression for the defect the AG-013 fix introduced itself.
+
+        Replacing "is this one of the languages we remember" with "is this
+        plainly not code" made the question *broader*, and the extra things it
+        now sees are mostly not code at all. A scan over a real checkout finds
+        ``.git/HEAD``, ``.git/config`` and ``.git/objects/...``; none of those
+        have a suffix either table recognises, so all of them became "source
+        we cannot judge". The old allowlist had hidden them only by accident.
+
+        The consequence was measured rather than guessed: every gate run whose
+        ``--patch`` happened to be a repository reported 26 such paths,
+        including ``.git/HEAD``, and forced INCONCLUSIVE -- which is what
+        turned ``prepare_evidence.sh`` from exit 0 into exit 2 in CI.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="README.md")
+            for rel in (
+                ".git/HEAD",
+                ".git/config",
+                ".git/objects/ab/cdef",
+                ".pytest_cache/v/cache/nodeids",
+                ".pytest_cache/.gitignore",
+                "__pycache__/calc.cpython-312.pyc",
+                ".coverage",
+            ):
+                target = root / "patch" / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("bookkeeping\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                [],
+                "VCS metadata and tool caches are not patch content",
+            )
+
+    def test_the_scan_exemption_does_not_extend_to_the_diff(self):
+        """Pinning the boundary of the exclusion, in both directions.
+
+        ``NON_SOURCE_DIRS`` exists so a checkout stops looking like a patch,
+        so the important question is where the exemption stops. It stops at
+        the scan: the diff is the author's own statement of what changed, and
+        a diff that names something under ``.git/`` or ``node_modules/`` still
+        has to answer for it. Exempting those too would be a place to hide a
+        file, which is exactly the AG-013 failure mode under a new name.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="README.md")
+            for rel in (
+                ".git/hooks/post-checkout",
+                "node_modules/vendored.js",
+                ".venv/lib/site/module.go",
+            ):
+                with self.subTest(diff_path=rel):
+                    self.assertEqual(
+                        changed_foreign_source_files(
+                            root / "baseline", root / "patch", [rel]
+                        ),
+                        [rel],
+                        f"a diff naming {rel} must not be dropped by the scan fix",
+                    )
+
     def test_diff_paths_are_unioned_with_the_scan(self):
         """The caller's diff is authoritative about what the patch touched."""
         with tempfile.TemporaryDirectory() as directory:
