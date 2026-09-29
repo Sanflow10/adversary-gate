@@ -284,8 +284,16 @@ runs:
           ARGS+=(--commit "$AG_COMMIT")
         fi
 
-        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}")
-        EXIT_CODE=$?
+        # `shell: bash` runs with -e, and an assignment whose command
+        # substitution fails is itself a failing command -- so this line used
+        # to abort the step before a single output was written. Every
+        # non-zero gate exit (BLOCK=1, INCONCLUSIVE=2) produced
+        # `decision=` empty and `outcome=` empty, which means a workflow
+        # branching on `steps.gate.outputs.decision == 'block'` could never
+        # fire. Exiting 0 was the only case that ever worked.
+        # `cmd || var=$?` is a handled failure, so -e does not stop for it.
+        EXIT_CODE=0
+        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}") || EXIT_CODE=$?
         echo "$JSON_OUT"
 
         DECISION=$(echo "$JSON_OUT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('decision', 'inconclusive'))" 2>/dev/null || echo "inconclusive")
