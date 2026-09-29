@@ -161,25 +161,26 @@ jobs:
 
       - name: The command ran on both sides, and no test-id was demanded
         run: |
-          # The two things this step exists for:
+          # The wiring this step exists for:
           #   1. it did NOT exit 3 -- test-id is genuinely optional now;
-          #   2. the evidence names the command's exit codes (0 on both
-          #      sides) rather than a collection error.
-          # The decision is inconclusive, and that is the documented answer,
-          # not a defect: AG-012 keeps a suite it cannot mutate from merging,
-          # and there is no Python here to mutate. --test-command buys a real
-          # PASS/FAIL (so BLOCK works); only a mutation adapter buys MERGE.
-          echo "decision=${{ steps.gate_cmd.outputs.decision }}"
-          echo "outcome=${{ steps.gate_cmd.outputs.outcome }}"
-          test "${{ steps.gate_cmd.outputs.decision }}" = "inconclusive"
-          test "${{ steps.gate_cmd.outputs.outcome }}" = "verified"
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          d = json.loads(Path("evidence-cmd.jsonl").read_text().splitlines()[-1])
-          print(d.get("decision"), d.get("outcome"))
-          PY
+          #   2. the decision is the documented answer, not a defect:
+          #      AG-012 keeps a suite it cannot mutate from merging, and a
+          #      shell script leaves nothing for the mutation engine to break.
+          #      --test-command buys a real PASS/FAIL (so BLOCK works);
+          #      only a mutation adapter buys MERGE.
+          #
+          # The probe is emitted unconditionally because this job log is not
+          # readable without push rights, while annotations are. A red job has
+          # to be able to say *what* it saw.
+          DECISION='${{ steps.gate_cmd.outputs.decision }}'
+          OUTCOME='${{ steps.gate_cmd.outputs.outcome }}'
+          echo "::notice::probe decision=$DECISION outcome=$OUTCOME evidence=$(tail -c 300 evidence-cmd.jsonl 2>&1 || echo '<absent>')"
+          echo "decision=$DECISION"
+          echo "outcome=$OUTCOME"
+          fail() { echo "::error::$1"; exit 1; }
+          [ -n "$DECISION" ] || fail "the gate never produced a decision -- check for an exit 3 usage error"
+          [ "$DECISION" = "inconclusive" ] || fail "decision is '$DECISION', expected 'inconclusive'"
+          [ "$OUTCOME" = "verified" ] || fail "outcome is '$OUTCOME', expected 'verified'"
 
   prepare-evidence:
     # base-sha's plumbing lives in a script so it can be tested without a
@@ -330,9 +331,12 @@ jobs:
         # and the same commit measures ~6 points lower, which would make this
         # floor depend on the runner's package list rather than on the code.
         run: |
+          # The job log needs push rights to read; annotations do not. So a
+          # red job has to carry its own diagnosis here rather than leave it
+          # in a log nobody without an admin token can open.
           set +e
-          coverage run --source=src -m pytest -q
-          pytest_exit=$?
+          coverage run --source=src -m pytest -q 2>&1 | tee pytest-run.log
+          pytest_exit=${PIPESTATUS[0]}
           set -e
           coverage json -o coverage.json
           python - <<'PY'
@@ -349,7 +353,13 @@ jobs:
           print(f'{"TOTAL":<40} {data["totals"]["percent_covered"]:>7.1f}%')
           PY
           if [ "$pytest_exit" -ne 0 ]; then
-            echo "::error title=Suite failed::pytest exited $pytest_exit -- a test failure, not the coverage floor. The FAILED lines above name it."
+            echo "::error title=Suite failed::pytest exited $pytest_exit -- a test failure, not the coverage floor"
+            { grep -E '^(FAILED|ERROR) ' pytest-run.log || true; } | head -8 |
+              while IFS= read -r line; do
+                echo "::error title=Failing test::$line"
+              done
+            TAIL=$(tail -20 pytest-run.log | sed -e 's/%/%25/g' -e 's/$/%0A/' | tr -d '\n' | cut -c1-1500)
+            echo "::notice title=pytest tail::$TAIL"
             exit "$pytest_exit"
           fi
           coverage report --fail-under=87

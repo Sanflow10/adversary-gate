@@ -1526,6 +1526,35 @@ class TestAg012ResidualPaths(unittest.TestCase):
                 "VCS metadata and tool caches are not patch content",
             )
 
+    def test_the_actions_own_build_output_is_not_foreign(self):
+        """The Action runs ``pip install`` in the very tree it is judging.
+
+        That writes ``build/`` and ``src/<name>.egg-info/`` into the patch side
+        while the baseline, materialised from git, has neither -- so the two
+        trees always differ there. Exactly one file made the difference count:
+        ``PKG-INFO`` is suffixless and not on the name list, so it read as
+        "source we cannot judge" and took every base-sha run from exit 0 to
+        exit 2. Nothing here is excluded by its suffix; it is excluded because
+        it is output, not input.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="README.md")
+            for rel in (
+                "src/adversary_gate.egg-info/PKG-INFO",
+                "src/adversary_gate.egg-info/SOURCES.txt",
+                "build/lib/gate_fixture/calc.py",
+                "dist/index.html",
+            ):
+                target = root / "patch" / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("generated\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                [],
+                "setuptools output is not source the patch introduced",
+            )
+
     def test_the_scan_exemption_does_not_extend_to_the_diff(self):
         """Pinning the boundary of the exclusion, in both directions.
 

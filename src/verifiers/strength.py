@@ -192,6 +192,12 @@ NON_SOURCE_DIRS = frozenset({
     ".venv", "venv", ".virtualenv", "node_modules",
     # coverage and profiling output
     "htmlcov",
+    # build output. `pip install` writes these into the workspace the Action
+    # runs in, so a materialised baseline (clean, from git) and the checkout
+    # (not clean) always differ here. ``src/<name>.egg-info/PKG-INFO`` is the
+    # one that actually bit: suffixless, not on the name list, therefore
+    # "source we cannot judge", therefore INCONCLUSIVE on every base-sha run.
+    "build", "dist",
 })
 
 
@@ -221,7 +227,13 @@ def _is_scan_noise(rel: str) -> bool:
     the reason this exclusion cannot reopen AG-013.
     """
     path = Path(rel)
-    return any(part in NON_SOURCE_DIRS for part in path.parts[:-1])
+    return any(
+        # ``<name>.egg-info`` is never a fixed name, so it needs a suffix test
+        # rather than an entry in the set -- setuptools names it after the
+        # distribution.
+        part in NON_SOURCE_DIRS or part.endswith(".egg-info")
+        for part in path.parts[:-1]
+    )
 
 
 def _is_test_path(rel: str) -> bool:
