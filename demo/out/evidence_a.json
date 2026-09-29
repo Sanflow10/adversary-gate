@@ -1,6 +1,6 @@
 {
-  "record_id": "33301dafe2c0430089d09058f51b3928",
-  "ts": "2026-09-29T07:06:46.383651+00:00",
+  "record_id": "96548de7490f4df787efd9ac4cc1736b",
+  "ts": "2026-09-29T08:40:22.595446+00:00",
   "kind": "decision",
   "decision": "block",
   "rounds_used": 4,
@@ -27,6 +27,7 @@
     "changed_files": [
       "calc.py"
     ],
+    "foreign_changed_files": [],
     "deleted_files": [],
     "mutants": [
       {

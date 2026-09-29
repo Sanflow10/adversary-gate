@@ -88,6 +88,84 @@ It is a **mutation score** — `mutants killed / mutants executable` — produce
 
 ---
 
+## 🌐 Language support — read this if your repo is not Python
+
+**Today the gate measures Python.** Three layers are Python-specific, and each
+one is a different kind of "no":
+
+| Layer | What it does | Non-Python |
+|---|---|---|
+| Test execution | `python -m pytest <path::id>` | never runs; pytest reports *no tests collected* (exit 5) |
+| Coverage | parses `coverage json` (`files → executed_lines`) | no report in that shape to parse |
+| Mutation | tokenizes Python and swaps operators | cannot break a `.cpp` or a `.rs` |
+
+Everything *above* those layers — decision precedence, the evidence questions,
+the SHA-256'd artefact, exit codes — is language-agnostic. The brain is
+portable; the senses are not.
+
+### What you get today on a non-Python patch
+
+**`INCONCLUSIVE`, never `MERGE`** — and that is deliberate, not a limitation
+that happens to work out.
+
+Until AG-012 it was worse than useless, it was wrong. The mutation scanner only
+walked `*.py`, so a patch whose entire effect was in `calculator.cpp` reported
+`changed_files: []` and the reason **`"no non-test source file changed between
+baseline and patch"`** — a statement that was simply false. With a passing
+Python test and a coverage artefact, that patch reached **`MERGE`** while the
+only thing that had executed anywhere was `assert True`:
+
+```console
+$ adversary-gate --baseline b --patch p --test-path test_ok.py --test-id test_ok \
+      --diff change.diff --coverage-json cov.json
+decision: merge        # changed calculator.cpp from `a - b` to `a * b`
+suite_strength: null   # reason: "no non-test source file changed"
+```
+
+It now records what it actually observed and refuses to judge what it cannot:
+
+```console
+decision: inconclusive                                        exit 2
+suite_strength: null | suite_strength_unverified: true
+mutation.foreign_changed_files: ["calculator.cpp"]
+mutation.reason: "1 non-Python source file(s) changed that suite strength
+                   cannot judge: calculator.cpp"
+```
+
+`INCONCLUSIVE` here is the product working: *the patch changed code we did not
+execute, so we are not saying it is clean.* The alternative — a green checkmark
+over a test suite that never looked at the change — is the exact failure this
+project exists to prevent.
+
+### Which files count as "source we cannot judge"
+
+`FOREIGN_SOURCE_SUFFIXES` in `src/verifiers/strength.py`: C/C++, Rust, Go, JVM,
+.NET, Swift, Ruby, PHP, JS/TS, shell and the rest of the common compiled and
+interpreted set. Files that are not code (`.md`, `.yml`, `.json`, images) and
+files that are tests (`test_*`, anything under `tests/`) are excluded, so a
+documentation-only patch is unaffected.
+
+### What full support actually requires
+
+Three adapters, in this order of value:
+
+1. **`--test-command`** — run an arbitrary command instead of pytest, with a
+   documented pass/fail/harness-error convention. Unlocks execution first, and
+   is worth having even for Python repos with a non-pytest suite.
+2. **A coverage adapter** — `llvm-cov export`, `grcov`, `cargo-llvm-cov` and
+   `cargo tarpaulin` all emit different shapes; normalise them to
+   `{files: {path: {executed_lines: [...]}}}` and `covered_diff_ratio` needs no
+   change at all.
+3. **A mutation adapter** — `cargo-mutants` is mature for Rust; for C++ the
+   options (`mull`, LLVM pass-based) are much thinner. Without this layer
+   `suite_strength` stays `null` and every patch is `INCONCLUSIVE`, so **this
+   one is a hard requirement for MERGE, not an optimisation.**
+
+Until all three exist, the honest answer for a non-Python repo stays
+`INCONCLUSIVE`.
+
+---
+
 ## 📊 Measured Pytest Exit Code Taxonomy
 
 | Exit Code | Pytest Meaning | ExecState | Gate Behavior |
@@ -152,7 +230,8 @@ Exit Codes for CI Integration:
 
 ### GitHub Action Integration (`action.yml`)
 
-Add AdversaryGate to your GitHub Workflow:
+**One ref in.** `base-sha` derives the baseline, the diff and the coverage
+report itself, so the first thing you install is not a `INCONCLUSIVE`:
 
 ```yaml
 name: Verification Gate
@@ -163,8 +242,40 @@ jobs:
   verify-agent-patch:
     runs-on: ubuntu-latest
     steps:
+      # base-sha is a commit in history: this is not optional.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Run AdversaryGate
+        uses: Sanflow10/adversary-gate@v2
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          test-path: 'tests/test_token_expiry.py'
+          test-id: 'test_token_expiry'
+          evidence-log: 'evidence.jsonl'
+```
+
+What that does, and where each piece comes from:
+
+| Artefact | Derived from |
+|---|---|
+| `baseline` | `git archive <base-sha>` — the committed tree, no worktree leftovers |
+| `diff` | `git diff --no-ext-diff <base-sha>...HEAD` |
+| `coverage-json` | `coverage-command`, run in the checkout |
+| `patch` | the checkout itself |
+
+If the ref is not in your local history the Action **stops with exit 4 and
+tells you `fetch-depth: 0`** rather than measuring against a baseline it
+invented. `coverage-command` defaults to `coverage run -m pytest` + `coverage json`;
+override it to point at your own suite, or pass `coverage-json` to supply the
+artefact yourself.
+
+**Everything it derived is one `git diff` you could have run by hand.** When
+you would rather assemble it yourself — a monorepo, a generated diff, coverage
+from a non-coverage.py tool — pass the paths explicitly instead:
+
+```yaml
       - name: Collect coverage evidence
         run: |
           git diff --no-ext-diff ${{ github.event.pull_request.base.sha }}...HEAD > changes.diff
@@ -187,7 +298,7 @@ jobs:
           evidence-log: 'evidence.jsonl'
 ```
 
-Without `diff` + `coverage-json` the Action reports `INCONCLUSIVE`, because there is no coverage evidence to clear the floor with. If you deliberately want to assert the number instead, set `coverage-ratio` **and** `coverage-source: 'untrusted'`.
+Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Action reports `INCONCLUSIVE`, because there is no coverage evidence to clear the floor with. If you deliberately want to assert the number instead, set `coverage-ratio` **and** `coverage-source: 'untrusted'`.
 
 ---
 
