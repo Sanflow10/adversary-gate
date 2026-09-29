@@ -208,17 +208,47 @@ Until all three exist, the honest answer for a non-Python repo stays
 
 ## 📦 Installation
 
-Install via PyPI:
+**Install from GitHub — that is where the fixes are:**
 
 ```bash
-pip install adversary-gate
+pip install git+https://github.com/Sanflow10/adversary-gate.git
 ```
 
-Or run directly from source:
+| Route | Resolves to | Note |
+|---|---|---|
+| `pip install git+https://github.com/Sanflow10/adversary-gate.git` | 2.1.0 | current |
+| `git clone … && pip install .` | `main` | current |
+| `pip install adversary-gate` (PyPI) | **2.0.1** | ⚠️ stale — see below |
+| `uses: Sanflow10/adversary-gate@main` | `main` | current |
+
+Run from source with no install at all:
 
 ```bash
-python3 -m cli --help
+python3 src/cli.py --help
 ```
+
+### Why PyPI is behind
+
+PyPI holds `2.0.0` and `2.0.1` only, and **`2.0.1` is the version the audit was
+run against** — it predates every fix in this document:
+
+```console
+$ pip install adversary-gate
+$ adversary-gate --baseline b --patch p --diff changes.diff
+error: unrecognized arguments: --diff changes.diff
+```
+
+`--diff` and `--coverage-json` did not exist yet (AG-002), and on that version
+the gate returns `decision: merge` with `diff_coverage_ratio: null` — coverage
+simply was not a question. Running it against a patch that changed only
+`calculator.cpp` (rewriting `a - b` to `a * b`) merges on the strength of a
+Python test whose only assertion is `assert True`.
+
+Publishing a fixed version is blocked by **AG-008**: the Trusted Publisher is
+registered in the PyPI project settings (`pypi.org/manage/project/
+adversary-gate/settings/publishing/`), which cannot be changed from inside this
+repository. Until someone with PyPI access registers it, **PyPI will keep
+serving the buggy version and GitHub is the only correct route.**
 
 ---
 
@@ -274,13 +304,20 @@ jobs:
           fetch-depth: 0
 
       - name: Run AdversaryGate
-        uses: Sanflow10/adversary-gate@v2
+        uses: Sanflow10/adversary-gate@main
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
           test-path: 'tests/test_token_expiry.py'
           test-id: 'test_token_expiry'
           evidence-log: 'evidence.jsonl'
 ```
+
+> **Which ref?** There is no `v2` tag — only `v2.0.0` and `v2.0.1`, and both
+> point at the audited version with the bugs. `@main` is the only ref that
+> resolves to a fixed build. For anything that matters, pin the full commit SHA
+> instead (`uses: Sanflow10/adversary-gate@<full-sha>`): a tag would be ideal,
+> but pushing one triggers the PyPI publish workflow, which fails — AG-008 — and
+> would leave a red run on every release until that is registered.
 
 What that does, and where each piece comes from:
 
@@ -310,7 +347,7 @@ from a non-coverage.py tool — pass the paths explicitly instead:
           coverage json -o coverage.json
 
       - name: Run AdversaryGate
-        uses: Sanflow10/adversary-gate@v2
+        uses: Sanflow10/adversary-gate@main
         with:
           baseline: './baseline'
           patch: './patch'
