@@ -7,11 +7,31 @@ branding:
 
 inputs:
   baseline:
-    description: 'Path to baseline repository state (before patch)'
-    required: true
+    description: >-
+      Path to baseline repository state (before patch). Optional when base-sha
+      is given, which materialises the baseline from that commit.
+    required: false
   patch:
-    description: 'Path to patch repository state (after patch)'
-    required: true
+    description: >-
+      Path to patch repository state (after patch). Optional when base-sha is
+      given, in which case the current checkout is the patch.
+    required: false
+  base-sha:
+    description: >-
+      Git ref for the "before" state. When set, the Action derives everything
+      it can from it instead of asking you to hand-build artefacts: it
+      materialises `baseline` from this commit, treats the checkout as the
+      patch, writes the unified diff from `base-sha...HEAD`, and -- unless
+      `coverage-json` is given -- runs `coverage-command` to produce it.
+      Requires a full clone, i.e. `fetch-depth: 0` on actions/checkout.
+    required: false
+  coverage-command:
+    description: >-
+      Shell command that writes the coverage JSON report to the path in
+      $COVERAGE_JSON, run in the patch tree. Only used when base-sha is set
+      and coverage-json is not. Default measures a pytest suite with coverage.py.
+    required: false
+    default: 'coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
   test-path:
     description: 'Relative path to target test file'
     required: true
@@ -91,48 +111,138 @@ runs:
     # a declared dependency of the package but is not present in a clean runner,
     # so the harness died with "No module named pytest" and the gate reported
     # INCONCLUSIVE for reasons unrelated to the patch. Install first, then run.
+    # ``coverage`` is not a package dependency: it is here only because this
+    # Action may have to produce the coverage artefact itself.
     - name: Install AdversaryGate and its dependencies
       shell: bash
-      run: python -m pip install "${{ github.action_path }}"
+      run: python -m pip install "${{ github.action_path }}" coverage
+
+    # base-sha: one ref in, three artefacts out. Kept in its own step so the
+    # separation holds -- the gate measures files, the Action prepares them.
+    - name: Prepare evidence from base-sha
+      id: prep
+      if: inputs.base-sha != ''
+      shell: bash
+      env:
+        AG_BASE_SHA: ${{ inputs.base-sha }}
+        AG_COVERAGE_JSON_IN: ${{ inputs.coverage-json }}
+        AG_COVERAGE_CMD: ${{ inputs.coverage-command }}
+      run: |
+        set -euo pipefail
+        OUT="${RUNNER_TEMP}/adversary-gate"
+        mkdir -p "$OUT"
+
+        EXTRA=()
+        if [ -n "$AG_COVERAGE_JSON_IN" ]; then
+          EXTRA+=(--skip-coverage)
+        else
+          EXTRA+=(--coverage-file "$OUT/coverage.json")
+          if [ -n "$AG_COVERAGE_CMD" ]; then
+            EXTRA+=(--coverage-command "$AG_COVERAGE_CMD")
+          fi
+        fi
+
+        bash "${{ github.action_path }}/scripts/prepare_evidence.sh" \
+          --workspace "${GITHUB_WORKSPACE}" \
+          --base-sha "$AG_BASE_SHA" \
+          --baseline-dir "$OUT/baseline" \
+          --diff-file "$OUT/change.diff" \
+          "${EXTRA[@]}"
+
+        echo "baseline=$OUT/baseline" >> "$GITHUB_OUTPUT"
+        echo "diff=$OUT/change.diff" >> "$GITHUB_OUTPUT"
+        if [ -s "$OUT/coverage.json" ]; then
+          echo "coverage=$OUT/coverage.json" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Execute AdversaryGate Verification
       id: gate
       shell: bash
+      env:
+        AG_BASELINE_IN: ${{ inputs.baseline }}
+        AG_PATCH_IN: ${{ inputs.patch }}
+        AG_DIFF_IN: ${{ inputs.diff }}
+        AG_COVERAGE_JSON_IN: ${{ inputs.coverage-json }}
+        AG_PREP_BASELINE: ${{ steps.prep.outputs.baseline }}
+        AG_PREP_DIFF: ${{ steps.prep.outputs.diff }}
+        AG_PREP_COVERAGE: ${{ steps.prep.outputs.coverage }}
+        AG_BASE_SHA: ${{ inputs.base-sha }}
+        AG_TEST_PATH: ${{ inputs.test-path }}
+        AG_TEST_ID: ${{ inputs.test-id }}
+        AG_BUG_KIND: ${{ inputs.bug-kind }}
+        AG_COVERAGE_FLOOR: ${{ inputs.coverage-floor }}
+        AG_COVERAGE_SOURCE: ${{ inputs.coverage-source }}
+        AG_COVERAGE_RATIO: ${{ inputs.coverage-ratio }}
+        AG_STRENGTH_FLOOR: ${{ inputs.suite-strength-floor }}
+        AG_EVIDENCE_LOG: ${{ inputs.evidence-log }}
+        AG_REQUIRE_NET: ${{ inputs.require-network-isolation }}
+        AG_CRITERION_ID: ${{ inputs.criterion-id }}
+        AG_CRITERION: ${{ inputs.criterion }}
+        AG_MODEL: ${{ inputs.model }}
+        AG_COMMIT: ${{ inputs.commit }}
       run: |
+        # An explicit input wins; what base-sha prepared is the fallback.
+        # Reading these from the environment instead of splicing
+        # ${{ inputs.* }} straight into the script means a value containing a
+        # quote is data rather than a way to end the string.
+        pick() { if [ -n "$1" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+
+        BASELINE="$(pick "$AG_BASELINE_IN" "$AG_PREP_BASELINE")"
+        if [ -n "$AG_PATCH_IN" ]; then
+          PATCH="$AG_PATCH_IN"
+        elif [ -n "$AG_BASE_SHA" ]; then
+          PATCH="${GITHUB_WORKSPACE}"
+        else
+          PATCH=""
+        fi
+        DIFF="$(pick "$AG_DIFF_IN" "$AG_PREP_DIFF")"
+        COVERAGE_JSON="$(pick "$AG_COVERAGE_JSON_IN" "$AG_PREP_COVERAGE")"
+
+        if [ -z "$BASELINE" ] || [ -z "$PATCH" ]; then
+          echo "::error::baseline and patch are required -- give both, or give base-sha and let the Action derive them"
+          exit 3
+        fi
+        for candidate in "$BASELINE" "$PATCH"; do
+          if [ ! -d "$candidate" ]; then
+            echo "::error::not a directory: $candidate"
+            exit 3
+          fi
+        done
+
         ARGS=(
-          --baseline "${{ inputs.baseline }}"
-          --patch "${{ inputs.patch }}"
-          --test-path "${{ inputs.test-path }}"
-          --test-id "${{ inputs.test-id }}"
-          --bug-kind "${{ inputs.bug-kind }}"
-          --coverage-floor "${{ inputs.coverage-floor }}"
-          --coverage-source "${{ inputs.coverage-source }}"
-          --suite-strength-floor "${{ inputs.suite-strength-floor }}"
-          --evidence-log "${{ inputs.evidence-log }}"
+          --baseline "$BASELINE"
+          --patch "$PATCH"
+          --test-path "$AG_TEST_PATH"
+          --test-id "$AG_TEST_ID"
+          --bug-kind "$AG_BUG_KIND"
+          --coverage-floor "$AG_COVERAGE_FLOOR"
+          --coverage-source "$AG_COVERAGE_SOURCE"
+          --suite-strength-floor "$AG_STRENGTH_FLOOR"
+          --evidence-log "$AG_EVIDENCE_LOG"
         )
-        if [ -n "${{ inputs.diff }}" ]; then
-          ARGS+=(--diff "${{ inputs.diff }}")
+        if [ -n "$DIFF" ]; then
+          ARGS+=(--diff "$DIFF")
         fi
-        if [ -n "${{ inputs.coverage-json }}" ]; then
-          ARGS+=(--coverage-json "${{ inputs.coverage-json }}")
+        if [ -n "$COVERAGE_JSON" ]; then
+          ARGS+=(--coverage-json "$COVERAGE_JSON")
         fi
-        if [ -n "${{ inputs.coverage-ratio }}" ]; then
-          ARGS+=(--coverage-ratio "${{ inputs.coverage-ratio }}")
+        if [ -n "$AG_COVERAGE_RATIO" ]; then
+          ARGS+=(--coverage-ratio "$AG_COVERAGE_RATIO")
         fi
-        if [ "${{ inputs.require-network-isolation }}" = "true" ]; then
+        if [ "$AG_REQUIRE_NET" = "true" ]; then
           ARGS+=(--require-network-isolation)
         fi
-        if [ -n "${{ inputs.criterion-id }}" ]; then
-          ARGS+=(--criterion-id "${{ inputs.criterion-id }}")
+        if [ -n "$AG_CRITERION_ID" ]; then
+          ARGS+=(--criterion-id "$AG_CRITERION_ID")
         fi
-        if [ -n "${{ inputs.criterion }}" ]; then
-          ARGS+=(--criterion "${{ inputs.criterion }}")
+        if [ -n "$AG_CRITERION" ]; then
+          ARGS+=(--criterion "$AG_CRITERION")
         fi
-        if [ -n "${{ inputs.model }}" ]; then
-          ARGS+=(--model "${{ inputs.model }}")
+        if [ -n "$AG_MODEL" ]; then
+          ARGS+=(--model "$AG_MODEL")
         fi
-        if [ -n "${{ inputs.commit }}" ]; then
-          ARGS+=(--commit "${{ inputs.commit }}")
+        if [ -n "$AG_COMMIT" ]; then
+          ARGS+=(--commit "$AG_COMMIT")
         fi
 
         JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}")

@@ -132,6 +132,79 @@ jobs:
           test "${{ steps.gate.outputs.outcome }}" = "verified"
           test -s evidence.jsonl
 
+  prepare-evidence:
+    # base-sha's plumbing lives in a script so it can be tested without a
+    # runner. This asserts the artefacts it writes *and* that the gate accepts
+    # them -- producing a diff is worthless if the decision that follows is
+    # wrong -- plus both failure modes failing closed with a readable reason.
+    name: base-sha artefacts (script)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install pytest coverage
+
+      - name: Run the prepare_evidence test
+        run: bash scripts/test_prepare_evidence.sh
+
+  action-base-sha:
+    # The same path, but through the composite Action on a real runner: one
+    # ref in, and baseline + diff + coverage derived from it. checkout needs
+    # fetch-depth: 0 for base-sha to exist at all -- forgetting it is the
+    # failure this job would otherwise be the first to hit.
+    name: Composite action from base-sha
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Commit a fixture, then patch it
+        run: |
+          set -euo pipefail
+          git config user.email "adversary-gate@example.com"
+          git config user.name "adversary-gate"
+          mkdir -p gate_fixture
+          touch gate_fixture/__init__.py
+          printf 'def add(a, b):\n    return a + b\n' > gate_fixture/calc.py
+          printf 'from gate_fixture.calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n' > gate_fixture/test_calc.py
+          git add gate_fixture
+          git commit -qm "fixture: baseline side"
+          echo "AG_BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # The patch keeps the claim green and only reshapes the expression,
+          # so there is a real added line for diff coverage to judge.
+          printf 'def add(a, b):\n    return (a + b)\n' > gate_fixture/calc.py
+          git add -A
+          git commit -qm "fixture: patch side"
+
+      - name: Run AdversaryGate deriving everything from base-sha
+        id: gate
+        uses: ./
+        with:
+          base-sha: ${{ env.AG_BASE_SHA }}
+          test-path: 'gate_fixture/test_calc.py'
+          test-id: 'test_add'
+          coverage-command: 'coverage run -m pytest gate_fixture || true; coverage json -o "$COVERAGE_JSON"'
+          evidence-log: 'evidence-base-sha.jsonl'
+
+      - name: One ref must be enough to merge
+        run: |
+          echo "decision=${{ steps.gate.outputs.decision }}"
+          echo "outcome=${{ steps.gate.outputs.outcome }}"
+          test "${{ steps.gate.outputs.decision }}" = "merge"
+          test "${{ steps.gate.outputs.outcome }}" = "verified"
+          test -s evidence-base-sha.jsonl
+          # Coverage came from the derived artefact, not from a claim.
+          grep -q '"diff_coverage_source": "computed"' evidence-base-sha.jsonl
+
   demo:
     # The demo is an acceptance test, not a screenshot: if a decision regresses
     # (a deletion stops counting, coverage stops being an evidence question, a

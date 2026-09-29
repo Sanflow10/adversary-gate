@@ -8,8 +8,8 @@ repositório: /tmp/opencode/ag-remote
   CENÁRIO A — patch quebra o teste
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-juemlv6q/baseline
-      --patch /tmp/ag-demo-juemlv6q/patch_broken
+      --baseline /tmp/ag-demo-glzhqn4l/baseline
+      --patch /tmp/ag-demo-glzhqn4l/patch_broken
       --test-path test_sum.py
       --test-id test_add
       --coverage-source untrusted
@@ -21,14 +21,14 @@ repositório: /tmp/opencode/ag-remote
     coverage    : 1.0   (source=untrusted)
     força suíte : 0.0   (medida=True)
     suíte total : ran=True
-    tempo       : 21.8s
+    tempo       : 19.1s
 
 ==========================================================================
   CENÁRIO B — patch limpo, SEM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-juemlv6q/baseline
-      --patch /tmp/ag-demo-juemlv6q/patch_clean
+      --baseline /tmp/ag-demo-glzhqn4l/baseline
+      --patch /tmp/ag-demo-glzhqn4l/patch_clean
       --test-path test_sum.py
       --test-id test_add
 
@@ -38,18 +38,18 @@ repositório: /tmp/opencode/ag-remote
     coverage    : None   (source=none)
     força suíte : 1.0   (medida=True)
     suíte total : ran=True
-    tempo       : 18.8s
+    tempo       : 17.6s
 
 ==========================================================================
   CENÁRIO C — patch limpo, COM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-juemlv6q/baseline
-      --patch /tmp/ag-demo-juemlv6q/patch_clean
+      --baseline /tmp/ag-demo-glzhqn4l/baseline
+      --patch /tmp/ag-demo-glzhqn4l/patch_clean
       --test-path test_sum.py
       --test-id test_add
-      --diff /tmp/ag-demo-juemlv6q/change.diff
-      --coverage-json /tmp/ag-demo-juemlv6q/coverage.json
+      --diff /tmp/ag-demo-glzhqn4l/change.diff
+      --coverage-json /tmp/ag-demo-glzhqn4l/coverage.json
 
     exit code   : 0
     decision    : merge
@@ -57,7 +57,7 @@ repositório: /tmp/opencode/ag-remote
     coverage    : 1.0   (source=computed)
     força suíte : 1.0   (medida=True)
     suíte total : ran=True
-    tempo       : 19.0s
+    tempo       : 18.2s
 
 ==========================================================================
   ARTEFATO DE EVIDÊNCIA — cenário C (demo/out/evidence_c.json)
