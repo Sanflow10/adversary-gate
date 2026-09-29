@@ -465,7 +465,18 @@ def measure_mutation_score(
 
     result = calculate_mutation_score(counted, killed)
     if result.is_measured:
-        return finish(result, "")
+        note = ""
+        if foreign:
+            # The score just produced covers the Python files it mutated and
+            # nothing else. Leaving ``reason`` blank let a 1.0 read as the
+            # strength of the whole patch while part of the change was never
+            # executed; say what the number is actually a number for.
+            note = (
+                f"score covers the {len(changed)} Python file(s) mutated only; "
+                f"{len(foreign)} non-Python source file(s) in this patch were "
+                "never judged"
+            )
+        return finish(result, note)
     return finish(
         result,
         "every mutant was stillborn; the test target never executed the mutated code",

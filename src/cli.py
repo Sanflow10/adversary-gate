@@ -335,23 +335,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 max_mutants=args.mutation_max,
             )
             if strength_obj.is_measured:
+                # A measured score covers exactly the Python files it mutated
+                # -- never the whole patch. Whether it is allowed to stand is
+                # decided just below.
                 strength = strength_obj.mutation_score
-            elif (
-                mutation_detail.get("changed_files")
-                or mutation_detail.get("foreign_changed_files")
-            ) and verdict.outcome is Outcome.VERIFIED:
-                # There was code to judge, the claim itself executed and came
-                # back VERIFIED, and we still could not produce a score. That
-                # is *unknown*, not strong, so it must not reach MERGE. When
-                # the claim did not verify, its own outcome already decides and
-                # strength would only add noise to the reason.
-                #
-                # ``foreign_changed_files`` matters because the mutation
-                # scanner only walks ``*.py``: a patch whose changes were all
-                # in ``.cpp``/``.rs`` used to report an empty ``changed_files``,
-                # skip this branch, and merge on the strength of a Python test
-                # that never executed the changed code (AG-012).
-                strength_unverified = True
+
+            if verdict.outcome is Outcome.VERIFIED:
+                if mutation_detail.get("foreign_changed_files"):
+                    # The patch changed source this engine cannot break. Even
+                    # when the Python half measured cleanly, presenting that
+                    # number as the strength of the whole patch would claim
+                    # more than was observed -- a mixed Python + C++ patch used
+                    # to merge with the C++ never executed (AG-012).
+                    strength_unverified = True
+                elif not strength_obj.is_measured and mutation_detail.get("changed_files"):
+                    # There was code to judge, the claim itself executed and came
+                    # back VERIFIED, and we still could not produce a score. That
+                    # is *unknown*, not strong, so it must not reach MERGE. When
+                    # the claim did not verify, its own outcome already decides and
+                    # strength would only add noise to the reason.
+                    strength_unverified = True
 
         full_codes: Optional[Sequence[int]] = None
         full_suite_ran = bool(args.full_suite_path)

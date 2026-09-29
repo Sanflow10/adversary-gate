@@ -137,6 +137,32 @@ execute, so we are not saying it is clean.* The alternative — a green checkmar
 over a test suite that never looked at the change — is the exact failure this
 project exists to prevent.
 
+#### The mixed patch, which is the one that hides
+
+The pure-C++ case is easy to spot; the dangerous one is **Python + C++ in the
+same patch**, because there the Python half *does* measure:
+
+```console
+$ adversary-gate ... --diff change.diff --coverage-json cov.json
+decision: merge                                                 # before
+coverage: 0.80   suite_strength: 1.0   suite_strength_unverified: false
+mutation.foreign_changed_files: ["vec.cpp"]      # recorded, never acted on
+```
+
+A `1.0` next to an untouched bug reads as a clean patch. Coverage often masks
+this by accident — an unexecuted `.cpp` line drags the ratio down — but that is
+a coincidence of arithmetic, not a guarantee, so the case is now pinned
+directly: **any** non-Python source in the patch makes
+`suite_strength_unverified` fire, and the artefact says what the score is a
+score *for*:
+
+```console
+decision: inconclusive                                         exit 2
+suite_strength: 1.0 | suite_strength_unverified: true
+mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
+                  source file(s) in this patch were never judged"
+```
+
 ### Which files count as "source we cannot judge"
 
 `FOREIGN_SOURCE_SUFFIXES` in `src/verifiers/strength.py`: C/C++, Rust, Go, JVM,
