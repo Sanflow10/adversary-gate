@@ -87,6 +87,7 @@ Auditoria completa em [`docs/AUDITORIA_SENIOR_v2.0.1.md`](docs/AUDITORIA_SENIOR_
 | AG-009 | `classify()` sombreava `NEW_BUG` e o ramo de timeout do baseline | **Corrigido** (novo) — guarda "baseline deve ser PASS ou FAIL" removida; todo `StabilityPolicy` roda mais de uma vez, então ela disparava sempre. |
 | AG-010 | Artefato não distinguia "suíte passou" de "suíte não rodou" | **Corrigido** (novo) — campo `full_suite_ran` no JSON de saída e no registro de decisão. |
 | AG-011 | Floor de coverage era checado antes de `REFUTED` | **Corrigido** (novo) — `BLOCK` volta a ter precedência, como o próprio docstring de `decide()` já dizia. |
+| AG-012 | Patch só em C++/Rust chegava a `MERGE` | **Corrigido** (novo) — `changed_source_files` só varria `*.py`, então `changed_files` ficava vazio, o guarda de AG-001 não disparava e o artefato gravava `"no non-test source file changed"` enquanto `calculator.cpp` mudava. Agora `foreign_changed_files` separa "o que dá para medir" de "o que mudou e não dá", e `suite_strength_unverified` dispara com **qualquer** fonte não-Python — inclusive no patch misto (Python medido + C++ ignorado), que era a metade que passou despercebida. |
 
 ### Aberto / fora do escopo do repositório
 
