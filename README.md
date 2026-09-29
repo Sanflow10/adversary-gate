@@ -208,24 +208,61 @@ Until all three exist, the honest answer for a non-Python repo stays
 
 ## 📦 Installation
 
-**Install from GitHub — that is where the fixes are:**
+**Nothing below needs PyPI.**
 
 ```bash
+# straight from the repository
 pip install git+https://github.com/Sanflow10/adversary-gate.git
 ```
 
-| Route | Resolves to | Note |
-|---|---|---|
-| `pip install git+https://github.com/Sanflow10/adversary-gate.git` | 2.1.0 | current |
-| `git clone … && pip install .` | `main` | current |
-| `pip install adversary-gate` (PyPI) | **2.0.1** | ⚠️ stale — see below |
-| `uses: Sanflow10/adversary-gate@main` | `main` | current |
-
-Run from source with no install at all:
+```bash
+# or clone it
+git clone https://github.com/Sanflow10/adversary-gate.git
+cd adversary-gate && pip install .
+```
 
 ```bash
+# or don't install it at all
 python3 src/cli.py --help
 ```
+
+| Route | Follows | Needs |
+|---|---|---|
+| `pip install git+https://…adversary-gate.git` | `main` | network |
+| `git clone` + `pip install .` | `main` | git |
+| `python3 src/cli.py --help` | `main` | nothing |
+| `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
+| GitHub Release wheel (below) | one exact version | nothing but `pip` |
+| `pip install adversary-gate` (PyPI) | **2.0.1** | ⚠️ stale — see below |
+
+### Install a released wheel
+
+`git+…` always follows `main`. For a fixed, versioned build, the wheel attached
+to a **GitHub Release** installs from a plain public URL — no PyPI, no GitHub
+login, no `git`:
+
+```bash
+# the tag carries the "v", the filename does not -- after the first Release:
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.0/adversary_gate-2.1.0-py3-none-any.whl
+```
+
+**No Release has been published yet**, so that command 404s today and is here
+to show the shape rather than to be pasted. Publish one from **Actions →
+Release → Run workflow**. That workflow:
+
+1. runs the full test suite and **refuses to publish if it fails** — a release
+   only ever leaves a build whose tests passed;
+2. builds the wheel and sdist and installs the wheel into a clean interpreter;
+3. reads the version from `pyproject.toml` rather than taking it as an input,
+   so a tag disagreeing with the package metadata (the inconsistency AG-008
+   recorded) is unreachable, not merely unlikely;
+4. refuses if that tag already exists, then creates the tag and attaches the
+   artefacts in one step.
+
+It is triggered by hand rather than by a `v*` tag on purpose: the tag is made
+by the workflow's own token, and events that token produces do not start other
+workflows — so releasing does **not** fire the PyPI publisher and leave a red
+run behind every time. Pushing a `v*` tag yourself still will.
 
 ### Why PyPI is behind
 
