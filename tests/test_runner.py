@@ -17,6 +17,7 @@ Two groups:
 from __future__ import annotations
 
 import sys
+import subprocess
 import tempfile
 import types
 import unittest
@@ -40,6 +41,35 @@ from sandbox.runner import (  # noqa: E402
 )
 
 HAVE_BWRAP = bwrap_available()
+
+
+def _bwrap_usable_here():
+    """Can this environment run bwrap at all?
+
+    A different question from whether :func:`bwrap_prefix` is correct. GitHub's
+    runner denies the loopback configuration inside a fresh network namespace
+    -- ``bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`` -- so
+    every end-to-end test fails for a reason that has nothing to do with this
+    code, while the coverage floor the job is named after passes at 89.8%.
+
+    The probe runs **raw** bwrap with none of our arguments, which is what
+    keeps the distinction honest: if raw bwrap works and a test below still
+    fails, the bug is ours and it is reported as a failure rather than being
+    absorbed into a skip.
+    """
+    if not HAVE_BWRAP:
+        return False, "bwrap is not installed"
+    try:
+        proc = subprocess.run(
+            ["bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", "true"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"bwrap could not be started: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300]
+        return False, f"bwrap cannot create a namespace here: {detail}"
+    return True, ""
 
 
 def _repo(files: dict) -> Path:
@@ -334,6 +364,18 @@ class TestBwrapPrefix(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_BWRAP, "bwrap not installed")
 class TestBwrapEndToEnd(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Skip only when the *environment* cannot run bwrap.
+
+        ``TestBwrapPrefix`` keeps running on such a machine: it asserts the
+        shape of our argv without executing anything, so a regression in
+        ``bwrap_prefix`` is still caught there rather than hidden by this.
+        """
+        usable, reason = _bwrap_usable_here()
+        if not usable:
+            raise unittest.SkipTest(f"bwrap unusable in this environment: {reason}")
+
     def setUp(self):
         self.root = _repo({"test_ok.py": "def test_ok():\n    assert True\n"})
 
