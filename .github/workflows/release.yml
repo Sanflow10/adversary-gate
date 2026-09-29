@@ -1,0 +1,87 @@
+name: Release
+
+# A release route that does not need PyPI at all.
+#
+# Deliberately `workflow_dispatch` instead of `on: push: tags: v*`:
+#
+#   The tag is created *inside* this workflow, by the GITHUB_TOKEN, and events
+#   that token produces do not start other workflows. So publishing a release
+#   does not fire pypi-publish.yml and leave a red run behind every time --
+#   that failure is AG-008, it belongs to whoever holds the PyPI account, and
+#   it should not be normalised into the release process while it is
+#   unresolved. Push a `v*` tag by hand and it fires; press Run here and it
+#   does not.
+#
+# What comes out is a wheel attached to a public, unauthenticated URL:
+#
+#   pip install https://github.com/OWNER/REPO/releases/download/vX.Y.Z/FILE.whl
+#
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the tag and the release
+
+jobs:
+  release:
+    name: Build, verify, publish a GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tooling
+        run: python -m pip install build pytest
+
+      # Fail-closed, same as the gate: a release only ever leaves a build whose
+      # tests actually passed. Re-running them here rather than trusting the
+      # latest CI run matters because the tag points at whatever HEAD is now,
+      # not at whatever was green an hour ago.
+      - name: Refuse to release an untested build
+        run: python -m pytest -q
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Install what was just built, in a clean interpreter
+        run: |
+          python -m pip install dist/*.whl
+          adversary-gate --help
+
+      - name: Create the tag and attach the artefacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The version is read from pyproject, never passed in: a tag that
+          # disagrees with the package metadata is precisely the inconsistency
+          # AG-008 recorded, and taking it from one source makes that kind of
+          # mismatch unreachable rather than merely unlikely.
+          VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          TAG="v$VERSION"
+          echo "releasing $TAG"
+
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "::error::tag $TAG already exists -- bump version in pyproject.toml first"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists -- bump version in pyproject.toml first"
+            exit 1
+          fi
+
+          # gh creates the missing tag from HEAD and attaches the files, so
+          # tag + release + artefacts are one atomic step that cannot leave a
+          # tag pointing at a build with no wheel.
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --generate-notes
+
+          echo "published $TAG"
+          ls -l dist/
