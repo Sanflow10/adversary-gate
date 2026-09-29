@@ -1,4 +1,4 @@
-# AdversaryGate (v2.0.2)
+# AdversaryGate (v2.1.0)
 
 > **Uso alto de IA ≠ confiança alta.**
 > O custo de um pipeline com agentes de código não está na inteligência do modelo, está no autoengano do pipeline.
