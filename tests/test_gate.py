@@ -32,7 +32,7 @@ from core.circuit_breaker import CircuitBreaker
 from core.contestation import Contestation
 from core.evidence_log import EvidenceLog
 from core.exitmap import classify_exit, describe
-from core.gate import Gate
+from core.gate import Gate, GateConfig
 from core.metrics import compute_metrics, compare_models, format_report
 from core.path_policy import PathPolicy
 from core.quarantine import QuarantineStore
@@ -55,6 +55,7 @@ from verifiers.strength import (
     calculate_mutation_score,
     changed_lines,
     changed_source_files,
+    deleted_source_files,
     measure_mutation_score,
 )
 
@@ -269,6 +270,37 @@ class TestDecisionSemantics(unittest.TestCase):
     def test_coverage_floor_blocks_merge(self):
         vs = [verdict_with(self.gate, FailureClass.CLAIM_DISCARDED)]
         self.assertIs(self.gate.decide(vs, 4, 0.5), Decision.INCONCLUSIVE)
+
+    def test_missing_coverage_evidence_is_inconclusive(self):
+        """AG-002: no evidence is not a perfect score."""
+        vs = [verdict_with(self.gate, FailureClass.CLAIM_DISCARDED)]
+        self.assertIs(self.gate.decide(vs, 4, None), Decision.INCONCLUSIVE)
+
+    def test_coverage_floor_zero_disables_the_requirement(self):
+        """A floor of 0 says the requirement is off, not that it was met."""
+        gate = make_gate(config=GateConfig(coverage_floor=0.0))
+        vs = [verdict_with(gate, FailureClass.CLAIM_DISCARDED)]
+        self.assertIs(gate.decide(vs, 4, None), Decision.MERGE)
+
+    def test_refuted_outranks_missing_coverage_evidence(self):
+        """AG-011: the floor used to be checked *before* ``REFUTED``.
+
+        A patch whose execution proved a regression came back INCONCLUSIVE
+        whenever coverage was low -- missing evidence beating evidence we
+        watched happen, which is the opposite of the documented precedence.
+        """
+        refuted = verdict_with(self.gate, FailureClass.REGRESSION)
+        self.assertIs(self.gate.decide([refuted], 4, None), Decision.BLOCK)
+        self.assertIs(self.gate.decide([refuted], 4, 0.0), Decision.BLOCK)
+
+    def test_full_suite_regression_outranks_missing_coverage_evidence(self):
+        vs = [verdict_with(self.gate, FailureClass.CLAIM_DISCARDED)]
+        self.assertIs(
+            self.gate.decide(
+                [vs[0]], 4, None, full_suite_exit_codes=(0, 1)
+            ),
+            Decision.BLOCK,
+        )
 
     def test_out_of_range_rounds_is_inconclusive(self):
         vs = [verdict_with(self.gate, FailureClass.CLAIM_DISCARDED)]
@@ -611,9 +643,55 @@ class TestPathPolicy(unittest.TestCase):
         violations = policy.violations(["tests/critic_test.py"])
         self.assertTrue(any("Critic test file" in str(v) for v in violations))
 
+    def test_file_level_symlink_in_changed_paths_is_caught(self):
+        """AG-004: the changed file itself was not in the checked set.
+
+        The policy checked ``root`` and ``unresolved.parents`` but never
+        ``unresolved`` -- so a changed path that *is* a symlink produced no
+        violation even with ``repo_dir`` supplied.
+        """
+        with tempfile.TemporaryDirectory() as outside_dir, tempfile.TemporaryDirectory() as repo:
+            import os
+
+            outside = Path(outside_dir) / "secret.py"
+            outside.write_text("x = 1\n")
+            (Path(repo) / "src").mkdir()
+            os.symlink(outside, Path(repo) / "src" / "evil.py")
+
+            violations = PathPolicy().violations(["src/evil.py"], Path(repo))
+            self.assertTrue(violations, "a file-level symlink must be a violation")
+            self.assertIn("symlink", str(violations[0]))
+
+    def test_gate_validates_changed_paths_against_the_patch_dir(self):
+        """AG-004: ``verify_claim`` called the policy with no root at all."""
+        with tempfile.TemporaryDirectory() as outside_dir, tempfile.TemporaryDirectory() as patch:
+            import os
+
+            outside = Path(outside_dir) / "secret.py"
+            outside.write_text("x = 1\n")
+            (Path(patch) / "src").mkdir()
+            os.symlink(outside, Path(patch) / "src" / "evil.py")
+
+            gate = make_gate()
+            verdict = gate.verify_claim(
+                CriticClaim("t.py", "t"),
+                Path(patch),
+                Path(patch),
+                changed_paths=["src/evil.py"],
+            )
+            self.assertIs(verdict.outcome, Outcome.UNVERIFIED)
+            self.assertIn("symlink", verdict.reason)
+
 
 class TestCliExitCodes(unittest.TestCase):
     """Exit codes are the CI contract."""
+
+    #: v2.0.2 made coverage an evidence question (AG-002). Tests that are not
+    #: *about* coverage still have to clear the floor to reach the branch they
+    #: assert on, so they declare a caller-supplied number as untrusted and get
+    #: on with their own claim. The default path -- no evidence at all -- is
+    #: covered by ``test_no_coverage_evidence_is_inconclusive_not_merge``.
+    UNTRUSTED_COVERAGE = ["--coverage-ratio", "1.0", "--coverage-source", "untrusted"]
 
     def _tree(self, root: Path, *, break_patch: bool) -> None:
         for sub in ("baseline", "patch"):
@@ -654,8 +732,96 @@ class TestCliExitCodes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=False)
-            code = self._invoke(root, [])
+            code = self._invoke(root, list(self.UNTRUSTED_COVERAGE))
             self.assertEqual(code, EXIT_MERGE)
+
+    def test_no_coverage_evidence_is_inconclusive_not_merge(self):
+        """AG-002: the default used to be ``--coverage-ratio 1.0``.
+
+        A clean patch with no coverage artefact and no claim at all must not
+        merge -- "we did not measure" is not "we measured and it was perfect".
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=False)
+            code = self._invoke(root, [])
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+
+    def test_caller_supplied_ratio_must_be_declared_untrusted(self):
+        """A bare ``--coverage-ratio`` is rejected rather than silently trusted."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=False)
+            code = self._invoke(root, ["--coverage-ratio", "1.0"])
+            self.assertEqual(code, EXIT_USAGE)
+            # ...and the same number, declared, is accepted.
+            code = self._invoke(
+                root, ["--coverage-ratio", "1.0", "--coverage-source", "untrusted"]
+            )
+            self.assertEqual(code, EXIT_MERGE)
+
+    def test_computed_diff_coverage_drives_the_decision(self):
+        """The ratio must be derivable from artefacts the gate reads itself."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=False)
+            # calc.py line 2 is the only added line in this diff; the report
+            # either executed it or did not.
+            (root / "change.diff").write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+                " def add(a, b):\n-    return a + b\n+    return (a + b)\n"
+            )
+            full = json.dumps({"files": {"calc.py": {"executed_lines": [1, 2]}}})
+            partial = json.dumps({"files": {"calc.py": {"executed_lines": [1]}}})
+
+            (root / "full.json").write_text(full)
+            code = self._invoke(
+                root, ["--diff", str(root / "change.diff"), "--coverage-json", str(root / "full.json")]
+            )
+            self.assertEqual(code, EXIT_MERGE)
+
+            # Same fixture, a coverage report that misses the added line:
+            # measured below the floor, so no merge.
+            (root / "partial.json").write_text(partial)
+            code = self._invoke(
+                root,
+                [
+                    "--diff", str(root / "change.diff"),
+                    "--coverage-json", str(root / "partial.json"),
+                    "--coverage-floor", "1.0",
+                ],
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+
+    def test_coverage_artefacts_are_hashed_into_the_evidence(self):
+        """A ratio the artefact cannot be recomputed from is not evidence."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=True)
+            (root / "change.diff").write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+                " def add(a, b):\n-    return a + b\n+    return a - b\n"
+            )
+            (root / "cov.json").write_text(
+                json.dumps({"files": {"calc.py": {"executed_lines": [2]}}})
+            )
+            log_path = Path(directory) / "ev.jsonl"
+            self._invoke(
+                root,
+                [
+                    "--diff", str(root / "change.diff"),
+                    "--coverage-json", str(root / "cov.json"),
+                    "--evidence-log", str(log_path),
+                ],
+            )
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decision = [r for r in records if r.get("kind") == "decision"][-1]
+            self.assertEqual(decision["diff_coverage_source"], "computed")
+            self.assertIn("diff_sha256", decision["diff_coverage"])
+            self.assertIn("coverage_json_sha256", decision["diff_coverage"])
+            # ``full_suite_ran`` separates "the suite passed" from "we never
+            # ran it" (AG-010); v2.0.1 wrote ``null`` for both.
+            self.assertTrue(decision["full_suite_ran"])
 
     def test_missing_test_file_exits_inconclusive_not_merge(self):
         """Claim we cannot execute, on a patch with no other damage -> INCONCLUSIVE.
@@ -669,7 +835,9 @@ class TestCliExitCodes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=False)
-            code = self._invoke(root, ["--test-path", "nao_existe.py"])
+            code = self._invoke(
+                root, ["--test-path", "nao_existe.py", *self.UNTRUSTED_COVERAGE]
+            )
             self.assertEqual(code, EXIT_INCONCLUSIVE)
 
     def test_missing_test_file_with_regressed_full_suite_exits_block(self):
@@ -691,7 +859,9 @@ class TestCliExitCodes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=False)
-            code = self._invoke(root, ["--changed-path", "conftest.py"])
+            code = self._invoke(
+                root, ["--changed-path", "conftest.py", *self.UNTRUSTED_COVERAGE]
+            )
             self.assertEqual(code, EXIT_INCONCLUSIVE)
 
     def test_protected_path_with_regressed_full_suite_exits_block(self):
@@ -716,9 +886,14 @@ class TestCliExitCodes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, break_patch=False)
-            # NUCLEAR with an exhausted budget cannot merge.
+            # NUCLEAR with an exhausted budget cannot merge. Coverage is
+            # supplied so that INCONCLUSIVE can only come from the budget.
             code = self._invoke(
-                root, ["--aggression", "nuclear", "--rounds-used", "1", "--max-rounds", "4"]
+                root,
+                [
+                    "--aggression", "nuclear", "--rounds-used", "1", "--max-rounds", "4",
+                    *self.UNTRUSTED_COVERAGE,
+                ],
             )
             self.assertEqual(code, EXIT_INCONCLUSIVE)
 
@@ -1014,6 +1189,125 @@ class TestFullSuiteUsesBothSides(unittest.TestCase):
             gate.decide([verdict], 4, 1.0, suite_strength_unverified=True),
             Decision.INCONCLUSIVE,
         )
+
+
+class TestDeletionsAreChanges(unittest.TestCase):
+    """AG-001: a deleted source file must count as a change.
+
+    ``changed_source_files`` iterated the patch side only, so a file the patch
+    removed never appeared -- ``changed_files`` came back empty, the strength
+    question was never asked, and the gate could reach MERGE with no
+    measurement at all. The docstring always said deletions counted; only the
+    code disagreed.
+    """
+
+    def _tree(self, root: Path) -> None:
+        for side in ("baseline", "patch"):
+            (root / side).mkdir(parents=True, exist_ok=True)
+            (root / side / "test_sum.py").write_text(
+                "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+            )
+            (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        (root / "baseline" / "dead_weight.py").write_text("def unused():\n    return 1\n")
+
+    def test_deleted_file_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            changed = changed_source_files(root / "baseline", root / "patch")
+            self.assertEqual(changed, ["dead_weight.py"])
+            self.assertEqual(
+                deleted_source_files(root / "baseline", root / "patch"), ["dead_weight.py"]
+            )
+
+    def test_added_file_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "brand_new.py").write_text("def brand_new():\n    return 2\n")
+            self.assertIn(
+                "brand_new.py", changed_source_files(root / "baseline", root / "patch")
+            )
+
+    def test_identical_sides_report_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            # make both sides genuinely identical: same files, same bytes
+            (root / "patch" / "dead_weight.py").write_text("def unused():\n    return 1\n")
+            (root / "baseline" / "extra.py").write_text("x = 1\n")
+            (root / "patch" / "extra.py").write_text("x = 1\n")
+            self.assertEqual(changed_source_files(root / "baseline", root / "patch"), [])
+
+    def test_deletion_only_patch_cannot_reach_merge(self):
+        """The observable consequence of the bug: deletion -> MERGE."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decision = [r for r in records if r.get("kind") == "decision"][-1]
+            self.assertIn("dead_weight.py", decision["mutation"]["changed_files"])
+            self.assertTrue(decision["suite_strength_unverified"])
+
+
+class TestBaselineNotApplicable(unittest.TestCase):
+    """AG-009: a guard shadowed the two branches written for these states.
+
+    ``classify`` opened with "baseline must be PASS or FAIL, else UNVERIFIED".
+    Every ``StabilityPolicy`` runs more than once (3 / 100 / 5), so that guard
+    fired on every claim -- and ``NEW_BUG`` ("test is absent on baseline and
+    fails on patch") plus ``"baseline timed out"`` were unreachable, while a
+    patch adding a new test was reported as flaky.
+    """
+
+    @staticmethod
+    def _classify(base, patch) -> GateVerdict:
+        gate = make_gate()
+        policy = policy_for(BugKind.DETERMINISTIC)
+        return gate.classify(
+            CriticClaim("t.py", "t1"),
+            ExecutionOutcome(
+                base,
+                patch,
+                baseline_failures=0,
+                patch_failures=policy.runs if patch is ExecState.FAIL else 0,
+                run_count=policy.runs,
+                baseline_exit_codes=(),
+                patch_exit_codes=(0,) * policy.runs,
+            ),
+        )
+
+    def test_new_test_that_passes_is_verified(self):
+        v = self._classify(ExecState.NOT_APPLICABLE, ExecState.PASS)
+        self.assertIs(v.outcome, Outcome.VERIFIED)
+        self.assertIs(v.classification, FailureClass.CLAIM_DISCARDED)
+
+    def test_new_test_that_fails_is_a_new_bug(self):
+        v = self._classify(ExecState.NOT_APPLICABLE, ExecState.FAIL)
+        self.assertIs(v.outcome, Outcome.REFUTED)
+        self.assertIs(v.classification, FailureClass.NEW_BUG)
+
+    def test_baseline_timeout_reaches_its_own_branch(self):
+        v = self._classify(ExecState.TIMED_OUT, ExecState.PASS)
+        self.assertIs(v.outcome, Outcome.UNVERIFIED)
+        self.assertIn("baseline timed out", v.reason)
+
+    def test_the_misleading_flaky_reason_is_gone(self):
+        v = self._classify(ExecState.NOT_APPLICABLE, ExecState.PASS)
+        self.assertNotIn("not consistent across runs", v.reason)
 
 
 if __name__ == "__main__":

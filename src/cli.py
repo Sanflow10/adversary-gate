@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ from core.types import (
     Outcome,
 )
 from sandbox.runner import run_test
+from verifiers.coverage import covered_diff_ratio
 from verifiers.strength import changed_source_files, measure_mutation_score
 
 EXIT_MERGE = 0
@@ -78,6 +80,92 @@ def _claim_from_args(args: argparse.Namespace) -> CriticClaim:
     )
 
 
+def _resolve_coverage(args: argparse.Namespace):
+    """Turn coverage *inputs* into a coverage *value*, or admit there is none.
+
+    Three sources, strongest first:
+
+    ``computed``
+        ``--diff`` plus ``--coverage-json``. The ratio is derived from the two
+        artefacts and their SHA-256 digests go into the detail, so the number
+        in the evidence artefact can be recomputed instead of believed.
+
+    ``untrusted``
+        ``--coverage-ratio`` supplied by the caller. Permitted, but only when
+        the caller says so out loud via ``--coverage-source untrusted``.
+        v2.0.1 accepted the number silently, defaulted it to ``1.0``, and the
+        GitHub Action never passed one at all -- so ``diff_coverage >= 80%``
+        was satisfied by a default value on every single Action run.
+
+    ``none``
+        No artefact and no claim. Reported as ``None`` rather than ``1.0``,
+        because "we did not measure" is not "we measured and it was perfect".
+
+    Returns ``(ratio, source, detail)``. ``ratio`` is ``None`` only for
+    ``none``. Anything the caller declares is a ``ValueError``, which ``main``
+    turns into exit code 3.
+    """
+    import hashlib
+
+    diff_path = Path(args.diff) if args.diff else None
+    cov_path = Path(args.coverage_json) if args.coverage_json else None
+
+    if (diff_path is None) != (cov_path is None):
+        raise ValueError("--diff and --coverage-json must be provided together")
+
+    if diff_path is not None:
+        if not diff_path.is_file():
+            raise ValueError(f"--diff is not a readable file: {args.diff}")
+        if not cov_path.is_file():
+            raise ValueError(f"--coverage-json is not a readable file: {args.coverage_json}")
+        if args.coverage_source == "untrusted":
+            raise ValueError(
+                "--coverage-source untrusted contradicts --diff/--coverage-json; "
+                "pick one way of answering the coverage question"
+            )
+        diff_bytes = diff_path.read_bytes()
+        cov_bytes = cov_path.read_bytes()
+        payload = json.loads(cov_bytes.decode("utf-8"))
+        measured = covered_diff_ratio(diff_bytes.decode("utf-8", "replace"), payload)
+        detail: Dict[str, Any] = {
+            "source": "computed",
+            "ratio": round(measured.ratio, 6),
+            "changed_lines": measured.changed_lines,
+            "covered_lines": measured.covered_lines,
+            "diff_sha256": hashlib.sha256(diff_bytes).hexdigest(),
+            "coverage_json_sha256": hashlib.sha256(cov_bytes).hexdigest(),
+        }
+        return measured.ratio, "computed", detail
+
+    if args.coverage_ratio is not None:
+        if args.coverage_source == "computed":
+            raise ValueError("--coverage-source computed requires --diff and --coverage-json")
+        if args.coverage_source != "untrusted":
+            raise ValueError(
+                "--coverage-ratio is a caller-supplied claim, not executed evidence; "
+                "re-declare it with '--coverage-source untrusted', or pass --diff and "
+                "--coverage-json so the gate can measure it itself"
+            )
+        if not 0.0 <= args.coverage_ratio <= 1.0:
+            raise ValueError("--coverage-ratio must be between 0 and 1")
+        return args.coverage_ratio, "untrusted", {
+            "source": "untrusted",
+            "ratio": args.coverage_ratio,
+            "note": "supplied by the caller; no diff or coverage artefact was read",
+        }
+
+    if args.coverage_source == "untrusted":
+        raise ValueError("--coverage-source untrusted requires --coverage-ratio")
+    if args.coverage_source == "computed":
+        raise ValueError("--coverage-source computed requires --diff and --coverage-json")
+
+    return None, "none", {
+        "source": "none",
+        "ratio": None,
+        "note": "no --diff/--coverage-json artefact and no --coverage-ratio claim",
+    }
+
+
 def _summary(verdicts) -> Dict[str, Any]:
     return {
         "claims_total": len(verdicts),
@@ -106,7 +194,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--changed-path", action="append", default=[])
-    parser.add_argument("--coverage-ratio", type=float, default=1.0)
+    parser.add_argument(
+        "--coverage-ratio",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help="a coverage number supplied by the caller. This is a claim, not "
+        "evidence, so it is rejected unless --coverage-source untrusted is "
+        "also given. Prefer --diff and --coverage-json, which are measured.",
+    )
+    parser.add_argument(
+        "--coverage-source",
+        default="auto",
+        choices=["auto", "computed", "untrusted"],
+        help="auto (default) computes coverage from --diff/--coverage-json when "
+        "both are present and otherwise reports 'no evidence'; computed "
+        "requires them; untrusted requires --coverage-ratio.",
+    )
+    parser.add_argument(
+        "--diff",
+        metavar="PATH",
+        help="unified diff of the patch, the 'changed lines' side of coverage",
+    )
+    parser.add_argument(
+        "--coverage-json",
+        metavar="PATH",
+        help="coverage.py JSON report, the 'executed lines' side of coverage",
+    )
     parser.add_argument("--coverage-floor", type=float, default=0.80)
     parser.add_argument("--suite-strength-floor", type=float, default=0.75)
     parser.add_argument(
@@ -123,6 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="where the collateral full-suite run happens ('' disables it)",
     )
     parser.add_argument("--rounds-used", type=int, default=4)
+    parser.add_argument(
+        "--require-network-isolation",
+        action="store_true",
+        help="refuse to run unless ADVERSARY_NETWORK_ISOLATED=1 is set, i.e. "
+        "unless an outer sandbox has declared the network isolated. This is a "
+        "declaration check, not an isolation mechanism.",
+    )
     parser.add_argument("--evidence-log", help="path to the evidence artefact (JSONL)")
     parser.add_argument("--model", help="model that produced the patch")
     parser.add_argument("--commit", help="commit sha of the patch")
@@ -145,6 +266,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             criteria.append(AcceptanceCriterion(identifier, text))
 
         claim = _claim_from_args(args)
+
+        # Resolved before anything executes: an unresolvable coverage question
+        # is a usage error (exit 3), not something to discover after paying
+        # for the test runs.
+        coverage_ratio, coverage_source, coverage_detail = _resolve_coverage(args)
+
+        if args.require_network_isolation and os.environ.get(
+            "ADVERSARY_NETWORK_ISOLATED"
+        ) != "1":
+            # Fail fast instead of letting the first run_test raise halfway
+            # through the measurements.
+            raise ValueError(
+                "--require-network-isolation was given but ADVERSARY_NETWORK_ISOLATED "
+                "is not '1'; run inside an outer sandbox that has isolated the network"
+            )
 
         log = None
         if args.evidence_log:
@@ -173,6 +309,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.baseline),
             Path(args.patch),
             changed_paths=args.changed_path,
+            require_network_isolation=args.require_network_isolation,
         )
 
         # ------------------------------------------------------------------
@@ -208,9 +345,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 strength_unverified = True
 
         full_codes: Optional[Sequence[int]] = None
+        full_suite_ran = bool(args.full_suite_path)
         if args.full_suite_path:
             # Only pay for the baseline run when the patch side actually failed;
             # a passing patch side is not a collateral regression either way.
+            # The artefact records ``full_suite_ran`` so a missing
+            # ``full_suite_exit_codes`` can be told apart from a clean run --
+            # v2.0.1 wrote ``null`` for both, which made "the suite passed" and
+            # "the suite never ran" indistinguishable in the evidence.
             patch_full = run_test(Path(args.patch), args.full_suite_path, "")
             if patch_full.exit_code != PYTEST_OK:
                 base_full = run_test(Path(args.baseline), args.full_suite_path, "")
@@ -220,7 +362,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         decision = gate.decide(
             [verdict],
             args.rounds_used,
-            args.coverage_ratio,
+            coverage_ratio,
             suite_strength=strength,
             full_suite_exit_codes=full_codes,
             suite_strength_unverified=strength_unverified,
@@ -230,15 +372,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             log.append_decision(
                 decision.value,
                 args.rounds_used,
-                args.coverage_ratio,
+                coverage_ratio,
                 {
                     **_summary([verdict]),
+                    # Where the coverage number came from, next to the number:
+                    # a ratio with no provenance is exactly the artefact AG-002
+                    # was about.
+                    "diff_coverage_source": coverage_source,
+                    "diff_coverage": coverage_detail,
                     # The floor only ever receives a real measurement, so a
                     # reader can tell "strong" from "not measured" from "weak".
                     "suite_strength": strength,
                     "suite_strength_unverified": strength_unverified,
                     "suite_strength_floor": args.suite_strength_floor,
                     "mutation": mutation_detail,
+                    "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
                 },
             )
@@ -254,6 +402,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "suite_strength_unverified": strength_unverified,
             "suite_strength_floor": args.suite_strength_floor,
             "mutation": mutation_detail,
+            "diff_coverage_ratio": coverage_ratio,
+            "diff_coverage_source": coverage_source,
+            "diff_coverage": coverage_detail,
+            "full_suite_ran": full_suite_ran,
             "measurement_seconds": round(mutation_seconds, 6),
         }
         if full_codes is not None:

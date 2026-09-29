@@ -117,8 +117,17 @@ class Gate:
                 return f"test file does not exist: {claim.test_path}"
         return None
 
-    def validate_changed_paths(self, changed_paths: Iterable[str]) -> List[str]:
-        return self.path_policy.violations(changed_paths)
+    def validate_changed_paths(
+        self, changed_paths: Iterable[str], repo_dir: Optional[Path] = None
+    ) -> List[str]:
+        """Violations for ``changed_paths``, resolved against ``repo_dir`` when given.
+
+        ``repo_dir`` is what makes the symlink check in :class:`PathPolicy`
+        reachable at all -- without it the policy can only inspect the string.
+        Callers that hold a directory (``Gate.verify_claim`` holds the patch)
+        must pass it, or the policy's guarantee is dead code.
+        """
+        return [str(v) for v in self.path_policy.violations(changed_paths, repo_dir)]
 
     # ------------------------------------------------------------------
     # per-run state resolution
@@ -190,15 +199,17 @@ class Gate:
 
         policy = policy_for(claim.bug_kind)
         if run_outcome.run_count > 1:
-            baseline_consistent = base in (ExecState.PASS, ExecState.FAIL)
-            if not baseline_consistent:
-                return GateVerdict(
-                    claim,
-                    FailureClass.FLAKY,
-                    Outcome.UNVERIFIED,
-                    "baseline result was not consistent across runs",
-                    run_outcome,
-                )
+            # There used to be a blanket guard here: "baseline must be PASS or
+            # FAIL, otherwise UNVERIFIED with 'baseline result was not
+            # consistent across runs'". It rejected ExecState.NOT_APPLICABLE
+            # and ExecState.TIMED_OUT -- and since every StabilityPolicy runs
+            # more than once (3 / 100 / 5), it fired on *every* claim.
+            # Two branches below that are written to handle exactly those two
+            # states, NEW_BUG ("test is absent on baseline and fails on
+            # patch") and "baseline timed out; no clean reference", were
+            # therefore unreachable, and a patch that adds a new test was
+            # reported as flaky instead of verified. The guard is gone; each
+            # state now reaches the branch that names it.
             if base is ExecState.FAIL and run_outcome.baseline_failures not in (
                 0,
                 run_outcome.run_count,
@@ -348,7 +359,10 @@ class Gate:
                 )
             )
 
-        violations = self.validate_changed_paths(changed_paths)
+        # The patch directory is what ``changed_paths`` describes, so it is the
+        # root the policy resolves against. Passing no root here (as v2.0.1 did)
+        # disables the symlink half of the policy entirely.
+        violations = self.validate_changed_paths(changed_paths, patch_dir)
         if violations:
             return finish(
                 GateVerdict(
@@ -439,7 +453,7 @@ class Gate:
         self,
         verdicts: Sequence[GateVerdict],
         rounds_used: int,
-        diff_coverage_ratio: float,
+        diff_coverage_ratio: Optional[float],
         suite_strength: Optional[float] = None,
         full_suite_passed: bool = True,
         full_suite_exit_codes: Optional[Sequence[int]] = None,
@@ -458,13 +472,28 @@ class Gate:
         ``MERGE``, ordered so that direct evidence always outranks missing
         evidence:
 
-        1. malformed input, coverage below floor  -> ``INCONCLUSIVE``
-        2. any verdict ``REFUTED``               -> ``BLOCK``   (we *saw* it break)
-        3. full suite regressed                  -> ``BLOCK``   (we saw it break elsewhere)
-        4. weak / unmeasured suite strength      -> ``INCONCLUSIVE``
-        5. any verdict ``UNVERIFIED``            -> ``INCONCLUSIVE``
-        6. suite could not be judged             -> ``INCONCLUSIVE``
-        7. exhausted budget, no verdicts         -> ``INCONCLUSIVE``
+        1. malformed control input (``rounds_used``)   -> ``INCONCLUSIVE``
+        2. any verdict ``REFUTED``                    -> ``BLOCK``   (we *saw* it break)
+        3. full suite regressed                       -> ``BLOCK``   (we saw it break elsewhere)
+        4. coverage missing / out of range / below floor -> ``INCONCLUSIVE``
+        5. weak / unmeasured suite strength           -> ``INCONCLUSIVE``
+        6. any verdict ``UNVERIFIED``                 -> ``INCONCLUSIVE``
+        7. suite could not be judged                  -> ``INCONCLUSIVE``
+        8. exhausted budget, no verdicts              -> ``INCONCLUSIVE``
+
+        Order matters in both directions. Coverage used to be checked *before*
+        ``REFUTED``, so a patch whose claim execution proved a regression was
+        reported as ``INCONCLUSIVE`` whenever coverage was low -- missing
+        evidence outranking evidence we watched happen, which is the opposite
+        of the rule this method documents. It now sits below both ``BLOCK``
+        routes.
+
+        ``diff_coverage_ratio`` is ``Optional[float]`` on purpose: ``None``
+        means *no coverage evidence was produced*, which is not the same as
+        ``0.0`` (measured and empty) and not the same as ``1.0`` (perfect).
+        ``None`` does not clear the floor. The single exception is a
+        ``coverage_floor`` of ``0``, which is the caller explicitly saying the
+        requirement is disabled rather than satisfied.
 
         ``full_suite_exit_codes`` is ``(baseline, patch)`` and supersedes the
         boolean ``full_suite_passed`` when present. Both sides are needed: a
@@ -477,10 +506,6 @@ class Gate:
         which means "no code changed, the question does not apply".
         """
         if not 0 <= rounds_used <= self.max_rounds:
-            return Decision.INCONCLUSIVE
-        if not 0.0 <= diff_coverage_ratio <= 1.0:
-            return Decision.INCONCLUSIVE
-        if diff_coverage_ratio < self.config.coverage_floor:
             return Decision.INCONCLUSIVE
 
         outcomes = {verdict.outcome for verdict in verdicts}
@@ -508,6 +533,18 @@ class Gate:
                 full_suite_unverifiable = True
         elif not full_suite_passed:
             return Decision.BLOCK
+
+        # --- coverage: below, never above, the two BLOCK routes ------------
+        # ``None`` is "we produced no coverage evidence", and unproduced
+        # proof is never proof of clean code. A floor of 0 is the caller
+        # saying the requirement is disabled, not that it was met.
+        if diff_coverage_ratio is None:
+            if self.config.coverage_floor > 0.0:
+                return Decision.INCONCLUSIVE
+        elif not 0.0 <= diff_coverage_ratio <= 1.0:
+            return Decision.INCONCLUSIVE
+        elif diff_coverage_ratio < self.config.coverage_floor:
+            return Decision.INCONCLUSIVE
 
         if suite_strength is not None and suite_strength < self.config.suite_strength_floor:
             return Decision.INCONCLUSIVE

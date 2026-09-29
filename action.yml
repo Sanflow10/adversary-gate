@@ -32,6 +32,30 @@ inputs:
     description: 'Minimum required diff coverage ratio (0.0 to 1.0)'
     required: false
     default: '0.80'
+  diff:
+    description: >-
+      Path to a unified diff of the patch. Together with coverage-json this is
+      what the gate measures diff coverage from. Required for a MERGE unless
+      coverage is deliberately declared untrusted.
+    required: false
+  coverage-json:
+    description: >-
+      Path to a coverage.py JSON report (``coverage json``). The other half of
+      the measurement.
+    required: false
+  coverage-ratio:
+    description: >-
+      A caller-supplied coverage number. This is a claim, not evidence, and is
+      rejected unless coverage-source is set to 'untrusted'.
+    required: false
+  coverage-source:
+    description: 'auto (default), computed (requires diff+coverage-json) or untrusted (requires coverage-ratio)'
+    required: false
+    default: 'auto'
+  require-network-isolation:
+    description: 'Refuse to run unless ADVERSARY_NETWORK_ISOLATED=1 (declaration check, not isolation)'
+    required: false
+    default: 'false'
   suite-strength-floor:
     description: 'Minimum required suite strength ratio (0.0 to 1.0)'
     required: false
@@ -63,6 +87,14 @@ runs:
       with:
         python-version: '3.12'
 
+    # AG-005: the Action used to call src/cli.py on a bare runner. ``pytest`` is
+    # a declared dependency of the package but is not present in a clean runner,
+    # so the harness died with "No module named pytest" and the gate reported
+    # INCONCLUSIVE for reasons unrelated to the patch. Install first, then run.
+    - name: Install AdversaryGate and its dependencies
+      shell: bash
+      run: python -m pip install "${{ github.action_path }}"
+
     - name: Execute AdversaryGate Verification
       id: gate
       shell: bash
@@ -74,9 +106,22 @@ runs:
           --test-id "${{ inputs.test-id }}"
           --bug-kind "${{ inputs.bug-kind }}"
           --coverage-floor "${{ inputs.coverage-floor }}"
+          --coverage-source "${{ inputs.coverage-source }}"
           --suite-strength-floor "${{ inputs.suite-strength-floor }}"
           --evidence-log "${{ inputs.evidence-log }}"
         )
+        if [ -n "${{ inputs.diff }}" ]; then
+          ARGS+=(--diff "${{ inputs.diff }}")
+        fi
+        if [ -n "${{ inputs.coverage-json }}" ]; then
+          ARGS+=(--coverage-json "${{ inputs.coverage-json }}")
+        fi
+        if [ -n "${{ inputs.coverage-ratio }}" ]; then
+          ARGS+=(--coverage-ratio "${{ inputs.coverage-ratio }}")
+        fi
+        if [ "${{ inputs.require-network-isolation }}" = "true" ]; then
+          ARGS+=(--require-network-isolation)
+        fi
         if [ -n "${{ inputs.criterion-id }}" ]; then
           ARGS+=(--criterion-id "${{ inputs.criterion-id }}")
         fi
