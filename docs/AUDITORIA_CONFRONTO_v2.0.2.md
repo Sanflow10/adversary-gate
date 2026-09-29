@@ -1,9 +1,9 @@
-# Confronto da auditoria v2.0.1 com o código executado — e correções em v2.0.2
+# Confronto da auditoria v2.0.1 com o código executado — e correções em v2.0.2 → v2.1.0
 
 **Documento:** confronto entre [`AUDITORIA_SENIOR_v2.0.1.md`](AUDITORIA_SENIOR_v2.0.1.md) e o repositório auditado, executado por reprodução e não por leitura.
 **Commit auditado:** `de67c5582004527d6fa6aa5e1fc9e4197d7a5862` (`v2.0.1`)
-**Versão corrigida:** `v2.0.2`
-**Data do confronto:** 2026-09-28
+**Versões cobertas:** `v2.0.2` (correções AG-001..AG-011) → `v2.1.0` (AG-012 e o recurso `base-sha`)
+**Data do confronto:** 2026-09-28 · **AG-012 e `base-sha`:** 2026-09-29
 
 ---
 
@@ -11,7 +11,7 @@
 
 **Dos oito achados da auditoria, sete se confirmaram por execução e um se confirmou parcialmente. Nenhum foi refutado.** A auditoria errou apenas num número: o total de cobertura declarado como 89% não se reproduz — mede-se 83% com os mesmos cinco módulos que ela lista.
 
-Além de confirmar tudo, o confronto encontrou **três defeitos novos (AG-009, AG-010, AG-011)** que a auditoria não tinha visto e que têm a mesma natureza dos achados originais: código que documenta um comportamento e não o entrega.
+Além de confirmar tudo, o confronto encontrou **três defeitos novos (AG-009, AG-010, AG-011)** que a auditoria não tinha visto e que têm a mesma natureza dos achados originais: código que documenta um comportamento e não o entrega. Um quarto (**AG-012**) apareceu depois, ao responder se C++ e Rust estariam "faltando de robustez".
 
 Todos os oito achados e os três novos foram corrigidos, com teste de regressão para cada um. A suíte passou de **74 para 92 testes** e continua verde em Python 3.10, 3.11 e 3.12.
 
@@ -239,6 +239,75 @@ A ordenação também contradizia `test_missing_test_file_with_regressed_full_su
 
 **Corrigido:** as duas rotas de `BLOCK` (`REFUTED` e regressão colateral da suíte completa) agora vêm antes da checagem de cobertura.
 **Testes:** `test_refuted_outranks_missing_coverage_evidence`, `test_full_suite_regression_outranks_missing_coverage_evidence`.
+
+---
+
+### AG-012 — Patch só em C++/Rust chegava a `MERGE` — **Alta (fail-open)**
+
+A pergunta que motivou o achado foi "C++ e Rust podem ser o que falta em robustez". A resposta, obtida por execução, é mais grave: **não faltava um recurso, faltava um defeito.**
+
+`changed_source_files()` fazia `root.rglob("*.py")`. Uma mudança só em `.cpp` produzia `changed_files: []`, o guarda adicionado em AG-001 (`elif mutation_detail.get("changed_files")`) nunca disparava, `suite_strength_unverified` ficava `false` — e o patch seguia adiante.
+
+**Reprodução, antes da correção:**
+
+```
+$ adversary-gate --baseline b --patch p --test-path test_ok.py --test-id test_ok \
+      --diff change.diff --coverage-json cov.json
+decision: merge                                                exit 0
+suite_strength: null | suite_strength_unverified: false
+mutation.changed_files: []        # o patch só mexeu em calculator.cpp
+mutation.reason: "no non-test source file changed between baseline and patch"
+```
+
+O patch reescrevia `int add(...)` de `a - b` para `a * b`. O único código que executou em qualquer lugar foi `assert True`. E o artefato de evidência gravava uma **afirmação falsa** — "nenhum arquivo-fonte mudou", enquanto `calculator.cpp` tinha mudado.
+
+**A metade que passou despercebida:** a primeira correção só cobria patches onde *nada* de Python mudava. Com Python mudando junto, `is_measured` voltava `true`, `changed_files` não estava vazio e o `elif` não chegava na lista de estrangeiros — os arquivos eram registrados e ignorados:
+
+```
+$ adversary-gate ... (Python alterado em 4 linhas + vec.cpp de `a * b` para `a / b`,
+                      cobertura exatamente no piso 0.80, força medida 1.0)
+decision: merge                                                exit 0
+coverage: 0.8 | suite_strength: 1.0 | suite_strength_unverified: false
+mutation.foreign_changed_files: ["vec.cpp"]   # gravado, nunca agido
+```
+
+A cobertura *chegava* a derrubar a razão no caso puro (linhas `.cpp` entram no denominador e não estão no relatório), mas isso é coincidência de aritmética, não garantia — e no caso misto a razão limpa o piso. **O caso estava aberto.**
+
+**Corrigido, nas duas metades:**
+- `changed_foreign_source_files()` separa as duas perguntas: `changed_files` (o que *dá* para medir) e `foreign_changed_files` (o que mudou e *não* dá). Lista em `FOREIGN_SOURCE_SUFFIXES`; `.md`/`.yml`/`.json` e arquivos de teste ficam de fora, então patch só de documentação não é afetado.
+- `suite_strength_unverified` dispara com **qualquer** fonte não-Python no patch, mesmo com a metade Python medida — uma nota parcial no lugar da nota inteira é o mesmo exagero que nota nenhuma.
+- `mutation.reason` não fica mais em branco quando mede com estrangeiros presentes: diz para que aquele número é número.
+- O caso misto é fixado com cobertura **declarada boa de propósito**, para que seja a força que bloqueia e não o piso.
+
+**Testes:** 6 em `TestForeignSourceCannotMergeUnmeasured` — puro, misto, `README.md` e `tests/*.cpp` não contam, e o texto honesto sobrevive no caso em que foi escrito.
+
+---
+
+## Recursos novos em v2.1.0
+
+### `base-sha` — uma referência dentro, três artefatos fora
+
+**Problema:** v2.0.2 estava correto em fechar e hostil de instalar. Antes de qualquer coisa acontecer, quem instalava precisava construir `baseline/`, `changes.diff` e `coverage.json` à mão — e a primeira coisa que via era o estado de falha. Rigidez na *decisão* é o produto; rigidez no *setup* é atrito.
+
+**Solução:** `base-sha` deriva tudo que consegue:
+
+| Artefato | De onde vem |
+|---|---|
+| `baseline` | `git archive <base-sha>` — a árvore committada, sem sobras de worktree nem não-versionados |
+| `diff` | `git diff --no-ext-diff <base-sha>...HEAD` |
+| `coverage-json` | `coverage-command`, rodado no checkout |
+| `patch` | o próprio checkout |
+
+A hidráulica vive em `scripts/prepare_evidence.sh` e não num bloco `run:`, **justamente para que possa ser executada fora de um runner** — que é o que a torna testável.
+
+**O que não muda:** cobertura continua sendo pergunta de evidência. `base-sha` muda de onde o artefato vem, não se ele é exigido. Sem cobertura produzida continua `INCONCLUSIVE`.
+
+**Falhas fecham com razão, não com stack trace:**
+- referência fora da história → saída 4 citando `fetch-depth: 0` (a causa real em nove em cada dez casos) e recusa-se a medir contra um baseline que teria que inventar
+- `coverage-command` sem artefato → saída 4 mostrando o formato que a gate parseia, em vez de deixar cobertura silenciosamente virar `none`
+- sem `baseline` e sem `base-sha` → saída 3
+
+**Testado:** `scripts/test_prepare_evidence.sh` monta um repositório, afirma cada artefato, **entrega eles à gate e exige exit 0** (produzir um diff não vale nada se a decisão que vem depois está errada), mais os dois caminhos de falha. E dois jobs de CI: o teste do script, e um smoke da Action real que committa um fixture, faz o patch e exige `merge` a partir daquela única referência.
 
 ---
 
