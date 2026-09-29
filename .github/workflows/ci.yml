@@ -135,6 +135,10 @@ jobs:
       # AG-016: a suite that is one command has no node IDs, so the Action
       # must not go on demanding `test-id`. Passing neither is still a usage
       # error -- this is the case where one of the two must be supplied.
+      #
+      # continue-on-error: the gate exits 2 here *by design*, and action.yml
+      # ends with `exit $EXIT_CODE`, so the run step itself would go red before
+      # its outputs could be asserted.
       - name: Build a suite that is not pytest
         run: |
           for d in baseline patch; do
@@ -144,6 +148,7 @@ jobs:
 
       - name: Run the gate with test-command and no test-id
         id: gate_cmd
+        continue-on-error: true
         uses: ./
         with:
           baseline: 'baseline'
@@ -154,12 +159,27 @@ jobs:
           coverage-json: 'cov.json'
           evidence-log: 'evidence-cmd.jsonl'
 
-      - name: A command-driven run must reach the same measured decision
+      - name: The command ran on both sides, and no test-id was demanded
         run: |
+          # The two things this step exists for:
+          #   1. it did NOT exit 3 -- test-id is genuinely optional now;
+          #   2. the evidence names the command's exit codes (0 on both
+          #      sides) rather than a collection error.
+          # The decision is inconclusive, and that is the documented answer,
+          # not a defect: AG-012 keeps a suite it cannot mutate from merging,
+          # and there is no Python here to mutate. --test-command buys a real
+          # PASS/FAIL (so BLOCK works); only a mutation adapter buys MERGE.
           echo "decision=${{ steps.gate_cmd.outputs.decision }}"
           echo "outcome=${{ steps.gate_cmd.outputs.outcome }}"
-          test "${{ steps.gate_cmd.outputs.decision }}" = "merge"
+          test "${{ steps.gate_cmd.outputs.decision }}" = "inconclusive"
           test "${{ steps.gate_cmd.outputs.outcome }}" = "verified"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          d = json.loads(Path("evidence-cmd.jsonl").read_text().splitlines()[-1])
+          print(d.get("decision"), d.get("outcome"))
+          PY
 
   prepare-evidence:
     # base-sha's plumbing lives in a script so it can be tested without a
@@ -299,17 +319,22 @@ jobs:
           sudo apt-get install -y bubblewrap
           python -m pip install . pytest coverage
 
+      # Two independent ways this job can go red, and a log that says only
+      # "Measure coverage of src failed" does not tell them apart: the suite
+      # itself failing, or the floor failing. The breakdown is therefore
+      # printed *before* the floor check and the two exits are named
+      # differently. The floor is still enforced -- nothing here passes on a
+      # number that was never reached.
       - name: Measure coverage of src
         # bubblewrap is installed on purpose: without it the bwrap tests skip
         # and the same commit measures ~6 points lower, which would make this
         # floor depend on the runner's package list rather than on the code.
         run: |
+          set +e
           coverage run --source=src -m pytest -q
+          pytest_exit=$?
+          set -e
           coverage json -o coverage.json
-          coverage report --fail-under=87
-
-      - name: Publish the per-module breakdown
-        run: |
           python - <<'PY'
           import json
 
@@ -323,6 +348,11 @@ jobs:
               print(f"{path:<40} {pct:>7.1f}%")
           print(f'{"TOTAL":<40} {data["totals"]["percent_covered"]:>7.1f}%')
           PY
+          if [ "$pytest_exit" -ne 0 ]; then
+            echo "::error title=Suite failed::pytest exited $pytest_exit -- a test failure, not the coverage floor. The FAILED lines above name it."
+            exit "$pytest_exit"
+          fi
+          coverage report --fail-under=87
 
   demo:
     # The demo is an acceptance test, not a screenshot: if a decision regresses

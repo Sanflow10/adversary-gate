@@ -157,6 +157,41 @@ NON_SOURCE_NAMES = frozenset({
     "license", "licence", "copying", "notice", "authors", "contributors",
     "changelog", "changes", "readme", "code_of_conduct", "codeowners",
     "security",
+    # dotfiles: these have no suffix, so the suffix table cannot see them.
+    # ``.coverage`` in particular is written into the *patch* tree by the
+    # coverage command, which made it look like an unreviewed source change.
+    "coverage", "gitignore", "gitattributes",
+})
+
+#: Directories that are never patch content, whatever they contain.
+#:
+#: This is **not** the AG-013 allowlist coming back. That list decided which
+#: languages count as code, which is how a ``.sql`` patch got past it. This
+#: decides only that version-control bookkeeping and tool caches are not files
+#: the author wrote -- a different question, with a different failure mode.
+#:
+#: Measured, not assumed: run the gate against any git repository and the
+#: scan reports 26 paths under ``.git/`` -- ``.git/HEAD``, ``.git/config``,
+#: ``.git/objects/...`` -- as "source we cannot judge", and forces
+#: ``INCONCLUSIVE`` on every patch whose ``--patch`` happens to be a checkout.
+#: That is what broke ``prepare_evidence.sh`` and the ``base-sha`` job here.
+#: The old allowlist hid it only by accident, because none of those paths have
+#: a suffix it recognised.
+#:
+#: Excluding a directory cannot open the AG-013 hole: a path the patch's own
+#: diff names still arrives through ``changed_paths``, and a diff has never
+#: legitimately named ``.git/HEAD``.
+NON_SOURCE_DIRS = frozenset({
+    # version control
+    ".git", ".hg", ".svn", ".bzr", "_darcs",
+    # interpreter and tool caches
+    "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox",
+    ".nox", ".hypothesis", ".ipynb_checkpoints", ".eggs", ".cache",
+    ".pytype", ".dmypy_cache",
+    # environments and vendored dependency trees
+    ".venv", "venv", ".virtualenv", "node_modules",
+    # coverage and profiling output
+    "htmlcov",
 })
 
 
@@ -165,9 +200,28 @@ def _is_non_source(rel: str) -> bool:
     path = Path(rel)
     if path.suffix.lower() in NON_SOURCE_SUFFIXES:
         return True
-    if not path.suffix and path.name.lower().replace(" ", "_") in NON_SOURCE_NAMES:
+    if not path.suffix and path.name.lower().lstrip(".").replace(" ", "_") in NON_SOURCE_NAMES:
         return True
     return False
+
+
+def _is_scan_noise(rel: str) -> bool:
+    """True for directories the *directory scan* must not walk.
+
+    Only the scan is subject to this, never the caller's diff. A materialised
+    baseline contains no ``.git`` at all while the patch side is a checkout, so
+    the two differ in twenty-six VCS paths on every single comparison; without
+    this, any gate run whose ``--patch`` was a repository reported
+    ``.git/HEAD`` as source it could not judge and forced INCONCLUSIVE. That is
+    what turned ``prepare_evidence.sh`` from exit 0 into exit 2 in CI.
+
+    The exemption stops at the scan because the diff is the author's own
+    statement of what changed. A diff naming ``.git/hooks/post-checkout`` or
+    ``node_modules/vendor.js`` still has to answer for it -- fail-closed, and
+    the reason this exclusion cannot reopen AG-013.
+    """
+    path = Path(rel)
+    return any(part in NON_SOURCE_DIRS for part in path.parts[:-1])
 
 
 def _is_test_path(rel: str) -> bool:
@@ -274,7 +328,7 @@ def changed_foreign_source_files(
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
             rel = path.relative_to(root).as_posix()
-            if _is_test_path(rel) or _is_non_source(rel):
+            if _is_test_path(rel) or _is_non_source(rel) or _is_scan_noise(rel):
                 continue
             try:
                 out[rel] = path.read_bytes()
