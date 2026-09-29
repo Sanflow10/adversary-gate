@@ -136,7 +136,8 @@ NON_SOURCE_SUFFIXES = frozenset({
     # documents
     ".md", ".markdown", ".rst", ".txt", ".adoc", ".org", ".tex", ".pdf",
     # data and configuration
-    ".json", ".jsonc", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf",
+    ".json", ".jsonc", ".jsonl", ".jsonlines", ".ndjson", ".yml", ".yaml",
+    ".toml", ".ini", ".cfg", ".conf",
     ".lock", ".csv", ".tsv", ".xml", ".properties", ".env", ".schema",
     # images, media, fonts
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
