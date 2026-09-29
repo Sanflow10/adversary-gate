@@ -235,8 +235,12 @@ jobs:
           git add -A
           git commit -qm "fixture: patch side"
 
+      # continue-on-error so the assertion below still runs when the gate
+      # does not merge -- otherwise a non-zero exit skips the only step that
+      # could have said *why*, and the job reports nothing but a bare code.
       - name: Run AdversaryGate deriving everything from base-sha
         id: gate
+        continue-on-error: true
         uses: ./
         with:
           base-sha: ${{ env.AG_BASE_SHA }}
@@ -247,19 +251,40 @@ jobs:
 
       - name: One ref must be enough to merge
         run: |
-          echo "decision=${{ steps.gate.outputs.decision }}"
-          echo "outcome=${{ steps.gate.outputs.outcome }}"
-          test "${{ steps.gate.outputs.decision }}" = "merge"
-          test "${{ steps.gate.outputs.outcome }}" = "verified"
-          test -s evidence-base-sha.jsonl
+          # Annotations, not the log: this log needs push rights to open.
+          DECISION='${{ steps.gate.outputs.decision }}'
+          OUTCOME='${{ steps.gate.outputs.outcome }}'
+          echo "::notice::probe decision=$DECISION outcome=$OUTCOME evidence=$(tail -c 300 evidence-base-sha.jsonl 2>&1 || echo '<absent>')"
+          echo "decision=$DECISION"
+          echo "outcome=$OUTCOME"
+          fail() { echo "::error::$1"; exit 1; }
+          [ -n "$DECISION" ] || fail "the Action produced no decision output -- the gate step died before writing it"
+          [ "$DECISION" = "merge" ] || fail "decision is '$DECISION', expected 'merge'"
+          [ "$OUTCOME" = "verified" ] || fail "outcome is '$OUTCOME', expected 'verified'"
+          test -s evidence-base-sha.jsonl || fail "evidence-base-sha.jsonl is missing or empty"
           # Assert the contract, not the byte layout: the log is written with
           # separators=(",", ":"), so grepping for `": "` silently matches
           # nothing while the value is right there.
           python3 - <<'PY'
-          import json
+          import json, sys
 
-          records = [json.loads(line) for line in open("evidence-base-sha.jsonl")]
-          decision = [r for r in records if r.get("kind") == "decision"][-1]
+          try:
+              records = [json.loads(line) for line in open("evidence-base-sha.jsonl")]
+              decision = [r for r in records if r.get("kind") == "decision"][-1]
+          except Exception as exc:
+              print(f"::error::evidence is unreadable: {exc}")
+              sys.exit(1)
+
+          # The four numbers that decide this job, each emitted on its own so
+          # a failure is diagnosable from the annotations alone.
+          mutation = decision.get("mutation") or {}
+          for label, value in (
+              ("decision", decision.get("decision")),
+              ("diff_coverage_source", decision.get("diff_coverage_source")),
+              ("suite_strength", decision.get("suite_strength")),
+              ("foreign_changed_files", mutation.get("foreign_changed_files")),
+          ):
+              print(f"::notice::evidence {label}={value!r}")
 
           assert decision["decision"] == "merge", decision["decision"]
           # Coverage was measured from the derived artefact, not asserted.
@@ -337,8 +362,18 @@ jobs:
           set +e
           coverage run --source=src -m pytest -q 2>&1 | tee pytest-run.log
           pytest_exit=${PIPESTATUS[0]}
-          set -e
+          # Under -e a failing `coverage json` would abort here and the step
+          # would go red with no annotation at all -- which is exactly the
+          # shape of the previous failure, and why it was undiagnosable.
           coverage json -o coverage.json
+          json_exit=$?
+          set -e
+          if [ "$json_exit" -ne 0 ]; then
+            echo "::error title=No coverage data::coverage json exited $json_exit -- coverage run produced no data file"
+            TAIL=$(tail -20 pytest-run.log 2>/dev/null | sed -e 's/%/%25/g' -e 's/$/%0A/' | tr -d '\n' | cut -c1-1500)
+            echo "::notice title=pytest tail::$TAIL"
+            exit "$json_exit"
+          fi
           python - <<'PY'
           import json
 
@@ -350,7 +385,13 @@ jobs:
           print(f'{"module":<40} {"coverage":>8}')
           for path, pct in rows:
               print(f"{path:<40} {pct:>7.1f}%")
-          print(f'{"TOTAL":<40} {data["totals"]["percent_covered"]:>7.1f}%')
+          total = data["totals"]["percent_covered"]
+          print(f'{"TOTAL":<40} {total:>7.1f}%')
+          # The number itself, as an annotation, unconditionally: this job's
+          # whole question is "is it over the floor", and until now a floor
+          # failure emitted nothing at all -- the step simply went red.
+          open("coverage-total.txt", "w").write(f"{total:.2f}")
+          print(f"::notice title=coverage total::{total:.1f}% against a floor of 87")
           PY
           if [ "$pytest_exit" -ne 0 ]; then
             echo "::error title=Suite failed::pytest exited $pytest_exit -- a test failure, not the coverage floor"
@@ -362,7 +403,10 @@ jobs:
             echo "::notice title=pytest tail::$TAIL"
             exit "$pytest_exit"
           fi
-          coverage report --fail-under=87
+          if ! coverage report --fail-under=87; then
+            echo "::error title=Coverage floor::$(cat coverage-total.txt)% measured against a floor of 87 -- the floor, not a failing test"
+            exit 1
+          fi
 
   demo:
     # The demo is an acceptance test, not a screenshot: if a decision regresses
