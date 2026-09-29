@@ -1,0 +1,49 @@
+{
+  "record_id": "b6b13048a2f0411c9d5a33e170da49a6",
+  "ts": "2026-09-29T07:07:24.178941+00:00",
+  "kind": "decision",
+  "decision": "merge",
+  "rounds_used": 4,
+  "diff_coverage_ratio": 1.0,
+  "claims_total": 1,
+  "verified": 1,
+  "refuted": 0,
+  "unverified": 0,
+  "classifications": [
+    "discarded"
+  ],
+  "diff_coverage_source": "computed",
+  "diff_coverage": {
+    "source": "computed",
+    "ratio": 1.0,
+    "changed_lines": 1,
+    "covered_lines": 1,
+    "diff_sha256": "d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d",
+    "coverage_json_sha256": "9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632"
+  },
+  "suite_strength": 1.0,
+  "suite_strength_unverified": false,
+  "suite_strength_floor": 0.75,
+  "mutation": {
+    "measured": true,
+    "reason": "",
+    "changed_files": [
+      "calc.py"
+    ],
+    "deleted_files": [],
+    "mutants": [
+      {
+        "file": "calc.py",
+        "line": 2,
+        "replaces": "-",
+        "result": "killed"
+      }
+    ],
+    "survivors": [],
+    "mutants_counted": 1,
+    "stillborn": 0,
+    "mutants_killed": 1
+  },
+  "full_suite_ran": true,
+  "full_suite_exit_codes": null
+}

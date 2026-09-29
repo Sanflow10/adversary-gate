@@ -1,0 +1,382 @@
+{
+ "title": "AdversaryGate v2.0.2 — demonstração ao vivo",
+ "lines": [
+  {
+   "t": "\u001b[1mAdversaryGate v2.0.2 — demonstração ao vivo\u001b[0m",
+   "s": "\u001b[1m"
+  },
+  {
+   "t": "repositório: /tmp/opencode/ag-remote",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  Três cenários. B e C são \u001b[1mo mesmo patch\u001b[0m: mesmo código, mesmos",
+   "s": ""
+  },
+  {
+   "t": "  testes, mesma execução. A única diferença é que C trouxe evidência.",
+   "s": ""
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  CENÁRIO A — patch quebra o teste",
+   "s": "\u001b[1m\u001b[37m"
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  $ adversary-gate \\",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --baseline /tmp/ag-demo-juemlv6q/baseline",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --patch /tmp/ag-demo-juemlv6q/patch_broken",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-path test_sum.py",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-id test_add",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --coverage-source untrusted",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --coverage-ratio 1.0",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "    exit code   : 1",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    decision    : block",
+   "s": "\u001b[1m\u001b[31m"
+  },
+  {
+   "t": "    outcome     : refuted",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    coverage    : 1.0   (source=untrusted)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    força suíte : 0.0   (medida=True)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    suíte total : ran=True",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    tempo       : 21.8s",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  CENÁRIO B — patch limpo, SEM evidência de cobertura",
+   "s": "\u001b[1m\u001b[37m"
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  $ adversary-gate \\",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --baseline /tmp/ag-demo-juemlv6q/baseline",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --patch /tmp/ag-demo-juemlv6q/patch_clean",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-path test_sum.py",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-id test_add",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "    exit code   : 2",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    decision    : inconclusive",
+   "s": "\u001b[1m\u001b[33m"
+  },
+  {
+   "t": "    outcome     : verified",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    coverage    : None   (source=none)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    força suíte : 1.0   (medida=True)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    suíte total : ran=True",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    tempo       : 18.8s",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  CENÁRIO C — patch limpo, COM evidência de cobertura",
+   "s": "\u001b[1m\u001b[37m"
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  $ adversary-gate \\",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --baseline /tmp/ag-demo-juemlv6q/baseline",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --patch /tmp/ag-demo-juemlv6q/patch_clean",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-path test_sum.py",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --test-id test_add",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --diff /tmp/ag-demo-juemlv6q/change.diff",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "      --coverage-json /tmp/ag-demo-juemlv6q/coverage.json",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "    exit code   : 0",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    decision    : merge",
+   "s": "\u001b[1m\u001b[32m"
+  },
+  {
+   "t": "    outcome     : verified",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    coverage    : 1.0   (source=computed)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    força suíte : 1.0   (medida=True)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    suíte total : ran=True",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "    tempo       : 19.0s",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  ARTEFATO DE EVIDÊNCIA — cenário C (demo/out/evidence_c.json)",
+   "s": "\u001b[1m\u001b[37m"
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  \u001b[1mdiff_coverage_ratio\u001b[0m   = 1.0",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mdiff_coverage_source\u001b[0m = computed",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mchanged/covered\u001b[0m      = 1/1 linhas adicionadas executadas",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mdiff_sha256\u001b[0m          = d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d",
+   "s": "\u001b[36m"
+  },
+  {
+   "t": "  \u001b[1mcoverage_json_sha256\u001b[0m = 9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632",
+   "s": "\u001b[36m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  \u001b[1msuite_strength\u001b[0m       = 1.0  (floor 0.75)",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mmutantes\u001b[0m             = 1/1 mortos, 0 stillborn",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mchanged_files\u001b[0m        = ['calc.py']",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mdeleted_files\u001b[0m        = []",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  \u001b[1mfull_suite_ran\u001b[0m       = True",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mfull_suite_exit_codes\u001b[0m = None  -> rodou; lado patch passou",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "  \u001b[1mrounds_used\u001b[0m          = 4",
+   "s": "\u001b[37m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  \u001b[2mNada aqui é uma opinião de um modelo. Cada valor pode ser",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  \u001b[2mre-derivado a partir dos dois hashes acima.\u001b[0m",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  RESULTADO",
+   "s": "\u001b[1m\u001b[37m"
+  },
+  {
+   "t": "==========================================================================",
+   "s": "\u001b[90m"
+  },
+  {
+   "t": "  [\u001b[32mPASS\u001b[0m]  A  esperado BLOCK         obtido block         exit 1",
+   "s": ""
+  },
+  {
+   "t": "  [\u001b[32mPASS\u001b[0m]  B  esperado INCONCLUSIVE  obtido inconclusive  exit 2",
+   "s": ""
+  },
+  {
+   "t": "  [\u001b[32mPASS\u001b[0m]  C  esperado MERGE         obtido merge         exit 0",
+   "s": ""
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  B e C: \u001b[1mmesmo patch, decisões diferentes\u001b[0m.",
+   "s": ""
+  },
+  {
+   "t": "  A diferença é apenas se houve evidência.",
+   "s": ""
+  },
+  {
+   "t": "",
+   "s": ""
+  },
+  {
+   "t": "  TODOS OS CENÁRIOS CONFIRMADOS",
+   "s": "\u001b[1m\u001b[32m\u001b[0m"
+  }
+ ],
+ "ok": true
+}

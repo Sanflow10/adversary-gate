@@ -131,3 +131,56 @@ jobs:
           test "${{ steps.gate.outputs.decision }}" = "merge"
           test "${{ steps.gate.outputs.outcome }}" = "verified"
           test -s evidence.jsonl
+
+  demo:
+    # The demo is an acceptance test, not a screenshot: if a decision regresses
+    # (a deletion stops counting, coverage stops being an evidence question, a
+    # precedence flips), this job fails instead of the README quietly going stale.
+    name: Live demo (three decisions)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: BLOCK, INCONCLUSIVE and MERGE must all still hold
+        run: python demo/demo.py --no-color
+
+      - name: The committed evidence artefacts are well-formed
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          a = json.loads(Path("demo/out/evidence_a.json").read_text())
+          b = json.loads(Path("demo/out/evidence_b.json").read_text())
+          c = json.loads(Path("demo/out/evidence_c.json").read_text())
+
+          assert a["decision"] == "block", a["decision"]
+          assert b["decision"] == "inconclusive", b["decision"]
+          assert c["decision"] == "merge", c["decision"]
+
+          # AG-002: provenance is recorded next to the number.
+          assert b["diff_coverage_source"] == "none"
+          assert b["diff_coverage_ratio"] is None
+          assert c["diff_coverage_source"] == "computed"
+          assert c["diff_coverage"]["diff_sha256"]
+          assert c["diff_coverage"]["coverage_json_sha256"]
+
+          # AG-010: ran=True with null exit codes means "ran, patch passed".
+          assert a["full_suite_ran"] is True
+          assert a["full_suite_exit_codes"] == [0, 1]
+          assert c["full_suite_ran"] is True
+          assert c["full_suite_exit_codes"] is None
+          print("artefacts OK")
+          PY
+
+      - name: The README demo GIF is committed
+        run: test -s demo/demo.gif

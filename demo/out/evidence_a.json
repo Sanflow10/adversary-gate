@@ -1,0 +1,51 @@
+{
+  "record_id": "33301dafe2c0430089d09058f51b3928",
+  "ts": "2026-09-29T07:06:46.383651+00:00",
+  "kind": "decision",
+  "decision": "block",
+  "rounds_used": 4,
+  "diff_coverage_ratio": 1.0,
+  "claims_total": 1,
+  "verified": 0,
+  "refuted": 1,
+  "unverified": 0,
+  "classifications": [
+    "regression"
+  ],
+  "diff_coverage_source": "untrusted",
+  "diff_coverage": {
+    "source": "untrusted",
+    "ratio": 1.0,
+    "note": "supplied by the caller; no diff or coverage artefact was read"
+  },
+  "suite_strength": 0.0,
+  "suite_strength_unverified": false,
+  "suite_strength_floor": 0.75,
+  "mutation": {
+    "measured": true,
+    "reason": "",
+    "changed_files": [
+      "calc.py"
+    ],
+    "deleted_files": [],
+    "mutants": [
+      {
+        "file": "calc.py",
+        "line": 2,
+        "replaces": "+",
+        "result": "survived"
+      }
+    ],
+    "survivors": [
+      "calc.py:2"
+    ],
+    "mutants_counted": 1,
+    "stillborn": 0,
+    "mutants_killed": 0
+  },
+  "full_suite_ran": true,
+  "full_suite_exit_codes": [
+    0,
+    1
+  ]
+}

@@ -7,6 +7,31 @@ An evidence-based fail-closed verification gate for AI coding agents where **unc
 
 ---
 
+## 🎬 Watch it decide (60 seconds)
+
+![AdversaryGate — demonstração ao vivo](demo/demo.gif)
+
+**B and C are the same patch.** Same code, same tests, same execution. The only difference is that C brought evidence (`--diff` + `--coverage-json`); B brought none.
+
+| | Patch | Coverage evidence | Decision | Exit |
+|---|---|---|---|---|
+| **A** | breaks the test | declared `untrusted` | `BLOCK` | 1 |
+| **B** | clean | none — never measured | `INCONCLUSIVE` | 2 |
+| **C** | clean | measured, both artefacts SHA-256'd | `MERGE` | 0 |
+
+That middle row is the whole product. An unproduced measurement is not a measurement, so it cannot clear a floor — and a number nobody can re-derive is an opinion with a false precision label.
+
+```bash
+python3 demo/demo.py          # runs the three scenarios; exits non-zero if one regresses
+python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
+```
+
+`demo/demo.py` is an **acceptance test**, not a screenshot: it builds the fixtures, runs the real CLI as a subprocess, reads the real exit codes, and fails if any of the three decisions changes. Its evidence artefacts are checked in under `demo/out/`.
+
+> **`INCONCLUSIVE` is not an error.** It is the gate saying *"I did not measure that"*, and it is exit 2 so CI treats it as "do not merge yet", not as "pass". See [How `diff_coverage` gets its value](#how-diff_coverage-gets-its-value) for the one-step path from `INCONCLUSIVE` to `MERGE`.
+
+---
+
 ## 🎯 The Thesis
 
 1. **Uso alto de IA ≠ Confiança alta**: Quanto mais um time depende de agentes no fluxo real de engenharia, mais aparece o custo do *"parece certo"*. Agentes geram código fluente e aparentemente correto, mas pipelines ingênuos que colapsam erros de infraestrutura aprovam patches com testes quebrados ou pulados.

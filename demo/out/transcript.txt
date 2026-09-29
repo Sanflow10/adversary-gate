@@ -1,0 +1,94 @@
+AdversaryGate v2.0.2 — demonstração ao vivo
+repositório: /tmp/opencode/ag-remote
+
+  Três cenários. B e C são o mesmo patch: mesmo código, mesmos
+  testes, mesma execução. A única diferença é que C trouxe evidência.
+
+==========================================================================
+  CENÁRIO A — patch quebra o teste
+==========================================================================
+  $ adversary-gate \
+      --baseline /tmp/ag-demo-juemlv6q/baseline
+      --patch /tmp/ag-demo-juemlv6q/patch_broken
+      --test-path test_sum.py
+      --test-id test_add
+      --coverage-source untrusted
+      --coverage-ratio 1.0
+
+    exit code   : 1
+    decision    : block
+    outcome     : refuted
+    coverage    : 1.0   (source=untrusted)
+    força suíte : 0.0   (medida=True)
+    suíte total : ran=True
+    tempo       : 21.8s
+
+==========================================================================
+  CENÁRIO B — patch limpo, SEM evidência de cobertura
+==========================================================================
+  $ adversary-gate \
+      --baseline /tmp/ag-demo-juemlv6q/baseline
+      --patch /tmp/ag-demo-juemlv6q/patch_clean
+      --test-path test_sum.py
+      --test-id test_add
+
+    exit code   : 2
+    decision    : inconclusive
+    outcome     : verified
+    coverage    : None   (source=none)
+    força suíte : 1.0   (medida=True)
+    suíte total : ran=True
+    tempo       : 18.8s
+
+==========================================================================
+  CENÁRIO C — patch limpo, COM evidência de cobertura
+==========================================================================
+  $ adversary-gate \
+      --baseline /tmp/ag-demo-juemlv6q/baseline
+      --patch /tmp/ag-demo-juemlv6q/patch_clean
+      --test-path test_sum.py
+      --test-id test_add
+      --diff /tmp/ag-demo-juemlv6q/change.diff
+      --coverage-json /tmp/ag-demo-juemlv6q/coverage.json
+
+    exit code   : 0
+    decision    : merge
+    outcome     : verified
+    coverage    : 1.0   (source=computed)
+    força suíte : 1.0   (medida=True)
+    suíte total : ran=True
+    tempo       : 19.0s
+
+==========================================================================
+  ARTEFATO DE EVIDÊNCIA — cenário C (demo/out/evidence_c.json)
+==========================================================================
+
+  diff_coverage_ratio   = 1.0
+  diff_coverage_source = computed
+  changed/covered      = 1/1 linhas adicionadas executadas
+  diff_sha256          = d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d
+  coverage_json_sha256 = 9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632
+
+  suite_strength       = 1.0  (floor 0.75)
+  mutantes             = 1/1 mortos, 0 stillborn
+  changed_files        = ['calc.py']
+  deleted_files        = []
+
+  full_suite_ran       = True
+  full_suite_exit_codes = None  -> rodou; lado patch passou
+  rounds_used          = 4
+
+  Nada aqui é uma opinião de um modelo. Cada valor pode ser
+  re-derivado a partir dos dois hashes acima.
+
+==========================================================================
+  RESULTADO
+==========================================================================
+  [PASS]  A  esperado BLOCK         obtido block         exit 1
+  [PASS]  B  esperado INCONCLUSIVE  obtido inconclusive  exit 2
+  [PASS]  C  esperado MERGE         obtido merge         exit 0
+
+  B e C: mesmo patch, decisões diferentes.
+  A diferença é apenas se houve evidência.
+
+  TODOS OS CENÁRIOS CONFIRMADOS
