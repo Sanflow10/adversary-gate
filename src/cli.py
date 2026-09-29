@@ -29,9 +29,9 @@ from core.types import (
     Decision,
     Outcome,
 )
-from sandbox.runner import run_test
-from verifiers.coverage import covered_diff_ratio
-from verifiers.strength import changed_source_files, measure_mutation_score
+from sandbox.runner import SandboxResult, bwrap_available, run_test
+from verifiers.coverage import covered_diff_ratio, validate_diff
+from verifiers.strength import classify_changes, measure_mutation_score
 
 EXIT_MERGE = 0
 EXIT_BLOCK = 1
@@ -73,10 +73,18 @@ def _claim_from_args(args: argparse.Namespace) -> CriticClaim:
             data.get("cited_criterion_id"),
             data.get("rationale", ""),
         )
-    if not args.test_path or not args.test_id:
-        raise ValueError("--test-path and --test-id are required unless --claim-json is used")
+    if not args.test_path:
+        raise ValueError("--test-path is required unless --claim-json is used")
+    if not args.test_id and not args.test_command:
+        raise ValueError(
+            "--test-id is required unless --test-command or --claim-json is used"
+        )
+    # A suite that is one arbitrary command has no node IDs to name, but the
+    # claim still needs a non-empty identity for the circuit breaker and the
+    # evidence trail. Say what it is rather than inventing a test name.
+    test_id = args.test_id or "(test-command)"
     return CriticClaim(
-        args.test_path, args.test_id, BugKind(args.bug_kind), args.criterion_id, args.rationale
+        args.test_path, test_id, BugKind(args.bug_kind), args.criterion_id, args.rationale
     )
 
 
@@ -166,6 +174,21 @@ def _resolve_coverage(args: argparse.Namespace):
     }
 
 
+def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
+    """File paths named by ``--diff``, or ``None`` when the caller gave none.
+
+    "What changed" is a property of the patch, not of the measurement budget,
+    so it is answered from the caller's own diff as well as from the directory
+    scan. ``validate_diff`` refuses a diff whose hunks it cannot attribute
+    instead of handing back an empty list, which would read as "nothing
+    changed" -- the same false statement that opened AG-012.
+    """
+    if not args.diff:
+        return None
+    text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    return sorted(validate_diff(text))
+
+
 def _summary(verdicts) -> Dict[str, Any]:
     return {
         "claims_total": len(verdicts),
@@ -236,6 +259,33 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="where the collateral full-suite run happens ('' disables it)",
     )
+    parser.add_argument(
+        "--test-command",
+        metavar="CMD",
+        help="shell command to run instead of pytest, in each of --baseline and "
+        "--patch. Convention: exit 0 passes, 1 fails, 2/3/4 are harness errors "
+        "(-> UNVERIFIED -> INCONCLUSIVE), any other non-zero exit is neither. "
+        "Unlocks non-pytest and non-Python suites; without it a non-pytest repo "
+        "reports 'no tests collected' (exit 5) and can never reach MERGE.",
+    )
+    parser.add_argument(
+        "--full-suite-command",
+        metavar="CMD",
+        help="command for the collateral full-suite run. Defaults to "
+        "--test-command when that is given, else pytest on --full-suite-path.",
+    )
+    parser.add_argument(
+        "--sandbox",
+        default="none",
+        choices=["none", "bwrap"],
+        help="wrap every test run in bubblewrap: no network, private PID and "
+        "/tmp, read-only system, read-write only the repository. Opt-in "
+        "defence in depth -- it needs 'bwrap' installed, and it is not a "
+        "substitute for running the whole gate inside a container or VM. "
+        "When you use it, --require-network-isolation becomes truthful: the "
+        "network really is gone, so ADVERSARY_NETWORK_ISOLATED=1 is no longer "
+        "a wish.",
+    )
     parser.add_argument("--rounds-used", type=int, default=4)
     parser.add_argument(
         "--require-network-isolation",
@@ -282,6 +332,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "is not '1'; run inside an outer sandbox that has isolated the network"
             )
 
+        if args.sandbox == "bwrap" and not bwrap_available():
+            # Checked before anything executes: asking for isolation and
+            # quietly not getting it is the failure mode this flag exists to
+            # prevent.
+            raise ValueError(
+                "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
+                "install bubblewrap (apt install bubblewrap) or drop the flag"
+            )
+
         log = None
         if args.evidence_log:
             from core.evidence_log import EvidenceLog
@@ -310,6 +369,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             Path(args.patch),
             changed_paths=args.changed_path,
             require_network_isolation=args.require_network_isolation,
+            # How each side is executed: an arbitrary command when the
+            # repository is not pytest, and/or wrapped in bwrap when the patch
+            # is not trusted. Both used to be impossible without forking.
+            run_kwargs={"command": args.test_command, "sandbox": args.sandbox},
         )
 
         # ------------------------------------------------------------------
@@ -324,8 +387,35 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         strength_unverified = False
         mutation_detail: Dict[str, Any]
 
+        # What the patch touched, asked of the caller's diff as well as of the
+        # directory scan. Resolved *before* the budget check below, because
+        # "the patch changed source we cannot judge" does not become false
+        # when somebody turns mutation off.
+        changed_paths = _diff_paths(args)
+
         if args.mutation_max <= 0:
-            mutation_detail = {"measured": False, "reason": "disabled (--mutation-max 0)"}
+            # ``--mutation-max 0`` is the documented escape hatch for the
+            # strength *measurement*, the same way ``--coverage-floor 0`` is
+            # for coverage -- so ``suite_strength`` stays ``None`` and no
+            # score is demanded. What it must NOT switch off is the AG-012
+            # guard: the check that source exists outside this engine lived
+            # only inside the branch below, so passing 0 produced an artefact
+            # with no ``changed_files``/``foreign_changed_files`` keys and let
+            # a patch touching only ``calculator.cpp`` reach MERGE.
+            mutation_detail = {
+                "measured": False,
+                "reason": "disabled (--mutation-max 0); what changed below is "
+                "still measured, the mutation score is not",
+                **classify_changes(Path(args.baseline), Path(args.patch), changed_paths),
+                "mutants": [],
+                "survivors": [],
+                "mutants_counted": 0,
+                "stillborn": 0,
+            }
+            if verdict.outcome is Outcome.VERIFIED and mutation_detail["foreign_changed_files"]:
+                # There was source to judge and this engine cannot break it.
+                # That is independent of how many mutants we were allowed.
+                strength_unverified = True
         else:
             strength_obj, mutation_detail = measure_mutation_score(
                 Path(args.baseline),
@@ -333,6 +423,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 claim.test_path,
                 test_id="",
                 max_mutants=args.mutation_max,
+                changed_paths=changed_paths,
             )
             if strength_obj.is_measured:
                 # A measured score covers exactly the Python files it mutated
@@ -357,17 +448,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     strength_unverified = True
 
         full_codes: Optional[Sequence[int]] = None
-        full_suite_ran = bool(args.full_suite_path)
-        if args.full_suite_path:
+        # ``--test-command`` implies the collateral run uses it too, unless
+        # ``--full-suite-command`` overrides. A repository that does not run
+        # pytest must not silently lose the collateral-regression check just
+        # because it declared how its tests execute.
+        full_command = args.full_suite_command or args.test_command
+        full_suite_ran = bool(full_command) or bool(args.full_suite_path)
+
+        def _full_run(directory: Path) -> SandboxResult:
+            if full_command:
+                return run_test(
+                    directory,
+                    "",
+                    "",
+                    command=full_command,
+                    sandbox=args.sandbox,
+                    require_network_isolation=args.require_network_isolation,
+                )
+            return run_test(
+                directory,
+                args.full_suite_path,
+                "",
+                sandbox=args.sandbox,
+                require_network_isolation=args.require_network_isolation,
+            )
+
+        if full_suite_ran:
             # Only pay for the baseline run when the patch side actually failed;
             # a passing patch side is not a collateral regression either way.
             # The artefact records ``full_suite_ran`` so a missing
             # ``full_suite_exit_codes`` can be told apart from a clean run --
             # v2.0.1 wrote ``null`` for both, which made "the suite passed" and
             # "the suite never ran" indistinguishable in the evidence.
-            patch_full = run_test(Path(args.patch), args.full_suite_path, "")
+            patch_full = _full_run(Path(args.patch))
             if patch_full.exit_code != PYTEST_OK:
-                base_full = run_test(Path(args.baseline), args.full_suite_path, "")
+                base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
         mutation_seconds = time.monotonic() - started
 

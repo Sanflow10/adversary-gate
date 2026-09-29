@@ -89,10 +89,46 @@ Auditoria completa em [`docs/AUDITORIA_SENIOR_v2.0.1.md`](docs/AUDITORIA_SENIOR_
 | AG-011 | Floor de coverage era checado antes de `REFUTED` | **Corrigido** (novo) — `BLOCK` volta a ter precedência, como o próprio docstring de `decide()` já dizia. |
 | AG-012 | Patch só em C++/Rust chegava a `MERGE` | **Corrigido** (novo) — `changed_source_files` só varria `*.py`, então `changed_files` ficava vazio, o guarda de AG-001 não disparava e o artefato gravava `"no non-test source file changed"` enquanto `calculator.cpp` mudava. Agora `foreign_changed_files` separa "o que dá para medir" de "o que mudou e não dá", e `suite_strength_unverified` dispara com **qualquer** fonte não-Python — inclusive no patch misto (Python medido + C++ ignorado), que era a metade que passou despercebida. |
 
-### Aberto / fora do escopo do repositório
+---
 
-* **Trusted Publishing do PyPI (AG-008)**: as execuções de `Publish to PyPI` falham com `invalid-publisher`. O passo de *build* passa; só o de *publish* falha, o que confirma que é cadastro do publisher no PyPI. Resolve-se em `pypi.org/manage/project/adversary-gate/settings/publishing/`.
-* **Cobertura de `deleted_files` com alterações mistas**: um patch que *modifica* um arquivo e *deleta* outro tem o primeiro medido e o segundo não; o artefato agora registra `deleted_files`, mas a decisão só é forçada a `INCONCLUSIVE` quando a deleção é a única mudança. A checagem colateral é a suíte completa.
-* **`DiffCoverage.ratio` é `1.0` quando não há linhas adicionadas**: um patch puramente deletante reporta cobertura perfeita por vacuidade. Não alterado — é o comportamento documentado da propriedade —, mas é a mesma classe de cegueira de AG-001 aplicada à cobertura.
+## 8. Achados da re-auditoria de v2.1.0 (AG-013..AG-016)
+
+A re-auditoria de `315b40e` não repetiu AG-001..AG-012 — verificou-os por
+execução (todos confirmados) e procurou *caminhos residuais* ao redor deles.
+Os quatro abaixo foram reproduzidos por exit code real antes de corrigidos.
+
+| ID | Achado | Reprodução (v2.1.0) | Status |
+|---|---|---|---|
+| **AG-013** | `FOREIGN_SOURCE_SUFFIXES` era uma **allowlist** de linguagens lembradas | patch só em `schema.sql` → `exit 0 MERGE` com `mutation.reason: "no source file changed between baseline and patch"` (afirmação falsa) e `foreign_changed_files: []`; patch misto `calc.py`+`schema.sql` → `exit 0 MERGE`, `suite_strength: 1.0`, `unverified: false` | **Corrigido** — virou *denylist* (`NON_SOURCE_SUFFIXES`), e `changed_foreign_source_files` passa a unir o scan de diretório com os caminhos que o `--diff` do chamador nomeia. Sufixos antes invisíveis (`.sql`, `.proto`, `.pyi`, `.vue`, `.sol`, `.tf`, `.r`, `.tmpl`…) agora contam. |
+| **AG-014** | O guard do AG-012 vivia **dentro** do ramo de mutação | `--mutation-max 0` no patch só-C++ → `exit 0 MERGE`, artefato **sem** as chaves `changed_files`/`foreign_changed_files`/`deleted_files`, `unverified: false`. Controle com o default → `exit 2`. Zero testes cobriam `mutation_max=0`. | **Corrigido** — o que mudou passou a ser calculado por `classify_changes()` *antes* do teste de orçamento, usado nos dois ramos, de modo que a "fixed shape on every return path" de `strength.py` vale também com a medição desligada. |
+| **AG-015** | O parser de diff só reconhecia o prefixo `+++ b/` (git) | um `diff -u` padrão parseava para **zero** arquivos → `DiffCoverage(0,0).ratio == 1.0` → floor de coverage limpo com **zero** linhas medidas. Falha **aberta** num produto cuja tese é fail-closed. | **Corrigido** — aceita `+++ ` com e sem `b/` (o par `--- `/`+++ ` é o que identifica o cabeçalho), e um diff com hunks sem cabeçalho atribuível agora levanta `UnparseableDiff` → `exit 3`, em vez de medir `1.0`. |
+| **AG-016** | `--test-id` era obrigatório mesmo para suíte não-pytest | impossível declarar `--test-command` sem inventar um node id que não existe naquela stack. | **Corrigido** — `--test-id` deixa de ser exigido quando `--test-command` é dado; a claim recebe o rótulo `(test-command)`. |
+| **AG-017** | O parser descartava o lado `--- ` de um cabeçalho | uma deleção de arquivo inteiro (`--- a/x` / `+++ /dev/null`) parseava para **zero** arquivos e era rejeitada como `UnparseableDiff` → `exit 3` com a mensagem "re-generate it with git diff" — acusando o *input* de malformado quando ele era perfeitamente válido. Um diff misto (um deletado + um modificado) falhava do mesmo jeito, escondendo a metade que funcionava. | **Corrigido** — `+++ /dev/null` é a grafia de um arquivo removido, e o caminho antigo virou o *fallback* de atribuição. Direção: **fail-closed, mas falso**; era o oposto do AG-015, que era fail-open. |
+
+### Correção de um item da auditoria anterior
+
+A auditoria anterior listou *"Ausência de CI verificado"* como **o bloqueador
+mais grave**. Não era: `.github/workflows/ci.yml` já existia desde AG-006, com
+`on: push` + `pull_request`, matriz `3.10/3.11/3.12`, build de wheel, instalação
+limpa, smoke da CLI e smoke da Action. O que **faltava** era análise estática
+(bandit/semgrep) — hoje existe, em dois jobs novos, junto com um piso de
+cobertura da suíte própria que impede o número de cair em silêncio.
+
+### Continua aberto
+
+* **AG-008 — Trusted Publishing do PyPI.** Fora do repositório; exige cadastro
+  em `pypi.org/manage/project/adversary-gate/settings/publishing/`.
+* **AG-003 — isolamento.** `--sandbox bwrap` cobre o caso "estou rodando isto
+  agora e não tenho infraestrutura": sem rede, PID e `/tmp` próprios, sistema
+  somente-leitura. **Não é um sustituto de container/VM** — não há seccomp,
+  nem drop de privilégio, nem leitura-only do repositório. A fronteira de
+  execução no README continua valendo para código hostil de verdade.
+* **`DiffCoverage.ratio` é `1.0` quando não há linhas adicionadas.** Um patch
+  puramente deletante continua reportando cobertura perfeita por vacuidade.
+  Comportamento documentado; registrado como dívida. (AG-015 fecha o caso
+  *parecido* em que o parser não acha nenhum arquivo, que era o pior dos dois.)
+* **Cobertura de patches com alteração mista modificado+deletado.** O artefato
+  grava `deleted_files`, mas só a deleção isolada força `INCONCLUSIVE`.
+
 
 
