@@ -68,3 +68,30 @@ Este documento registra erros, divergências de ambiente e inconsistências iden
   1. **Configuração OIDC no PyPI**: Adicionar o Trusted Publisher nas configurações do projeto no PyPI com `workflow: pypi-publish.yml`.
   2. **Publicação via API Token (`twine upload`)**: Alternativa direta e imediata usando um token de API gerado no PyPI.
 
+---
+
+## 7. Auditoria técnica externa v2.0.1 → correções em v2.0.2
+
+Auditoria completa em [`docs/AUDITORIA_SENIOR_v2.0.1.md`](docs/AUDITORIA_SENIOR_v2.0.1.md) e confronto com as correções em [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md). Cada achado foi **reproduzido por execução** antes de ser corrigido; a lista abaixo registra o que mudou e o que continua aberto.
+
+| ID | Achado | Status em v2.0.2 |
+|---|---|---|
+| AG-001 | Deleção de fonte não entrava em `changed_source_files` | **Corrigido** — união `set(base) \| set(patch)`, `deleted_files` no artefato, teste de regressão. Deleção isolada agora é `INCONCLUSIVE`. |
+| AG-002 | `--coverage-ratio` era input confiado, default `1.0` | **Corrigido** — `--diff` + `--coverage-json` são a fonte medida; `--coverage-ratio` exige `--coverage-source untrusted`; sem evidência a decisão é `INCONCLUSIVE`. |
+| AG-003 | "Sandbox" é controle de recursos, não isolamento | **Documentado com honestidade** — nova seção *"Execution boundary"* no README, runner renomeado em docstring, `--require-network-isolation` agora é exposto pela CLI. Isolamento real continua sendo responsabilidade de um sandbox externo. |
+| AG-004 | Symlink de `changed_paths` não era checado | **Corrigido** — `verify_claim` passa `patch_dir` à policy e a policy checa o próprio `unresolved`, não só os pais. |
+| AG-005 | Action não instalava dependências | **Corrigido** — `pip install` do pacote antes de executar. |
+| AG-006 | Sem CI de testes | **Corrigido** — `.github/workflows/ci.yml`: matriz 3.10–3.12, build, instalação do wheel, smoke da CLI e smoke da Action em runner limpo. |
+| AG-007 | Cobertura própria desigual | **Corrigido** — total 83% → **87%**; `verifiers/coverage.py` de 33% → **100%** (passou a ser invocado), `path_policy.py` 84% → 93%. `sandbox/runner.py` segue em **63%**, o único módulo que não melhorou. A auditoria declarou 89% no total — não se reproduz; ver o confronto. |
+| AG-008 | README/versão/licença/Trusted Publishing inconsistentes | **Parcial** — README em 2.0.2, referência da Action corrigida, `LICENSE` adicionado. **Trusted Publishing continua quebrado**: é configuração no PyPI, não no repositório. |
+| AG-009 | `classify()` sombreava `NEW_BUG` e o ramo de timeout do baseline | **Corrigido** (novo) — guarda "baseline deve ser PASS ou FAIL" removida; todo `StabilityPolicy` roda mais de uma vez, então ela disparava sempre. |
+| AG-010 | Artefato não distinguia "suíte passou" de "suíte não rodou" | **Corrigido** (novo) — campo `full_suite_ran` no JSON de saída e no registro de decisão. |
+| AG-011 | Floor de coverage era checado antes de `REFUTED` | **Corrigido** (novo) — `BLOCK` volta a ter precedência, como o próprio docstring de `decide()` já dizia. |
+
+### Aberto / fora do escopo do repositório
+
+* **Trusted Publishing do PyPI (AG-008)**: as execuções de `Publish to PyPI` falham com `invalid-publisher`. O passo de *build* passa; só o de *publish* falha, o que confirma que é cadastro do publisher no PyPI. Resolve-se em `pypi.org/manage/project/adversary-gate/settings/publishing/`.
+* **Cobertura de `deleted_files` com alterações mistas**: um patch que *modifica* um arquivo e *deleta* outro tem o primeiro medido e o segundo não; o artefato agora registra `deleted_files`, mas a decisão só é forçada a `INCONCLUSIVE` quando a deleção é a única mudança. A checagem colateral é a suíte completa.
+* **`DiffCoverage.ratio` é `1.0` quando não há linhas adicionadas**: um patch puramente deletante reporta cobertura perfeita por vacuidade. Não alterado — é o comportamento documentado da propriedade —, mas é a mesma classe de cegueira de AG-001 aplicada à cobertura.
+
+

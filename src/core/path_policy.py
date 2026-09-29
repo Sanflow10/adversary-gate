@@ -78,7 +78,11 @@ class PathPolicy:
 
             if root is not None:
                 unresolved = root / path
-                if any(part.is_symlink() for part in (root, *unresolved.parents)):
+                # ``unresolved`` itself must be in the set: a *file* that is a
+                # symlink is not covered by ``unresolved.parents``. Measured on
+                # v2.0.1 -- changing to a symlink returned no violation at all,
+                # with or without ``repo_dir``.
+                if any(part.is_symlink() for part in (root, unresolved, *unresolved.parents)):
                     found.append(PathViolation(raw_path, "path traverses a symlink"))
                     continue
 

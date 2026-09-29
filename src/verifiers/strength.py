@@ -160,7 +160,26 @@ def changed_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
 
     base = snapshot(Path(baseline_dir))
     patch = snapshot(Path(patch_dir))
-    return sorted(rel for rel, blob in patch.items() if base.get(rel) != blob)
+    # The union, not the patch side: iterating ``patch`` alone silently drops
+    # every file the patch deleted, and a deletion is exactly the kind of
+    # change a suite-strength floor exists to notice. Measured on v2.0.1:
+    # deleting ``pkg/gone.py`` returned ``[]``, which left ``changed_files``
+    # empty, kept ``suite_strength_unverified`` false and let the patch reach
+    # MERGE with no strength measurement at all.
+    return sorted(rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel))
+
+
+def deleted_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+    """Relative paths of non-test ``.py`` files present in baseline, gone in patch.
+
+    Reported separately because a deleted file has nothing left to mutate:
+    its correctness rests on the collateral full-suite run, not on a score.
+    """
+
+    def names(root: Path) -> set:
+        return {p.relative_to(root).as_posix() for p in _python_files(root)}
+
+    return sorted(names(Path(baseline_dir)) - names(Path(patch_dir)))
 
 
 def changed_lines(baseline_text: str, patch_text: str) -> set:
@@ -261,6 +280,7 @@ def measure_mutation_score(
         "measured": False,
         "reason": "",
         "changed_files": changed,
+        "deleted_files": deleted_source_files(baseline_dir, patch_dir),
         "mutants": [],
         "survivors": [],
         "mutants_counted": 0,
@@ -289,7 +309,9 @@ def measure_mutation_score(
             source = (patch_dir / rel).read_text(encoding="utf-8")
             before = (Path(baseline_dir) / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            continue  # added or unreadable: baseline side has nothing to diff against
+            # One side is missing: added on the patch side, or deleted by it.
+            # Neither has a pair to diff, so neither can produce a mutant.
+            continue
         originals[rel] = source
         edited = changed_lines(before, source)
         if not edited:
@@ -305,6 +327,13 @@ def measure_mutation_score(
     plan = plan[:max_mutants]
 
     if not plan:
+        deleted = detail["deleted_files"]
+        if deleted and len(deleted) == len(changed):
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                "the patch only deletes source files; nothing is left to mutate, "
+                "so the collateral full-suite run is the only evidence available",
+            )
         return finish(
             SuiteStrength(0, 0, 0.0, is_measured=False),
             "lines changed by this patch contain no mutable operator",

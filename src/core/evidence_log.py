@@ -106,7 +106,7 @@ class EvidenceLog:
         self,
         decision: str,
         rounds_used: int,
-        diff_coverage_ratio: float,
+        diff_coverage_ratio: Optional[float],
         summary: Dict[str, Any],
     ) -> None:
         """One record per patch-level decision.
@@ -115,6 +115,11 @@ class EvidenceLog:
         actually decided. Keeping them separate is what lets
         ``unverified_merges`` be counted -- a claim can be UNVERIFIED without
         you knowing whether it was merged anyway.
+
+        ``diff_coverage_ratio`` is ``None`` when no coverage evidence was
+        produced, and it is written as JSON ``null`` rather than omitted: the
+        difference between "measured 0.0" and "never measured" is the whole
+        point of keeping an evidence artefact.
         """
         record = {
             "record_id": uuid.uuid4().hex,
@@ -122,7 +127,9 @@ class EvidenceLog:
             "kind": "decision",
             "decision": decision,
             "rounds_used": rounds_used,
-            "diff_coverage_ratio": round(diff_coverage_ratio, 6),
+            "diff_coverage_ratio": (
+                None if diff_coverage_ratio is None else round(diff_coverage_ratio, 6)
+            ),
             **summary,
             **{f"ctx_{k}": v for k, v in self.context.items()},
         }
