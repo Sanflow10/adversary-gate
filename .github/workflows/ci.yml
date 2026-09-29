@@ -202,8 +202,25 @@ jobs:
           test "${{ steps.gate.outputs.decision }}" = "merge"
           test "${{ steps.gate.outputs.outcome }}" = "verified"
           test -s evidence-base-sha.jsonl
-          # Coverage came from the derived artefact, not from a claim.
-          grep -q '"diff_coverage_source": "computed"' evidence-base-sha.jsonl
+          # Assert the contract, not the byte layout: the log is written with
+          # separators=(",", ":"), so grepping for `": "` silently matches
+          # nothing while the value is right there.
+          python3 - <<'PY'
+          import json
+
+          records = [json.loads(line) for line in open("evidence-base-sha.jsonl")]
+          decision = [r for r in records if r.get("kind") == "decision"][-1]
+
+          assert decision["decision"] == "merge", decision["decision"]
+          # Coverage was measured from the derived artefact, not asserted.
+          assert decision["diff_coverage_source"] == "computed", decision["diff_coverage_source"]
+          assert decision["diff_coverage"]["diff_sha256"]
+          # ...and strength was actually measured rather than left null.
+          assert decision["suite_strength"] is not None, "suite strength was not measured"
+          assert decision["mutation"]["foreign_changed_files"] == []
+          print("coverage:", decision["diff_coverage_source"],
+                "| strength:", decision["suite_strength"])
+          PY
 
   demo:
     # The demo is an acceptance test, not a screenshot: if a decision regresses
