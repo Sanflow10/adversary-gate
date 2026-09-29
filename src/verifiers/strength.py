@@ -117,6 +117,20 @@ def calculate_mutation_score(
 # ----------------------------------------------------------------------
 # what changed
 # ----------------------------------------------------------------------
+# Source the mutation engine recognises but cannot judge. ``_mutants_in``
+# tokenizes Python, so there is no way to break a .cpp or a .rs and watch the
+# suite notice -- and a change to one of these files is still a change to the
+# behaviour under test. Recognising them is what keeps the artefact from
+# claiming "no source changed" when source plainly did.
+FOREIGN_SOURCE_SUFFIXES = frozenset({
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx", ".inl",
+    ".rs", ".go", ".java", ".kt", ".kts", ".scala", ".swift", ".zig",
+    ".cs", ".fs", ".m", ".mm", ".jl", ".nim", ".d", ".ex", ".exs",
+    ".rb", ".php", ".pl", ".pm", ".lua", ".sh", ".bash",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+})
+
+
 def _is_test_path(rel: str) -> bool:
     """True for test modules and fixtures -- never mutation targets."""
     path = Path(rel)
@@ -180,6 +194,49 @@ def deleted_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
         return {p.relative_to(root).as_posix() for p in _python_files(root)}
 
     return sorted(names(Path(baseline_dir)) - names(Path(patch_dir)))
+
+
+def changed_foreign_source_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+    """Relative paths of **non-Python** source files the patch changed.
+
+    These are files whose behaviour the patch altered and that the mutation
+    engine has no way to break. They are reported separately from
+    ``changed_source_files`` because the two answer different questions:
+
+    ``changed_source_files``
+        What we *can* measure. Non-empty means a score is expected.
+    ``changed_foreign_source_files``
+        What changed and we *cannot* measure. Non-empty with no score is the
+        difference between "no code changed, the question does not apply" and
+        "code changed and we did not judge it".
+
+    Before this existed, a patch touching only ``calculator.cpp`` reported
+    ``reason: "no non-test source file changed"`` -- a false statement -- left
+    ``suite_strength_unverified`` false, and reached MERGE on the strength of
+    a Python test that never looked at the C++.
+    """
+
+    def snapshot(root: Path) -> Dict[str, bytes]:
+        out: Dict[str, bytes] = {}
+        if not root.is_dir():
+            return out
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            if path.suffix.lower() not in FOREIGN_SOURCE_SUFFIXES:
+                continue
+            rel = path.relative_to(root).as_posix()
+            if _is_test_path(rel):
+                continue
+            try:
+                out[rel] = path.read_bytes()
+            except OSError:
+                continue
+        return out
+
+    base = snapshot(Path(baseline_dir))
+    patch = snapshot(Path(patch_dir))
+    return sorted(rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel))
 
 
 def changed_lines(baseline_text: str, patch_text: str) -> set:
@@ -274,12 +331,14 @@ def measure_mutation_score(
 
     patch_dir = Path(patch_dir)
     changed = changed_source_files(baseline_dir, patch_dir)
+    foreign = changed_foreign_source_files(baseline_dir, patch_dir)
     # Fixed shape on every return path: an artefact whose optional keys
     # disappear when nothing was measured cannot be queried reliably.
     detail: Dict[str, object] = {
         "measured": False,
         "reason": "",
         "changed_files": changed,
+        "foreign_changed_files": foreign,
         "deleted_files": deleted_source_files(baseline_dir, patch_dir),
         "mutants": [],
         "survivors": [],
@@ -297,9 +356,20 @@ def measure_mutation_score(
         return result, detail
 
     if not changed:
+        if foreign:
+            # Not "nothing changed" -- something changed and it is outside
+            # what this engine can break. Saying otherwise put a false claim
+            # in the evidence artefact and let the patch merge unjudged.
+            shown = ", ".join(foreign[:5])
+            more = f" (+{len(foreign) - 5} more)" if len(foreign) > 5 else ""
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                f"{len(foreign)} non-Python source file(s) changed that suite "
+                f"strength cannot judge: {shown}{more}",
+            )
         return finish(
             SuiteStrength(0, 0, 0.0, is_measured=False),
-            "no non-test source file changed between baseline and patch",
+            "no source file changed between baseline and patch",
         )
 
     originals: Dict[str, str] = {}

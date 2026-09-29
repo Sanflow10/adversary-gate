@@ -53,6 +53,7 @@ from verifiers.stability import policy_for
 from verifiers.strength import (
     _is_test_path,
     calculate_mutation_score,
+    changed_foreign_source_files,
     changed_lines,
     changed_source_files,
     deleted_source_files,
@@ -1261,6 +1262,119 @@ class TestDeletionsAreChanges(unittest.TestCase):
             decision = [r for r in records if r.get("kind") == "decision"][-1]
             self.assertIn("dead_weight.py", decision["mutation"]["changed_files"])
             self.assertTrue(decision["suite_strength_unverified"])
+
+
+class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
+    """AG-012: a patch that changes only non-Python source must not merge.
+
+    ``changed_source_files`` walked ``*.py``, so a patch whose entire effect
+    was in ``calculator.cpp`` reported ``changed_files: []`` and the strength
+    question was never asked. Paired with a Python test that always passes and
+    a coverage artefact, that reached MERGE while the only thing that had
+    executed was ``assert True`` -- and the artefact recorded the false claim
+    ``"no non-test source file changed between baseline and patch"``.
+
+    The fail-closed invariant is not that every patch blocks; it is that the
+    gate never reports what it did not observe.
+    """
+
+    def _tree(self, root: Path) -> None:
+        for side in ("baseline", "patch"):
+            (root / side).mkdir(parents=True, exist_ok=True)
+            (root / side / "test_sum.py").write_text(
+                "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+            )
+            (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        # The behaviour under test is changed here, and nowhere in Python.
+        (root / "baseline" / "calculator.cpp").write_text(
+            "int add(int a, int b) { return a - b; }\n"
+        )
+        (root / "patch" / "calculator.cpp").write_text(
+            "int add(int a, int b) { return a * b; }\n"
+        )
+
+    def test_cpp_change_is_reported_as_foreign(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["calculator.cpp"],
+            )
+            # ...and it is *not* claimed as muateable Python source.
+            self.assertEqual(changed_source_files(root / "baseline", root / "patch"), [])
+
+    def test_non_source_and_test_files_are_not_foreign(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            # Neutralise the .cpp the shared tree ships, so this test is about
+            # the README and the test file only.
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "baseline" / "README.md").write_text("old\n")
+            (root / "patch" / "README.md").write_text("new\n")
+            (root / "baseline" / "tests").mkdir()
+            (root / "patch" / "tests").mkdir()
+            (root / "baseline" / "tests" / "test_calc.cpp").write_text("// a\n")
+            (root / "patch" / "tests" / "test_calc.cpp").write_text("// b\n")
+            # A README is not code, and a test file is never a mutation target.
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"), []
+            )
+
+    def test_foreign_only_patch_cannot_reach_merge(self):
+        """The observable consequence: before the fix this returned exit 0."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    # Coverage is declared good on purpose: it must be the
+                    # *strength* question that blocks, not the coverage floor.
+                    "--coverage-ratio", "1.0",
+                    "--coverage-source", "untrusted",
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decision = [r for r in records if r.get("kind") == "decision"][-1]
+            self.assertEqual(
+                decision["mutation"]["foreign_changed_files"], ["calculator.cpp"]
+            )
+            self.assertTrue(decision["suite_strength_unverified"])
+            self.assertIsNone(decision["suite_strength"])
+
+    def test_reason_never_claims_nothing_changed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            _score, detail = measure_mutation_score(
+                root / "baseline", root / "patch", "test_sum.py"
+            )
+            self.assertIn("calculator.cpp", detail["reason"])
+            self.assertNotIn("no source file changed", detail["reason"])
+
+    def test_python_only_change_still_reports_nothing_changed(self):
+        """The honest wording survives for the case it was written for."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            _score, detail = measure_mutation_score(
+                root / "baseline", root / "patch", "test_sum.py"
+            )
+            self.assertEqual(detail["foreign_changed_files"], [])
+            self.assertEqual(detail["reason"], "no source file changed between baseline and patch")
 
 
 class TestBaselineNotApplicable(unittest.TestCase):
