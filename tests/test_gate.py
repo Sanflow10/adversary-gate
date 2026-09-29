@@ -1479,7 +1479,12 @@ class TestAg012ResidualPaths(unittest.TestCase):
 
     def test_documents_are_still_not_foreign(self):
         """A denylist only helps if the denylist is right."""
-        for name in ("README.md", "CHANGELOG", "LICENSE", "data.json", "ci.yml"):
+        # evidence.jsonl is there because the Action writes its own log into
+        # the tree it is judging, and .jsonl -- unlike .json -- was missing
+        # from the list, so the evidence log came back as source nobody had
+        # judged and took base-sha from merge to inconclusive.
+        for name in ("README.md", "CHANGELOG", "LICENSE", "data.json",
+                     "evidence.jsonl", "events.ndjson", "ci.yml"):
             with self.subTest(name=name):
                 with tempfile.TemporaryDirectory() as directory:
                     root = Path(directory)

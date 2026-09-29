@@ -379,8 +379,11 @@ jobs:
 
           data = json.load(open("coverage.json"))
           rows = sorted(
-              (path, summary["percent_covered"])
-              for path, summary in data["files"].items()
+              # Each file entry nests its numbers under "summary"; reading
+              # percent_covered off the entry itself raises KeyError, which
+              # under -e kills the step before it can annotate anything.
+              (path, info["summary"]["percent_covered"])
+              for path, info in data["files"].items()
           )
           print(f'{"module":<40} {"coverage":>8}')
           for path, pct in rows:
