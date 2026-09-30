@@ -291,7 +291,7 @@ python3 src/cli.py --help
 | `python3 src/cli.py --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
 | GitHub Release wheel (below) | one exact version | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | **2.0.1** | ⚠️ stale — see below |
+| `pip install adversary-gate` (PyPI) | **2.1.0** | carries every fix below |
 
 ### Install a released wheel
 
@@ -322,10 +322,10 @@ by the workflow's own token, and events that token produces do not start other
 workflows — so releasing does **not** fire the PyPI publisher and leave a red
 run behind every time. Pushing a `v*` tag yourself still will.
 
-### Why PyPI was behind
+### PyPI
 
-PyPI carried `2.0.0` and `2.0.1` only, and **`2.0.1` is the version the audit
-was run against** — it predates every fix in this document:
+`2.0.1` is the version the audit was run against, and it predates every fix in
+this document — which is why PyPI serving it was a problem at all:
 
 ```console
 $ pip install adversary-gate==2.0.1
@@ -339,12 +339,16 @@ simply was not a question. Running it against a patch that changed only
 `calculator.cpp` (rewriting `a - b` to `a * b`) merges on the strength of a
 Python test whose only assertion is `assert True`.
 
-**AG-008 is closed.** Publishing was blocked because the Trusted Publisher was
-never registered in the PyPI project settings: GitHub minted a valid OIDC token
-and PyPI answered `invalid-publisher: valid token, but no corresponding
-publisher`. It is registered now — `Sanflow10` / `adversary-gate` /
-`pypi-publish.yml`, with no environment and no token stored in GitHub — so a
-`v*` tag builds the wheel and sdist and uploads them itself.
+**AG-008 is still open.** The Trusted Publisher was never registered in the PyPI
+project settings: GitHub mints a valid OIDC token and PyPI answers
+`invalid-publisher: valid token, but no corresponding publisher`, so the upload
+step of `pypi-publish.yml` has failed on every tag pushed so far — `v2.0.0`,
+`v2.0.1` and `v2.1.0` alike — while `Build binary wheel and source distribution`
+passes every time. Registering it takes the PyPI project's own Publishing page
+(`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no environment) and cannot
+be done from this repository. Until that happens a `v*` tag builds the
+distributions and then dies at upload, and a release has to be sent by some
+other route.
 
 ---
 
