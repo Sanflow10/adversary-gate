@@ -52,6 +52,16 @@ inputs:
       Command for the collateral full-suite regression check. Defaults to
       test-command when that is given, else pytest on the whole tree.
     required: false
+  full-suite-path:
+    description: >-
+      Directory the collateral full-suite regression check runs in, when
+      full-suite-command is not given. Defaults to the whole tree ('.').
+      Scope it to the project the patch belongs to: a repository that hosts
+      another project as a fixture should have *that* project's suite judged,
+      not its own. Left at the default, the collateral run is this repository's
+      entire test suite, which does not fit the gate's 30-second execution
+      budget and therefore reports INCONCLUSIVE instead of a result.
+    required: false
   sandbox:
     description: >-
       'none' (default) or 'bwrap'. bwrap wraps every run in bubblewrap: no
@@ -194,6 +204,7 @@ runs:
         AG_TEST_ID: ${{ inputs.test-id }}
         AG_TEST_COMMAND: ${{ inputs.test-command }}
         AG_FULL_SUITE_COMMAND: ${{ inputs.full-suite-command }}
+        AG_FULL_SUITE_PATH: ${{ inputs.full-suite-path }}
         AG_SANDBOX: ${{ inputs.sandbox }}
         AG_BUG_KIND: ${{ inputs.bug-kind }}
         AG_COVERAGE_FLOOR: ${{ inputs.coverage-floor }}
@@ -255,6 +266,11 @@ runs:
         fi
         if [ -n "$AG_FULL_SUITE_COMMAND" ]; then
           ARGS+=(--full-suite-command "$AG_FULL_SUITE_COMMAND")
+        fi
+        # Only when given: an empty value here would override the CLI's own
+        # default of '.' with a path that does not exist.
+        if [ -n "$AG_FULL_SUITE_PATH" ]; then
+          ARGS+=(--full-suite-path "$AG_FULL_SUITE_PATH")
         fi
         if [ "$AG_SANDBOX" != "none" ]; then
           ARGS+=(--sandbox "$AG_SANDBOX")
