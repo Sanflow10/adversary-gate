@@ -163,8 +163,15 @@ sustentava.
 | | antes | depois |
 | --- | --- | --- |
 | testes | 122 | 170 + 1 skip |
-| cobertura total de `src` | 86,9 % | 90 % — medida no CI por `coverage run --source=src`, piso `--fail-under=87` |
+| cobertura total de `src` | 86,9 % | 89,8 % — medida no CI por `coverage run --source=src`, piso `--fail-under=87` |
 | `src/sandbox/runner.py` | 63,4 % | 96,7 % |
+
+A queda de 90,0 % para 89,8 % no CI é o probe de `bubblewrap`: onde ele não
+consegue criar um namespace de rede, os 7 testes e2e **pulam** em vez de falhar
+e as linhas que cobriam saem da conta. O probe executa `bwrap` cru, sem nenhum
+argumento nosso, para que "o ambiente não sabe rodar bwrap" e "nosso prefixo
+está quebrado" não virem a mesma coisa: a primeira nomeia o erro do kernel e
+vira skip, a segunda continua sendo um teste que falha.
 
 ---
 
