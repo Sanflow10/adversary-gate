@@ -11,12 +11,16 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1` e esta `v2.1.0`**. O AG-008 foi o
-último item: o `pypi-publish.yml` falhava porque o pypi.org não conhecia o
-repositório. Fechado com **Trusted Publishing (OIDC)** — um publisher
-registrado no PyPI apontando para `Sanflow10/adversary-gate` e
-`pypi-publish.yml`, sem token algum guardado no GitHub. `2.0.2` não virou
-release: o trabalho dela entrou nesta.
+Estado das tags hoje: **`v2.0.0`, `v2.0.1` e esta `v2.1.0`**. O AG-008 é o
+último item e **continua aberto**: o `pypi-publish.yml` falha no upload porque
+o pypi.org não conhece o repositório — `invalid-publisher: valid token, but no
+corresponding publisher` — enquanto o passo `Build binary wheel and source
+distribution` passa em toda execução. Ele só fecha quando alguém com acesso ao
+PyPI registrar o publisher (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
+sem environment) na página do projeto, e isso não se faz daqui. Por isso
+**`2.1.0` foi publicada por upload com API token**, a mesma rota manual por
+onde subiram `2.0.0` e `2.0.1`, e não por OIDC. `2.0.2` não virou release: o
+trabalho dela entrou nesta.
 
 ---
 
