@@ -1,9 +1,16 @@
 # AdversaryGate (v2.1.0)
 
-> **Uso alto de IA ≠ confiança alta.**
-> O custo de um pipeline com agentes de código não está na inteligência do modelo, está no autoengano do pipeline.
+> **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
+> not the model's intelligence — it is the pipeline's self-deception.
+
+> **Uso alto de IA ≠ confiança alta.** O custo de um pipeline com agentes de
+> código não está na inteligência do modelo, está no autoengano do pipeline.
 
 An evidence-based fail-closed verification gate for AI coding agents where **uncertainty is a first-class result (`INCONCLUSIVE`)** instead of a silent approval.
+
+```bash
+pip install adversary-gate
+```
 
 | Document | What it is |
 | --- | --- |
@@ -266,7 +273,12 @@ Until it exists the honest answer for a non-Python repo stays
 
 ## 📦 Installation
 
-**Nothing below needs PyPI.**
+```bash
+pip install adversary-gate
+```
+
+That is the released, versioned route — `2.1.0`, carrying every fix below. Every
+other route works too, and **none of them needs PyPI**:
 
 ```bash
 # straight from the repository
@@ -295,17 +307,23 @@ python3 src/cli.py --help
 
 ### Install a released wheel
 
-`git+…` always follows `main`. For a fixed, versioned build, the wheel attached
-to a **GitHub Release** installs from a plain public URL — no PyPI, no GitHub
-login, no `git`:
+`git+…` always follows `main`. For a fixed, versioned build, the route that
+works today is PyPI:
+
+```bash
+pip install adversary-gate==2.1.0
+```
+
+A plain public URL — no PyPI, no GitHub login, no `git` — is the other fixed
+route, and it needs a **GitHub Release** to point at:
 
 ```bash
 # the tag carries the "v", the filename does not -- after the first Release:
 pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.0/adversary_gate-2.1.0-py3-none-any.whl
 ```
 
-**No Release has been published yet**, so that command 404s today and is here
-to show the shape rather than to be pasted. Publish one from **Actions →
+**No Release has been published yet**, so that second command 404s today and is
+here to show the shape rather than to be pasted. Publish one from **Actions →
 Release → Run workflow**. That workflow:
 
 1. runs the full test suite and **refuses to publish if it fails** — a release
