@@ -76,7 +76,7 @@ Coverage is an **evidence** question, not a parameter. There are exactly three w
 | `untrusted` | `--coverage-ratio` | A number the caller asserts. Accepted only when you say so out loud; the artefact marks it `untrusted`. |
 | `none` (via `auto`) | neither | No evidence. `diff_coverage_ratio` is `null` and the floor is not cleared → `INCONCLUSIVE`. |
 
-A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)**. Before v2.0.2 the flag defaulted to `1.0`, the gate never read a diff or a coverage report, and the GitHub Action passed neither — so `diff_coverage >= 80%` was satisfied by a default value on every run.
+A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)**. Before v2.1.0 the flag defaulted to `1.0`, the gate never read a diff or a coverage report, and the GitHub Action passed neither — so `diff_coverage >= 80%` was satisfied by a default value on every run.
 
 `--coverage-floor 0` disables the requirement explicitly; it is not a way to satisfy it.
 
