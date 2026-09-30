@@ -322,13 +322,13 @@ by the workflow's own token, and events that token produces do not start other
 workflows — so releasing does **not** fire the PyPI publisher and leave a red
 run behind every time. Pushing a `v*` tag yourself still will.
 
-### Why PyPI is behind
+### Why PyPI was behind
 
-PyPI holds `2.0.0` and `2.0.1` only, and **`2.0.1` is the version the audit was
-run against** — it predates every fix in this document:
+PyPI carried `2.0.0` and `2.0.1` only, and **`2.0.1` is the version the audit
+was run against** — it predates every fix in this document:
 
 ```console
-$ pip install adversary-gate
+$ pip install adversary-gate==2.0.1
 $ adversary-gate --baseline b --patch p --diff changes.diff
 error: unrecognized arguments: --diff changes.diff
 ```
@@ -339,11 +339,12 @@ simply was not a question. Running it against a patch that changed only
 `calculator.cpp` (rewriting `a - b` to `a * b`) merges on the strength of a
 Python test whose only assertion is `assert True`.
 
-Publishing a fixed version is blocked by **AG-008**: the Trusted Publisher is
-registered in the PyPI project settings (`pypi.org/manage/project/
-adversary-gate/settings/publishing/`), which cannot be changed from inside this
-repository. Until someone with PyPI access registers it, **PyPI will keep
-serving the buggy version and GitHub is the only correct route.**
+**AG-008 is closed.** Publishing was blocked because the Trusted Publisher was
+never registered in the PyPI project settings: GitHub minted a valid OIDC token
+and PyPI answered `invalid-publisher: valid token, but no corresponding
+publisher`. It is registered now — `Sanflow10` / `adversary-gate` /
+`pypi-publish.yml`, with no environment and no token stored in GitHub — so a
+`v*` tag builds the wheel and sdist and uploads them itself.
 
 ---
 
@@ -430,12 +431,12 @@ jobs:
           evidence-log: 'evidence.jsonl'
 ```
 
-> **Which ref?** There is no `v2` tag — only `v2.0.0` and `v2.0.1`, and both
-> point at the audited version with the bugs. `@main` is the only ref that
-> resolves to a fixed build. For anything that matters, pin the full commit SHA
-> instead (`uses: Sanflow10/adversary-gate@<full-sha>`): a tag would be ideal,
-> but pushing one triggers the PyPI publish workflow, which fails — AG-008 — and
-> would leave a red run on every release until that is registered.
+> **Which ref?** There is no floating `v2` tag. `v2.1.0` is the first tag that
+> carries the fixes — `v2.0.0` and `v2.0.1` point at the audited version with
+> the bugs. `@main` follows `main` and picks up whatever lands next. For
+> anything that matters, pin the full commit SHA instead
+> (`uses: Sanflow10/adversary-gate@<full-sha>`), which cannot be moved under
+> you.
 
 What that does, and where each piece comes from:
 
