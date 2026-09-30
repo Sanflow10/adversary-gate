@@ -11,19 +11,37 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0` e `v2.0.1` existem**. `2.0.2`, `2.1.0` e o
-trabalho abaixo estão em `main` e **não foram taggeados** — porque empurrar uma
-tag dispara o `pypi-publish.yml`, que está quebrado desde o AG-008.
+Estado das tags hoje: **`v2.0.0`, `v2.0.1` e esta `v2.1.0`**. O AG-008 foi o
+último item: o `pypi-publish.yml` falhava porque o pypi.org não conhecia o
+repositório. Fechado com **Trusted Publishing (OIDC)** — um publisher
+registrado no PyPI apontando para `Sanflow10/adversary-gate` e
+`pypi-publish.yml`, sem token algum guardado no GitHub. `2.0.2` não virou
+release: o trabalho dela entrou nesta.
 
 ---
 
-## [Unreleased] — em `main`, sem tag
+## [2.1.0] — 2026-09-29
 
-Nada aqui pode ser instalado por tag. Até a próxima release, use
-`pip install git+https://github.com/Sanflow10/adversary-gate`.
+Tudo o que saiu de `v2.0.1`. As três seções que estavam empilhadas em `main`
+(`[Unreleased]`, `[2.1.0]` e `[2.0.2]`) foram fundidas aqui, porque nenhuma
+delas houve de virar artefato — e este arquivo não pode descrever versões que
+nunca existiram.
+
+```bash
+pip install adversary-gate==2.1.0
+```
 
 ### Adicionado
 
+- **`base-sha`** — um ref entra, três artefatos saem: o baseline é materializado
+  daquele commit, o checkout vira o patch, e o diff são `base-sha...HEAD`.
+  Sem ele, cada usuário montava os três artefatos à mão e errava algum.
+- **Demo de aceitação** (`demo/demo.py`) exercitando as três decisões.
+- **Input `full-suite-path` no `action.yml`** — escopo da checagem colateral de
+  regressão. Por padrão ela roda a árvore inteira, que num repositório que
+  hospeda outro projeto como fixture é a suíte *do próprio repositório*, não a
+  do que foi corrigido. Sem este input era impossível apontá-la: o CLI já tinha
+  `--full-suite-path`, a Action não o repassava.
 - **`--test-command CMD`** — executa um comando arbitrário no lugar do pytest,
   nos dois lados (baseline e patch). Convenção: `0` passou, `1` falhou,
   `2`/`3`/`4` o próprio harness quebrou → `UNVERIFIED`, timeout → `UNVERIFIED`.
@@ -74,8 +92,27 @@ Nada aqui pode ser instalado por tag. Até a próxima release, use
 
 ### Corrigido
 
-Cada um abaixo foi **reproduzido por exit code real** antes da correção, e
-todos eram *fail-open*: produziam `MERGE` que a evidência não sustentava.
+Cada um abaixo foi **reproduzido por exit code real** antes da correção.
+
+- **AG-001..AG-011** — a auditoria sênior de `v2.0.1` foi confrontada com o
+  código *executado*, não lido. Cada achado foi reproduzido por exit code e
+  corrigido, com teste de regressão explícito.
+  A cobertura da suíte própria passou a ser **evidência** medida, não afirmação.
+  Ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)
+  para a reprodução de cada um.
+- **AG-012** — um patch alterando **apenas** código não-Python não podia chegar
+  a `MERGE`. Caso puro e caso misto (`calc.py` + `calculator.cpp`) fechados.
+- **A Action escrevia outputs vazios em toda saída não-zero.** O step roda sob
+  `bash -e`, e `JSON_OUT=$(…cli.py)` é um comando que falha quando o gate
+  termina com `1` (BLOCK) ou `2` (INCONCLUSIVE) — então `-e` abortava o step
+  **antes** de escrever `decision` e `outcome`. O resultado: um workflow com
+  `if: steps.gate.outputs.decision == 'block'` **nunca disparava**, e a única
+  saída que algum dia funcionou foi `exit 0`. `cmd || var=$?` é falha tratada,
+  então o `-e` não aborta. Presente na `v2.0.1`, reproduzido com
+  `bash --noprofile --norc -eo pipefail`.
+
+Os AG-013 a seguir eram *fail-open*: produziam `MERGE` que a evidência não
+sustentava.
 
 - **AG-013 — allowlist de sufixos de origem.** `FOREIGN_SOURCE_SUFFIXES` era
   uma lista de linguagens que alguém se lembrou de digitar; qualquer sufixo
@@ -125,39 +162,9 @@ todos eram *fail-open*: produziam `MERGE` que a evidência não sustentava.
 
 | | antes | depois |
 | --- | --- | --- |
-| testes | 122 | 153 + 1 skip |
-| cobertura total de `src` | 86,9 % | ver job `coverage` do CI |
-| `src/sandbox/runner.py` | 63,4 % | ~82 % |
-
----
-
-## [2.1.0] — `main`, **sem tag**
-
-### Adicionado
-
-- **`base-sha`** — um ref entra, três artefacts saem: o baseline é materializado
-  daquele commit, o checkout vira o patch, e o diff são `base-sha...HEAD`.
-  Sem ele, cada usuário montava os três artefatos à mão e errava algum.
-- **Demo de aceitação** (`demo/demo.py`) exercitando as três decisões.
-
-### Corrigido
-
-- **AG-012** — um patch alterando **apenas** código não-Python não podia chegar
-  a `MERGE`. Caso puro e caso misto (`calc.py` + `calculator.cpp`) fechados.
-
----
-
-## [2.0.2] — `main`, **sem tag**
-
-### Corrigido
-
-- **AG-001..AG-011** — a auditoria sênior de `v2.0.1` foi confrontada com o
-  código *executado*, não lido. Cada achado foi reproduzido por exit code e
-  corrigido, com teste de regressão explícito.
-- A cobertura da suíte própria passou a ser **evidência** medida, não afirmação.
-
-Ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)
-para a reprodução de cada um.
+| testes | 122 | 170 + 1 skip |
+| cobertura total de `src` | 86,9 % | 90 % — medida no CI por `coverage run --source=src`, piso `--fail-under=87` |
+| `src/sandbox/runner.py` | 63,4 % | 96,7 % |
 
 ---
 

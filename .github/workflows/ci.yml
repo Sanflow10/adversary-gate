@@ -246,6 +246,18 @@ jobs:
           base-sha: ${{ env.AG_BASE_SHA }}
           test-path: 'gate_fixture/test_calc.py'
           test-id: 'test_add'
+          # The collateral check defaults to the whole tree, so it ran this
+          # repository's 170 tests -- 70-100 s that have nothing to do with a
+          # three-line fixture -- against the gate's 30-second execution
+          # budget. Green once and red twice across three commits, and the
+          # only change between the last two was a test file whose new code
+          # never executes here (bubblewrap is not installed in this job, so
+          # the class that would run it is skipped by its own decorator).
+          # What decided the verdict was whether the suite happened to finish
+          # inside the cap. The project under patch is the fixture, so that is
+          # the suite worth judging; the Suite jobs above already gate this
+          # repository's own suite on three interpreters.
+          full-suite-path: 'gate_fixture'
           coverage-command: 'coverage run -m pytest gate_fixture || true; coverage json -o "$COVERAGE_JSON"'
           evidence-log: 'evidence-base-sha.jsonl'
 
