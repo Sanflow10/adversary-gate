@@ -217,8 +217,11 @@ Porque a disciplina semver só vale se o procedimento for explícito:
 4. Abrir PR, CI verde (suíte, análise estática, cobertura, build, demo).
 5. Só então tag `vX.Y.Z`.
 6. Verificar se o `pypi-publish.yml` está saudável (AG-008) **antes** de taggar —
-   uma tag com publish quebrado deixa uma run vermelha a cada release, que é
-   exatamente por que `2.0.2` e `2.1.0` nunca foram taggeadas.
+   uma tag com publish quebrado deixa uma run vermelha a cada release. Foi por
+   isso que `2.0.2` nunca foi taggeada. `2.1.0` ignorou a regra e o registro do
+   publisher não foi feito: as três runs de publish falharam e ela subiu por
+   token — é assim que fica registrada, e não como uma release publicada pelo
+   workflow.
 
 **Não** bumpar a versão com mudanças soltas em `main`: uma versão no
 `pyproject.toml` sem tag correspondente é uma promessa de artefato que não
