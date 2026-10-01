@@ -91,11 +91,12 @@ Auditoria completa em [`docs/AUDITORIA_SENIOR_v2.0.1.md`](docs/AUDITORIA_SENIOR_
 
 ---
 
-## 8. Achados da re-auditoria de v2.1.0 (AG-013..AG-016)
+## 8. Achados da re-auditoria de v2.1.0 (AG-013..AG-017)
 
 A re-auditoria de `315b40e` não repetiu AG-001..AG-012 — verificou-os por
 execução (todos confirmados) e procurou *caminhos residuais* ao redor deles.
-Os quatro abaixo foram reproduzidos por exit code real antes de corrigidos.
+Os cinco abaixo foram reproduzidos por exit code real antes de corrigidos
+(todos no mesmo commit, `dcfb894`).
 
 | ID | Achado | Reprodução (v2.1.0) | Status |
 |---|---|---|---|
@@ -127,8 +128,21 @@ cobertura da suíte própria que impede o número de cair em silêncio.
   puramente deletante continua reportando cobertura perfeita por vacuidade.
   Comportamento documentado; registrado como dívida. (AG-015 fecha o caso
   *parecido* em que o parser não acha nenhum arquivo, que era o pior dos dois.)
-* **Cobertura de patches com alteração mista modificado+deletado.** O artefato
-  grava `deleted_files`, mas só a deleção isolada força `INCONCLUSIVE`.
+
+---
+
+## 9. Achados da auditoria externa de 2026-10-01 (AG-018..AG-020)
+
+Auditoria comparativa feita por terceiro sobre `Sanflow10/adversary-gate` e
+`Sanflow10/SuperAgent`, executada contra o commit `5159f5c`. Os dois achados
+deste repositório foram **reproduzidos por execução aqui, antes de corrigidos** —
+mesmo cenário, mesmo exit code, sem confiar no relatório de ninguém.
+
+| ID | Achado | Reprodução (`5159f5c`) | Status |
+|---|---|---|---|
+| **AG-018** (Alta) | Patch misto modificado+deletado chegava a `MERGE` | `calc.py` modificado e medido (mutação 1/1 → `suite_strength: 1.0`), `gone.py` deletado e nunca julgado, diff real e coverage fornecidos → **`exit 0` / `merge`**, com `deleted_files: ["gone.py"]` gravado no próprio artefato. Os sete campos alegados batiam com os obtidos. | **Corrigido** — `deleted_files` não-vazio passa a levantar `suite_strength_unverified` nas duas ramas (inclusive `--mutation-max 0`), pela mesma regra de AG-001 e AG-012: código que mudou e este motor não pôde julgar não pode autorizar a decisão. Mesmo cenário → **`exit 2` / `inconclusive`**, mantendo `suite_strength: 1.0` — o número continua verdadeiro sobre o que mediu — e gravando `suite_strength_unverified: true`. |
+| **AG-019** (Média) | `test_prepare_evidence.sh` dependia da configuração de cor global do git | `GIT_CONFIG_GLOBAL` com `color.ui = always` → **`exit 1`** / `FAIL: diff does not contain the added line`; controle com `color.ui = false` → `exit 0`. Causa: `prepare_evidence.sh` chamava `git diff --no-ext-diff` sem `--no-color`, e o artefato é *parseado* por `grep`, não lido. A CI verde não desmentia: o runner não impõe `color.ui`, então o teste passava por acidente de ambiente. | **Corrigido** — `--no-color` na chamada + regressão no próprio script, que roda o mesmo caminho com `GIT_CONFIG_COUNT=1 color.ui=always` e falha se o diff trouxer `ESC` ou perder a linha adicionada. |
+| **AG-020** | Trusted Publishing do PyPI continua aberto | Verdadeiro — é o mesmo item que aqui se chama **AG-008**, já descrito acima. | **Não é achado novo.** Já estava registrado em `SECURITY.md`, `CHANGELOG.md` e `README.md` como aberto; o cadastro é no `pypi.org`, fora do alcance do repositório. |
 
 
 

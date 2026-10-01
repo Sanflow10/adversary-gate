@@ -1265,6 +1265,71 @@ class TestDeletionsAreChanges(unittest.TestCase):
             self.assertIn("dead_weight.py", decision["mutation"]["changed_files"])
             self.assertTrue(decision["suite_strength_unverified"])
 
+    def test_mixed_deletion_and_modification_cannot_reach_merge(self):
+        """AG-018: a deletion must not ride under the score of a modified file.
+
+        Reconstructed from the third-party audit's artefact on ``5159f5c``:
+        ``calc.py`` modified and measured (mutation 1/1, ``suite_strength``
+        ``1.0``), ``gone.py`` deleted and never judged, a real diff and a
+        coverage artefact supplied. The gate returned ``exit 0`` / ``merge``.
+
+        The score measured ``calc.py`` and nothing else -- a deleted file has
+        no lines left to mutate, so it produced no mutant, survived nothing
+        and never lowered the single number that authorised the decision. The
+        decision, meanwhile, was presented for the change as a whole. That is
+        the same shape as AG-001 (deletion dropped from ``changed_files``) and
+        AG-012 (C++ outside the engine), which is why the guard lives next to
+        theirs rather than in a rule of its own.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir(parents=True, exist_ok=True)
+                (root / side / "test_sum.py").write_text(
+                    "from calc import add\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+                )
+            # Behaviour-preserving edit on the measured side...
+            (root / "baseline" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (root / "patch" / "calc.py").write_text("def add(a, b):\n    return (a + b)\n")
+            # ...and a file the patch removes, which the test never imports.
+            (root / "baseline" / "gone.py").write_text("def helper():\n    return 1\n")
+
+            diff_path = Path(directory) / "change.diff"
+            diff_path.write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,2 @@\n"
+                " def add(a, b):\n-    return a + b\n+    return (a + b)\n"
+                "--- a/gone.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n"
+                "-def helper():\n-    return 1\n"
+            )
+            cov_path = Path(directory) / "cov.json"
+            cov_path.write_text(
+                json.dumps({"files": {"calc.py": {"executed_lines": [1, 2]}}})
+            )
+
+            log_path = Path(directory) / "ev.jsonl"
+            code = main(
+                [
+                    "--baseline", str(root / "baseline"),
+                    "--patch", str(root / "patch"),
+                    "--test-path", "test_sum.py",
+                    "--test-id", "test_add",
+                    "--diff", str(diff_path),
+                    "--coverage-json", str(cov_path),
+                    "--evidence-log", str(log_path),
+                ]
+            )
+            records = [json.loads(line) for line in log_path.read_text().splitlines()]
+            decision = [r for r in records if r.get("kind") == "decision"][-1]
+
+            # The measurement itself is unchanged and still says what it covered.
+            self.assertEqual(decision["mutation"]["deleted_files"], ["gone.py"])
+            self.assertEqual(decision["mutation"]["changed_files"], ["calc.py", "gone.py"])
+            self.assertEqual(decision["suite_strength"], 1.0)
+            # What changed is that the score may no longer stand for the patch.
+            self.assertTrue(decision["suite_strength_unverified"])
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertEqual(decision["decision"], "inconclusive")
+
 
 class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
     """AG-012: a patch that changes only non-Python source must not merge.

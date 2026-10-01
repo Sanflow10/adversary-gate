@@ -64,6 +64,37 @@ grep -q "^-    return a + b$" "$OUT/change.diff" \
   || fail "diff does not contain the removed line"
 note "diff is a real unified diff of the change"
 
+# AG-019: the identical run with colour forced on.
+#
+# `prepare_evidence.sh` writes a file, it does not print -- so whether that
+# file carries ANSI sequences is decided by the *caller's* git config, not by
+# the patch. With `color.ui=always` anywhere in the environment the artefact
+# is still a correct diff, and the grep above silently stopped matching it:
+# the check was blind while the artefact was fine, and CI never noticed
+# because its default config does not impose the colour.
+#
+# GIT_CONFIG_COUNT applies the setting to this process only: no file is
+# written, so the caller's own config is neither read for this nor altered
+# afterwards.
+COLOURED="$WORK/evidence_coloured"
+if ! GIT_CONFIG_COUNT=1 \
+     GIT_CONFIG_KEY_0=color.ui \
+     GIT_CONFIG_VALUE_0=always \
+     bash "$PREPARE" \
+       --workspace "$WORK/repo" \
+       --base-sha "$BASE_SHA" \
+       --baseline-dir "$COLOURED/baseline" \
+       --diff-file "$COLOURED/change.diff" \
+       --coverage-file "$COLOURED/coverage.json" 2>/dev/null; then
+  fail "prepare_evidence.sh exited non-zero with color.ui=always"
+fi
+grep -q "^+    return (a + b)$" "$COLOURED/change.diff" \
+  || fail "diff lost the added line when the caller forces colour"
+if LC_ALL=C grep -q $'\033' "$COLOURED/change.diff"; then
+  fail "the diff artefact contains escape sequences; it is parsed, not read"
+fi
+note "diff is independent of the caller's color.ui"
+
 python3 - "$OUT/coverage.json" <<'PY' || exit 1
 import json, sys
 data = json.load(open(sys.argv[1]))

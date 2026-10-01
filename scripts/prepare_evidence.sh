@@ -99,7 +99,14 @@ fi
 # ---------------------------------------------------------------------- diff
 # Three-dot, so it is the merge-base against HEAD rather than a diff against a
 # base branch that may have moved -- the same range a pull request shows.
-git -C "$WORKSPACE" diff --no-ext-diff "$BASE_SHA...HEAD" > "$DIFF_FILE"
+#
+# --no-color is not cosmetic: this file is parsed, not read. With
+# `color.ui=always` set anywhere in the caller's config, git pastes ANSI codes
+# into it and the test's grep for the added line stops matching -- the artefact
+# was correct and the check against it was blind. CI never noticed because the
+# runner's default config does not impose the colour; the failure belonged to
+# the environment, not to the patch.
+git -C "$WORKSPACE" diff --no-ext-diff --no-color "$BASE_SHA...HEAD" > "$DIFF_FILE"
 if [ ! -s "$DIFF_FILE" ]; then
   echo "adversary-gate: warning: the diff is empty; the gate will see no changed lines" >&2
 fi

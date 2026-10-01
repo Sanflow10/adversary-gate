@@ -24,6 +24,34 @@ trabalho dela entrou nesta.
 
 ---
 
+## [Unreleased]
+
+Sem tag e sem release: esta seção registra a mudança quando ela acontece, e
+vira versão quando virar artefato. **A `2.1.0` publicada no PyPI ainda contém o
+AG-018** — os itens abaixo estão apenas em `main`.
+
+### Corrigido
+
+- **AG-018 — patch misto modificado+deletado já não chega a `MERGE`.** Um
+  arquivo deletado não tem linhas para mutar, não gerava mutante e não baixava
+  a força de teste — então passava em silêncio por baixo da nota do arquivo que
+  sobrou. Reproduzido por terceiro e confirmado aqui (`exit 0` / `merge` com
+  `deleted_files: ["gone.py"]` gravado no próprio artefato), agora
+  `deleted_files` não-vazio levanta `suite_strength_unverified` e a decisão é
+  `INCONCLUSIVE`. O `suite_strength` segue sendo reportado: o número continua
+  verdadeiro sobre o que mediu, só deixa de autorizar o patch inteiro. É a
+  terceira instância da mesma classe de AG-001 (deleção fora de `changed_files`)
+  e AG-012/AG-013 (fonte fora do motor de mutação).
+- **AG-019 — o artefato de diff não depende mais da cor do git de quem chama.**
+  `prepare_evidence.sh` gravava `git diff` sem `--no-color`, e o teste o lê com
+  `grep`: com `color.ui = always` no ambiente o diff continuava correto, mas o
+  teste deixava de enxergar a linha adicionada e falhava (`exit 1`). A CI verde
+  não desmentia, porque o runner não impõe a cor — o teste passava por acidente
+  de ambiente. Corrigido, com regressão no próprio script que força a cor via
+  `GIT_CONFIG_COUNT`.
+
+---
+
 ## [2.1.0] — 2026-09-29
 
 Tudo o que saiu de `v2.0.1`. As três seções que estavam empilhadas em `main`
