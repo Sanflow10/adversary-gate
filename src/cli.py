@@ -412,9 +412,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "mutants_counted": 0,
                 "stillborn": 0,
             }
-            if verdict.outcome is Outcome.VERIFIED and mutation_detail["foreign_changed_files"]:
-                # There was source to judge and this engine cannot break it.
-                # That is independent of how many mutants we were allowed.
+            if verdict.outcome is Outcome.VERIFIED and (
+                mutation_detail["foreign_changed_files"]
+                or mutation_detail["deleted_files"]
+            ):
+                # There was source to judge and this engine cannot break it --
+                # either because it is not Python, or because the patch deleted
+                # it and there are no lines left to mutate. Both hold no matter
+                # how many mutants we were allowed.
                 strength_unverified = True
         else:
             strength_obj, mutation_detail = measure_mutation_score(
@@ -432,12 +437,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 strength = strength_obj.mutation_score
 
             if verdict.outcome is Outcome.VERIFIED:
-                if mutation_detail.get("foreign_changed_files"):
-                    # The patch changed source this engine cannot break. Even
-                    # when the Python half measured cleanly, presenting that
-                    # number as the strength of the whole patch would claim
-                    # more than was observed -- a mixed Python + C++ patch used
-                    # to merge with the C++ never executed (AG-012).
+                if (
+                    mutation_detail.get("foreign_changed_files")
+                    or mutation_detail.get("deleted_files")
+                ):
+                    # The patch changed source this engine cannot break, or
+                    # removed source nothing can be run against. Even when the
+                    # Python half measured cleanly, presenting that number as
+                    # the strength of the whole patch would claim more than was
+                    # observed -- a mixed Python + C++ patch used to merge with
+                    # the C++ never executed (AG-012), and a mixed
+                    # modified + deleted patch merged on the score of the file
+                    # it modified alone (AG-018): a deleted file has no lines
+                    # left to mutate, so it never lowered the one number that
+                    # authorised the decision and rode underneath it instead.
                     strength_unverified = True
                 elif not strength_obj.is_measured and mutation_detail.get("changed_files"):
                     # There was code to judge, the claim itself executed and came
