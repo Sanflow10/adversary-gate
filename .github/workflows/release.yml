@@ -99,24 +99,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ref.outputs.tag }}
+          TAG_EXISTS: ${{ steps.ref.outputs.tag_exists }}
         run: |
           set -euo pipefail
 
-          echo "releasing $TAG"
+          echo "releasing $TAG (tag_exists=$TAG_EXISTS)"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::release $TAG already exists -- bump version in pyproject.toml first"
             exit 1
           fi
 
-          # `gh release create` makes the tag only when it is missing. When the
-          # tag was already there, the resolve step is standing on its tree, so
-          # tag + release + artefacts remain one step that cannot leave a tag
-          # pointing at a build with no wheel -- and a hand-pushed tag stops
-          # being a reason for this workflow to refuse.
-          gh release create "$TAG" dist/* \
-            --title "$TAG" \
-            --generate-notes
+          # `gh release create` makes the tag only when it is missing -- but
+          # without --target it points that new tag at the tip of the default
+          # branch *at this moment*, not at the tree this job built from. Those
+          # are the same commit unless something lands on main during the
+          # minutes the suite and the build take, and when they differ the tag
+          # stops naming the artefact attached to it: anyone following
+          # SECURITY.md to verify a download against `vX.Y.Z` would be checking
+          # it against a different tree. So the new-tag path pins the target to
+          # the checked-out SHA -- the bytes that were actually built.
+          #
+          # When the tag already exists it is not ours to point anywhere, and
+          # the resolve step is already standing on its tree, so --target is
+          # deliberately omitted there.
+          if [ "$TAG_EXISTS" = "true" ]; then
+            echo "tag $TAG already points somewhere; the release stands on it"
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --generate-notes
+          else
+            gh release create "$TAG" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --generate-notes
+          fi
 
           echo "published $TAG"
           ls -l dist/
