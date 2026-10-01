@@ -11,24 +11,40 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1` e esta `v2.1.0`**. O AG-008 é o
-último item e **continua aberto**: o `pypi-publish.yml` falha no upload porque
-o pypi.org não conhece o repositório — `invalid-publisher: valid token, but no
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0` e esta `v2.1.1`**. O
+AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
+pypi.org não conhece o repositório — `invalid-publisher: valid token, but no
 corresponding publisher` — enquanto o passo `Build binary wheel and source
 distribution` passa em toda execução. Ele só fecha quando alguém com acesso ao
 PyPI registrar o publisher (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
-sem environment) na página do projeto, e isso não se faz daqui. Por isso
-**`2.1.0` foi publicada por upload com API token**, a mesma rota manual por
-onde subiram `2.0.0` e `2.0.1`, e não por OIDC. `2.0.2` não virou release: o
-trabalho dela entrou nesta.
+sem environment) na página do projeto, e isso não se faz daqui.
+
+Por isso as duas últimas saíram por rotas manuais: **`2.1.0` por upload com
+API token** (a mesma rota de `2.0.0` e `2.0.1`, e não por OIDC) e **`2.1.1`
+como GitHub Release**, sem subir nada ao PyPI — daí o PyPI continuar servindo
+`2.1.0`, que **ainda contém o AG-018**. `2.0.2` não virou release: o trabalho
+dela entrou na `2.1.0`.
 
 ---
 
 ## [Unreleased]
 
-Sem tag e sem release: esta seção registra a mudança quando ela acontece, e
-vira versão quando virar artefato. **A `2.1.0` publicada no PyPI ainda contém o
-AG-018** — os itens abaixo estão apenas em `main`.
+Sem entradas. A seção fica aqui de propósito e sem número: uma versão no
+`pyproject.toml` sem tag correspondente é uma promessa de artefato que não
+existe, e o bump só acontece quando esta seção vira uma com versão e data.
+
+---
+
+## [2.1.1] — 2026-10-01
+
+Publicada como **GitHub Release**, e não como release do PyPI — o AG-008
+continua aberto, então não existe rota automatizada de upload. **O PyPI segue
+em `2.1.0`, que ainda contém o AG-018**; quem quer esta correção instala a roda
+da Release:
+
+```bash
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.1/adversary_gate-2.1.1-py3-none-any.whl
+```
 
 ### Corrigido
 
@@ -244,12 +260,19 @@ Porque a disciplina semver só vale se o procedimento for explícito:
    divergindo é o defeito que a auditoria já apontou.
 4. Abrir PR, CI verde (suíte, análise estática, cobertura, build, demo).
 5. Só então tag `vX.Y.Z`.
-6. Verificar se o `pypi-publish.yml` está saudável (AG-008) **antes** de taggar —
-   uma tag com publish quebrado deixa uma run vermelha a cada release. Foi por
-   isso que `2.0.2` nunca foi taggeada. `2.1.0` ignorou a regra e o registro do
-   publisher não foi feito: as três runs de publish falharam e ela subiu por
-   token — é assim que fica registrada, e não como uma release publicada pelo
-   workflow.
+6. Verificar se o `pypi-publish.yml` está saudável (AG-008) **antes** de taggar
+   à mão — uma tag com publish quebrado deixa uma run vermelha a cada release.
+   Foi por isso que `2.0.2` nunca foi taggeada. `2.1.0` ignorou a regra e o
+   registro do publisher não foi feito: as três runs de publish falharam e ela
+   subiu por token — é assim que fica registrada, e não como uma release
+   publicada pelo workflow.
+
+   **A rota da GitHub Release — a de `2.1.1` — não tem este custo.** O
+   `release.yml` é `workflow_dispatch`: a tag é criada pelo `GITHUB_TOKEN` do
+   próprio workflow, e eventos que esse token produz **não** disparam outros
+   workflows, então `pypi-publish.yml` não roda e nenhuma run vermelha nasce.
+   Por isso os passos 5 e 6 valem para tag empurrada à mão; no fluxo do Release
+   a tag é *consequência* do Run, não pré-requisito dele.
 
 **Não** bumpar a versão com mudanças soltas em `main`: uma versão no
 `pyproject.toml` sem tag correspondente é uma promessa de artefato que não

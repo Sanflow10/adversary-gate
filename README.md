@@ -1,4 +1,4 @@
-# AdversaryGate (v2.1.0)
+# AdversaryGate (v2.1.1)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -16,7 +16,7 @@ pip install adversary-gate
 | --- | --- |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
 | 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
-| 📋 **[Findings AG-001…AG-017](ERRORS_AND_INCONSISTENCIES.md)** | every finding, each reproduced by real exit code before being fixed |
+| 📋 **[Findings AG-001…AG-020](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
 
 ---
 
@@ -277,8 +277,11 @@ Until it exists the honest answer for a non-Python repo stays
 pip install adversary-gate
 ```
 
-That is the released, versioned route — `2.1.0`, carrying every fix below. Every
-other route works too, and **none of them needs PyPI**:
+That installs **`2.1.0`** from PyPI — every fix in this document **except
+AG-018**, which is fixed in `2.1.1`. `2.1.1` ships as a GitHub Release rather
+than to PyPI, because AG-008 (Trusted Publishing) is still open and there is no
+automated route to upload it. Every other route works too, and **none of them
+needs PyPI**:
 
 ```bash
 # straight from the repository
@@ -302,29 +305,29 @@ python3 src/cli.py --help
 | `git clone` + `pip install .` | `main` | git |
 | `python3 src/cli.py --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | one exact version | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | **2.1.0** | carries every fix below |
+| GitHub Release wheel (below) | **2.1.1** — every fix | nothing but `pip` |
+| `pip install adversary-gate` (PyPI) | **2.1.0** — all but AG-018 | network |
 
 ### Install a released wheel
 
-`git+…` always follows `main`. For a fixed, versioned build, the route that
-works today is PyPI:
+`git+…` always follows `main`. For a fixed, versioned build there are two, and
+they do **not** carry the same code:
 
 ```bash
+# PyPI -- 2.1.0: every fix in this document except AG-018
 pip install adversary-gate==2.1.0
 ```
 
-A plain public URL — no PyPI, no GitHub login, no `git` — is the other fixed
-route, and it needs a **GitHub Release** to point at:
-
 ```bash
-# the tag carries the "v", the filename does not -- after the first Release:
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.0/adversary_gate-2.1.0-py3-none-any.whl
+# GitHub Release -- 2.1.1: every fix, AG-018 included.
+# The tag carries the "v", the filename does not.
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.1/adversary_gate-2.1.1-py3-none-any.whl
 ```
 
-**No Release has been published yet**, so that second command 404s today and is
-here to show the shape rather than to be pasted. Publish one from **Actions →
-Release → Run workflow**. That workflow:
+The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
+needs a **GitHub Release** for that tag to exist: if it answers `404`, the
+Release for `v2.1.1` has not been published yet. Releases are published from
+**Actions → Release → Run workflow**. That workflow:
 
 1. runs the full test suite and **refuses to publish if it fails** — a release
    only ever leaves a build whose tests passed;
@@ -453,9 +456,10 @@ jobs:
           evidence-log: 'evidence.jsonl'
 ```
 
-> **Which ref?** There is no floating `v2` tag. `v2.1.0` is the first tag that
-> carries the fixes — `v2.0.0` and `v2.0.1` point at the audited version with
-> the bugs. `@main` follows `main` and picks up whatever lands next. For
+> **Which ref?** There is no floating `v2` tag. `v2.1.1` carries every fix;
+> `v2.1.0` carries all but AG-018; `v2.0.0` and `v2.0.1` point at the audited
+> version with the bugs. `@main` follows `main` and picks up whatever lands
+> next. For
 > anything that matters, pin the full commit SHA instead
 > (`uses: Sanflow10/adversary-gate@<full-sha>`), which cannot be moved under
 > you.

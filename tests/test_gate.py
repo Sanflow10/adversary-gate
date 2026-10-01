@@ -1488,8 +1488,8 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
 class TestAg012ResidualPaths(unittest.TestCase):
     """The two ways the AG-012 guard could still be walked around.
 
-    Both were reproduced against v2.1.0 before being fixed, and neither is
-    listed in ``ERRORS_AND_INCONSISTENCIES.md``:
+    Both were reproduced against v2.1.0 before being fixed, and both are now
+    recorded in ``ERRORS_AND_INCONSISTENCIES.md`` -- as AG-013 and AG-014:
 
     * the guard recognised source through an **allowlist** of languages
       somebody had typed, so ``.sql`` -- and every other suffix outside it --
