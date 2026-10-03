@@ -50,6 +50,18 @@ from verifiers.coverage import DiffCoverage, covered_diff_ratio
 from verifiers.stability import StabilityPolicy, policy_for
 
 
+def _bytes_differ(before: Path, after: Path) -> bool:
+    """Whether two files differ -- and ``True`` when either cannot be read.
+
+    "Unreadable" must not read as "unchanged": the caller uses this to decide
+    whether an oracle can be trusted, and unknown is not trusted.
+    """
+    try:
+        return before.read_bytes() != after.read_bytes()
+    except OSError:
+        return True
+
+
 @dataclass(frozen=True)
 class GateConfig:
     coverage_floor: float = 0.80
@@ -381,6 +393,15 @@ class Gate:
 
         policy = policy_for(claim.bug_kind)
         baseline_applicable = (baseline_dir / claim.test_path).is_file()
+        # AG-021. The claim's test is read from the *patch* tree, so a patch
+        # that rewrites it also writes the answer it will be judged against:
+        # break ``a - b`` into ``a + b``, change ``== 2`` into ``== 8``, and
+        # baseline passes, patch passes, mutation kills its one mutant -- MERGE.
+        # Only a test that already existed on the baseline can have been
+        # rewritten; a test the patch adds has no earlier answer to change.
+        oracle_rewritten = baseline_applicable and _bytes_differ(
+            baseline_dir / claim.test_path, patch_dir / claim.test_path
+        )
 
         baseline_codes: List[int] = []
         patch_codes: List[int] = []
@@ -438,6 +459,22 @@ class Gate:
         )
 
         verdict = self.classify(claim, run_outcome)
+
+        if oracle_rewritten and verdict.outcome is Outcome.VERIFIED:
+            # Only VERIFIED is withdrawn. REFUTED stays: a rewritten test that
+            # still fails on the patch is direct evidence against it, and
+            # evidence we watched happen outranks evidence we cannot trust.
+            verdict = GateVerdict(
+                claim,
+                FailureClass.INVALID,
+                Outcome.UNVERIFIED,
+                f"the patch rewrote the claim's own test ({claim.test_path}); a "
+                "verdict from a test the patch itself changed is not evidence, "
+                "because whoever writes the patch can write the answer. Run the "
+                "baseline's version of the test against the patch, or review the "
+                "test change by hand",
+                run_outcome,
+            )
 
         if verdict.outcome is Outcome.UNVERIFIED:
             # Attach *how* each side behaved: an unverified verdict that does

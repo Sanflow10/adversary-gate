@@ -20,12 +20,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # create the tag and the release
+  contents: write # create the tag and the release, and move the floating major tag
 
 jobs:
   release:
     name: Build, verify, publish a GitHub Release
     runs-on: ubuntu-latest
+    env:
+      # Optional. Present -> the build is also uploaded to PyPI by token, which
+      # is the only automated PyPI route while AG-008 (Trusted Publishing) is
+      # open. Absent -> the run says so out loud instead of leaving PyPI
+      # silently one version behind (AG-026).
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -137,3 +143,43 @@ jobs:
 
           echo "published $TAG"
           ls -l dist/
+
+      # ``uses: Sanflow10/adversary-gate@v2`` needs a ref that follows the
+      # newest 2.x. Only ever moved *forward*: re-releasing an old version must
+      # not drag the floating tag back onto it, so it moves only when ``TAG`` is
+      # the highest version that shares its major.
+      #
+      # Pushed with the workflow's own token, so -- like the release tag -- it
+      # does not start other workflows.
+      - name: Move the floating major tag
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          MAJOR="${TAG%%.*}"                       # v2.1.1 -> v2
+          git fetch --force --tags origin
+          NEWEST="$(git tag --list "${MAJOR}.*" | sort -V | tail -n 1)"
+
+          if [ "$NEWEST" != "$TAG" ]; then
+            echo "::notice::$TAG is not the newest ${MAJOR}.x ($NEWEST is); leaving $MAJOR where it is"
+            exit 0
+          fi
+
+          git tag --force "$MAJOR" "refs/tags/${TAG}^{commit}"
+          git push --force origin "refs/tags/$MAJOR"
+          echo "$MAJOR now points at $TAG ($(git rev-parse --short "refs/tags/${TAG}^{commit}"))"
+
+      - name: Publish to PyPI (API-token route)
+        if: env.PYPI_API_TOKEN != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ env.PYPI_API_TOKEN }}
+          # Idempotent on re-run: the release step above refuses a second
+          # release of the same tag, so only this step can be repeated.
+          skip-existing: true
+
+      - name: Say what was not published
+        if: env.PYPI_API_TOKEN == ''
+        run: |
+          echo "::warning title=PyPI was NOT updated::No PYPI_API_TOKEN secret is set, so 'pip install adversary-gate' still serves the previous version. Add the secret and re-run this workflow, or register the Trusted Publisher (AG-008)."

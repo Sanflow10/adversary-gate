@@ -12,6 +12,11 @@ leitura quando dava para executar. Cada achado novo traz o comando que o
 reproduz. Os dois pontos que só puderam ser verificados por leitura (porque
 exigem um runner do GitHub) estão marcados como tal.
 
+> **Status das correções:** este relatório é um retrato de `3cc103c` e não é
+> reescrito. O que foi corrigido depois, e o que continua aberto, está em
+> [`ERRORS_AND_INCONSISTENCIES.md` §10](../ERRORS_AND_INCONSISTENCIES.md) —
+> hoje: AG-021 (mínima), AG-022, AG-028 corrigidos; AG-026 parcial.
+
 ---
 
 ## Parecer executivo

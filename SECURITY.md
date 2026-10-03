@@ -61,13 +61,23 @@ them produces a `MERGE` it should not:
 
 ## Reporting a vulnerability
 
-Open a **GitHub Security Advisory** on this repository
-(*Security* → *Report a vulnerability*). That route is private — the report
+Open a **GitHub Security Advisory** on this repository:
+<https://github.com/Sanflow10/adversary-gate/security/advisories/new>
+(or *Security* → *Report a vulnerability*). That route is private — the report
 reaches the maintainers and nobody else, which is what you want for something
 that could be exploited before a fix exists.
 
-If that is unavailable, email the maintainers through the address in
-`pyproject.toml` with the subject line `[SECURITY]`.
+**If that page is unavailable to you**, open a public issue titled
+`[SECURITY] please contact me` with **no technical detail** — no commands, no
+inputs, no description of the flaw, not even which component. Say only that you
+have a report and how a maintainer can reach you privately. A maintainer will
+move the conversation to a private channel before anything technical is said,
+and the issue is closed once that has happened.
+
+There is deliberately no email address in this policy. An address that is not
+monitored is worse than none — it looks like a route and drops the report — and
+`pyproject.toml` does not carry one either. When a monitored address exists it
+will be added here and to the package metadata together.
 
 Please include:
 
