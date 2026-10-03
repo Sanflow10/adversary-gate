@@ -1,5 +1,21 @@
 name: Publish to PyPI
 
+# Two ways in, one way out to PyPI:
+#
+#   push of a vX.Y.Z tag  -> publishes that tag (a tag pushed by hand).
+#   Run workflow + tag    -> publishes a tag that already exists. This is the
+#                            route for a release the Release workflow made: its
+#                            tag is created by the workflow token, and events
+#                            from that token never start this workflow.
+#
+# Authentication, in this order:
+#
+#   PYPI_API_TOKEN secret -> used when it exists.
+#   Trusted Publishing    -> used otherwise. Needs the publisher registered on
+#                            pypi.org (AG-008): owner Sanflow10, repository
+#                            adversary-gate, workflow pypi-publish.yml, no
+#                            environment.
+
 on:
   push:
     tags:
@@ -7,6 +23,11 @@ on:
       # Release workflow now maintains, which would have started a publish run
       # for a version that is not a release.
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish, e.g. v2.2.0'
+        required: true
 
 jobs:
   pypi-publish:
@@ -17,12 +38,44 @@ jobs:
       contents: read
 
     steps:
+      # The input is only ever read from the environment, never spliced into a
+      # script, so a value with quotes in it is data and not code.
+      - name: Resolve the tag to publish
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSHED_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="$PUSHED_TAG"; fi
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$TAG' is not a release tag of the form vX.Y.Z"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Build from the tag's tree, never from whatever the branch holds now:
+      # the files on PyPI have to be the files the tag names.
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: The tag and the package name the same version
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "v$VERSION" != "$TAG" ]; then
+            echo "::error::tag $TAG carries version $VERSION in pyproject.toml"
+            exit 1
+          fi
 
       - name: Install build dependencies
         run: python -m pip install build
@@ -33,5 +86,8 @@ jobs:
       - name: Build binary wheel and source distribution
         run: python -m build
 
+      # An empty password makes the action use Trusted Publishing.
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

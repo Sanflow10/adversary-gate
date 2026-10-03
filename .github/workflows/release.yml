@@ -182,4 +182,4 @@ jobs:
       - name: Say what was not published
         if: env.PYPI_API_TOKEN == ''
         run: |
-          echo "::warning title=PyPI was NOT updated::No PYPI_API_TOKEN secret is set, so 'pip install adversary-gate' still serves the previous version. Add the secret and re-run this workflow, or register the Trusted Publisher (AG-008)."
+          echo "::warning title=PyPI was NOT updated::No PYPI_API_TOKEN secret is set, so 'pip install adversary-gate' still serves the previous version. Publish this release with Actions -> Publish to PyPI -> Run workflow, tag ${{ steps.ref.outputs.tag }}. Re-running this workflow does not work: the release already exists."
