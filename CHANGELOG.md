@@ -11,28 +11,51 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0` e esta `v2.1.1`**. O
-AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
+Estado das tags hoje: **`v2.0.0`, `v2.0.1` e `v2.1.0`**. A `2.1.1` chegou a ter
+seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
+`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.2.0` é
+publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
+partir do commit que a contém — se `v2.2.0` não aparece em *Releases*, o
+workflow ainda não rodou, e esta seção ainda é uma promessa.
+
+O AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
 pypi.org não conhece o repositório — `invalid-publisher: valid token, but no
 corresponding publisher` — enquanto o passo `Build binary wheel and source
 distribution` passa em toda execução. Ele só fecha quando alguém com acesso ao
 PyPI registrar o publisher (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
 sem environment) na página do projeto, e isso não se faz daqui.
 
-Por isso as duas últimas saíram por rotas manuais: **`2.1.0` por upload com
-API token** (a mesma rota de `2.0.0` e `2.0.1`, e não por OIDC) e **`2.1.1`
-como GitHub Release**, sem subir nada ao PyPI — daí o PyPI continuar servindo
-`2.1.0`, que **ainda contém o AG-018**. `2.0.2` não virou release: o trabalho
-dela entrou na `2.1.0`.
+Rotas de publicação até aqui: `2.0.0`, `2.0.1` e `2.1.0` subiram ao PyPI **por
+upload com API token**, não por OIDC. A partir da `2.2.0` o workflow Release
+envia ao PyPI sozinho quando o segredo `PYPI_API_TOKEN` existe, e avisa na run
+quando não existe. Enquanto o PyPI estiver em `2.1.0`, ele **ainda contém o
+AG-018, o AG-021 e o AG-022** — confira com `pip index versions adversary-gate`.
 
 ---
 
 ## [Unreleased]
 
-Achados da [auditoria de produto de 2026-10-03](docs/AUDITORIA_PRODUTO_v2.1.1.md).
-A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
-correspondente é uma promessa de artefato que não existe, e o bump só acontece
-quando esta seção vira uma com versão e data.
+Sem entradas. A seção fica aqui de propósito e sem número: uma versão no
+`pyproject.toml` sem tag correspondente é uma promessa de artefato que não
+existe, e o bump só acontece quando esta seção vira uma com versão e data.
+
+---
+
+## [2.2.0] — 2026-10-03
+
+Tudo o que saiu de `v2.1.0`: os achados da
+[auditoria de produto de 2026-10-03](docs/AUDITORIA_PRODUTO_v2.1.1.md) e as
+correções que estavam na seção `[2.1.1]`. Aquela seção foi fundida aqui porque
+descrevia uma GitHub Release que nunca foi publicada — não há tag `v2.1.1` — e
+este arquivo não pode descrever versões que nunca existiram.
+
+**Minor, e não patch:** o artefato ganhou campos (`test_lines_excluded`,
+`test_files_excluded`) e três situações mudam de decisão — ver *Comportamento
+que muda*, abaixo, antes de atualizar.
+
+```bash
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.2.0/adversary_gate-2.2.0-py3-none-any.whl
+```
 
 ### Corrigido
 
@@ -63,6 +86,23 @@ quando esta seção vira uma com versão e data.
   pública *sem nenhum detalhe técnico*, que só pede um canal privado. Não há
   e-mail na política de propósito, e um teste impede que ela volte a apontar para
   um que não existe.
+- **AG-018 — patch misto modificado+deletado já não chega a `MERGE`.** Um
+  arquivo deletado não tem linhas para mutar, não gerava mutante e não baixava
+  a força de teste — então passava em silêncio por baixo da nota do arquivo que
+  sobrou. Reproduzido por terceiro e confirmado aqui (`exit 0` / `merge` com
+  `deleted_files: ["gone.py"]` gravado no próprio artefato), agora
+  `deleted_files` não-vazio levanta `suite_strength_unverified` e a decisão é
+  `INCONCLUSIVE`. O `suite_strength` segue sendo reportado: o número continua
+  verdadeiro sobre o que mediu, só deixa de autorizar o patch inteiro. É a
+  terceira instância da mesma classe de AG-001 (deleção fora de `changed_files`)
+  e AG-012/AG-013 (fonte fora do motor de mutação).
+- **AG-019 — o artefato de diff não depende mais da cor do git de quem chama.**
+  `prepare_evidence.sh` gravava `git diff` sem `--no-color`, e o teste o lê com
+  `grep`: com `color.ui = always` no ambiente o diff continuava correto, mas o
+  teste deixava de enxergar a linha adicionada e falhava (`exit 1`). A CI verde
+  não desmentia, porque o runner não impõe a cor — o teste passava por acidente
+  de ambiente. Corrigido, com regressão no próprio script que força a cor via
+  `GIT_CONFIG_COUNT`.
 
 ### Alterado
 
@@ -87,39 +127,6 @@ Três situações que antes davam `MERGE` (ou um ratio diferente) agora dão
    o ratio, que antes era inflado por testes, pode cair abaixo do piso.
 
 `INCONCLUSIVE` não é erro: é o gate dizendo que a revisão humana decide.
-
----
-
-## [2.1.1] — 2026-10-01
-
-Publicada como **GitHub Release**, e não como release do PyPI — o AG-008
-continua aberto, então não existe rota automatizada de upload. **O PyPI segue
-em `2.1.0`, que ainda contém o AG-018**; quem quer esta correção instala a roda
-da Release:
-
-```bash
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.1/adversary_gate-2.1.1-py3-none-any.whl
-```
-
-### Corrigido
-
-- **AG-018 — patch misto modificado+deletado já não chega a `MERGE`.** Um
-  arquivo deletado não tem linhas para mutar, não gerava mutante e não baixava
-  a força de teste — então passava em silêncio por baixo da nota do arquivo que
-  sobrou. Reproduzido por terceiro e confirmado aqui (`exit 0` / `merge` com
-  `deleted_files: ["gone.py"]` gravado no próprio artefato), agora
-  `deleted_files` não-vazio levanta `suite_strength_unverified` e a decisão é
-  `INCONCLUSIVE`. O `suite_strength` segue sendo reportado: o número continua
-  verdadeiro sobre o que mediu, só deixa de autorizar o patch inteiro. É a
-  terceira instância da mesma classe de AG-001 (deleção fora de `changed_files`)
-  e AG-012/AG-013 (fonte fora do motor de mutação).
-- **AG-019 — o artefato de diff não depende mais da cor do git de quem chama.**
-  `prepare_evidence.sh` gravava `git diff` sem `--no-color`, e o teste o lê com
-  `grep`: com `color.ui = always` no ambiente o diff continuava correto, mas o
-  teste deixava de enxergar a linha adicionada e falhava (`exit 1`). A CI verde
-  não desmentia, porque o runner não impõe a cor — o teste passava por acidente
-  de ambiente. Corrigido, com regressão no próprio script que força a cor via
-  `GIT_CONFIG_COUNT`.
 
 ---
 
@@ -322,12 +329,15 @@ Porque a disciplina semver só vale se o procedimento for explícito:
    subiu por token — é assim que fica registrada, e não como uma release
    publicada pelo workflow.
 
-   **A rota da GitHub Release — a de `2.1.1` — não tem este custo.** O
+   **A rota do workflow Release não tem este custo.** O
    `release.yml` é `workflow_dispatch`: a tag é criada pelo `GITHUB_TOKEN` do
    próprio workflow, e eventos que esse token produz **não** disparam outros
    workflows, então `pypi-publish.yml` não roda e nenhuma run vermelha nasce.
    Por isso os passos 5 e 6 valem para tag empurrada à mão; no fluxo do Release
    a tag é *consequência* do Run, não pré-requisito dele.
+   Com o segredo `PYPI_API_TOKEN` configurado, o mesmo Run também envia ao
+   PyPI; sem ele, a run termina com um aviso dizendo que o PyPI não foi
+   atualizado.
 
 **Não** bumpar a versão com mudanças soltas em `main`: uma versão no
 `pyproject.toml` sem tag correspondente é uma promessa de artefato que não
