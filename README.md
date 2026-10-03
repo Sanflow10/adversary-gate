@@ -1,4 +1,4 @@
-# AdversaryGate (v2.1.1)
+# AdversaryGate (v2.2.0)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -281,11 +281,13 @@ Until it exists the honest answer for a non-Python repo stays
 pip install adversary-gate
 ```
 
-That installs **`2.1.0`** from PyPI — every fix in this document **except
-AG-018**, which is fixed in `2.1.1`. `2.1.1` ships as a GitHub Release rather
-than to PyPI, because AG-008 (Trusted Publishing) is still open and there is no
-automated route to upload it. Every other route works too, and **none of them
-needs PyPI**:
+Check what PyPI is serving before you trust it — `pip index versions
+adversary-gate`. Anything **below `2.2.0` is missing the fixes for AG-018,
+AG-021 and AG-022**, two of which are fail-opens (a patch reaching `MERGE` it
+should not). PyPI only gets a release when the Release workflow has a
+`PYPI_API_TOKEN` secret or the Trusted Publisher is registered (AG-008); the
+GitHub Release below always gets it. Every other route works too, and **none of
+them needs PyPI**:
 
 ```bash
 # straight from the repository
@@ -309,8 +311,8 @@ python3 src/cli.py --help
 | `git clone` + `pip install .` | `main` | git |
 | `python3 src/cli.py --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **2.1.1** — every fix | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | **2.1.0** — all but AG-018 | network |
+| GitHub Release wheel (below) | **2.2.0** — every fix | nothing but `pip` |
+| `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
 
@@ -318,19 +320,21 @@ python3 src/cli.py --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- 2.1.0: every fix in this document except AG-018
-pip install adversary-gate==2.1.0
+# PyPI -- only once 2.2.0 is there; 2.1.0 still has AG-018, AG-021 and AG-022
+pip install adversary-gate==2.2.0
 ```
 
 ```bash
-# GitHub Release -- 2.1.1: every fix, AG-018 included.
+# GitHub Release -- 2.2.0: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.1.1/adversary_gate-2.1.1-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.2.0/adversary_gate-2.2.0-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v2.1.1` has not been published yet. Releases are published from
+Release for `v2.2.0` has not been published yet. (There is no `v2.1.1`: that
+version was written up and never released; its fixes are in `2.2.0`.) Releases
+are published from
 **Actions → Release → Run workflow**. That workflow:
 
 1. runs the full test suite and **refuses to publish if it fails** — a release
@@ -464,9 +468,10 @@ jobs:
           evidence-log: 'evidence.jsonl'
 ```
 
-> **Which ref?** There is no floating `v2` tag *yet* — the Release workflow creates it on its next run. `v2.1.1` carries every fix;
-> `v2.1.0` carries all but AG-018; `v2.0.0` and `v2.0.1` point at the audited
-> version with the bugs. `@main` follows `main` and picks up whatever lands
+> **Which ref?** `v2.2.0` carries every fix, and the Release workflow that
+> publishes it also creates the floating `v2` tag, which then follows every 2.x
+> release. `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
+> at the audited version with the bugs. `@main` follows `main` and picks up whatever lands
 > next. For
 > anything that matters, pin the full commit SHA instead
 > (`uses: Sanflow10/adversary-gate@<full-sha>`), which cannot be moved under
