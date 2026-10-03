@@ -350,6 +350,12 @@ are published from
    a `PYPI_API_TOKEN` secret exists. Without that secret it says, as a
    warning in the run, that PyPI was **not** updated.
 
+To send a release that already exists to PyPI, use **Actions → Publish to PyPI
+→ Run workflow** and give it the tag (`v2.2.0`). It builds from that tag's
+tree, refuses a tag whose `pyproject.toml` names another version, and
+authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
+Publishing when it does not.
+
 It is triggered by hand rather than by a `v*` tag on purpose: the tag is made
 by the workflow's own token, and events that token produces do not start other
 workflows — so releasing does **not** fire the PyPI publisher and leave a red
@@ -380,8 +386,9 @@ step of `pypi-publish.yml` has failed on every tag pushed so far — `v2.0.0`,
 passes every time. Registering it takes the PyPI project's own Publishing page
 (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no environment) and cannot
 be done from this repository. Until that happens a `v*` tag builds the
-distributions and then dies at upload, and a release has to be sent by some
-other route.
+distributions and then dies at upload, unless a `PYPI_API_TOKEN` secret is set:
+**Publish to PyPI** uses the token when it exists and Trusted Publishing when it
+does not.
 
 ---
 

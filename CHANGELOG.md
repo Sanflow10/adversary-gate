@@ -35,9 +35,22 @@ AG-018, o AG-021 e o AG-022** — confira com `pip index versions adversary-gate
 
 ## [Unreleased]
 
-Sem entradas. A seção fica aqui de propósito e sem número: uma versão no
-`pyproject.toml` sem tag correspondente é uma promessa de artefato que não
-existe, e o bump só acontece quando esta seção vira uma com versão e data.
+A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
+correspondente é uma promessa de artefato que não existe, e o bump só acontece
+quando esta seção vira uma com versão e data.
+
+### Alterado
+
+- **Publicar no PyPI uma release que já existe.** O `pypi-publish.yml` ganhou
+  *Run workflow* com a tag como entrada. A `2.2.0` saiu como GitHub Release, mas
+  a tag foi criada pelo token do próprio workflow Release, e eventos desse
+  token não disparam outros workflows. Sem este caminho, a única saída era
+  refazer a Release, o que o Release recusa. O workflow constrói a partir da
+  árvore da tag, recusa uma tag cujo `pyproject.toml` diga outra versão, e
+  autentica com `PYPI_API_TOKEN` quando o segredo existe ou por Trusted
+  Publishing quando não existe.
+- O aviso do Release quando falta o token deixou de mandar "rodar este workflow
+  de novo", o que falharia. Agora aponta para o *Publish to PyPI*.
 
 ---
 
@@ -345,7 +358,8 @@ Porque a disciplina semver só vale se o procedimento for explícito:
    a tag é *consequência* do Run, não pré-requisito dele.
    Com o segredo `PYPI_API_TOKEN` configurado, o mesmo Run também envia ao
    PyPI; sem ele, a run termina com um aviso dizendo que o PyPI não foi
-   atualizado.
+   atualizado. Para mandar ao PyPI uma release que já existe: *Actions →
+   Publish to PyPI → Run workflow*, com a tag.
 
 **Não** bumpar a versão com mudanças soltas em `main`: uma versão no
 `pyproject.toml` sem tag correspondente é uma promessa de artefato que não
