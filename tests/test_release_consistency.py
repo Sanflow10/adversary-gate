@@ -1,0 +1,47 @@
+"""One version, everywhere it is written.
+
+``CHANGELOG.md`` -> *Como cortar uma release*, step 3: ``pyproject.toml``,
+``README.md:1`` and the ``demo/demo.py`` banner carry the same version, and
+"um destes divergindo é o defeito que a auditoria já apontou". Until now that
+was a checklist item. A checklist item is a promise; this is the measurement.
+"""
+
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _pyproject_version() -> str:
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', (ROOT / "pyproject.toml").read_text())
+    assert match, "pyproject.toml has no version"
+    return match.group(1)
+
+
+class TestOneVersion(unittest.TestCase):
+    def setUp(self):
+        self.version = _pyproject_version()
+
+    def test_readme_title(self):
+        first = (ROOT / "README.md").read_text().splitlines()[0]
+        self.assertEqual(first, f"# AdversaryGate (v{self.version})")
+
+    def test_demo_banner(self):
+        demo = (ROOT / "demo" / "demo.py").read_text()
+        banners = re.findall(r"AdversaryGate v([0-9][^ ]*) — demonstração ao vivo", demo)
+        self.assertTrue(banners, "demo/demo.py has no version banner")
+        self.assertEqual(set(banners), {self.version})
+
+    def test_newest_changelog_section(self):
+        """The first numbered section is the version being shipped -- not an older one."""
+        changelog = (ROOT / "CHANGELOG.md").read_text()
+        sections = re.findall(r"(?m)^## \[(\d+\.\d+\.\d+)\]", changelog)
+        self.assertTrue(sections, "CHANGELOG.md has no numbered section")
+        self.assertEqual(sections[0], self.version)
+
+
+if __name__ == "__main__":
+    unittest.main()
