@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AdversaryGate</title>
+<meta name="description" content="A fail-closed merge gate for AI coding agents. It answers MERGE, BLOCK or INCONCLUSIVE, and never turns a missing measurement into a green check.">
+<meta property="og:title" content="AdversaryGate: no evidence, no merge">
+<meta property="og:description" content="A fail-closed merge gate for AI coding agents. When it could not measure something, it says INCONCLUSIVE.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#F5F6F8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0F1216" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 29 16 16 29 3 16Z' fill='none' stroke='%23B07209' stroke-width='3'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one 1120px column; the hero pairs the claim with a real decision record from the demo. */
+:root {
+  --paper: #F5F6F8;
+  --surface: #FFFFFF;
+  --ink: #141820;
+  --muted: #535C69;
+  --rule: #D8DCE2;
+  --amber: #8F5A00;
+  --amber-tint: #FBF1DF;
+  --green: #1B6E45;
+  --red: #A8261B;
+  --code: #EEF0F3;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0F1216;
+    --surface: #161A20;
+    --ink: #E7EAEE;
+    --muted: #9AA3AF;
+    --rule: #2A3038;
+    --amber: #E8A949;
+    --amber-tint: #2A2112;
+    --green: #5BC98F;
+    --red: #F27C70;
+    --code: #1B2027;
+    color-scheme: dark;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 17px/1.6 var(--body);
+}
+img { max-width: 100%; }
+a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 3px; }
+code, pre, .mono { font-family: var(--mono); }
+code { font-size: 0.9em; background: var(--code); padding: 0.1em 0.35em; border-radius: 4px; }
+
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 20px; }
+.skip { position: absolute; left: -9999px; }
+.skip:focus { left: 20px; top: 12px; background: var(--surface); padding: 8px 12px; z-index: 2; }
+
+/* header */
+.top { border-bottom: 1px solid var(--rule); }
+.top .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding-block: 16px; }
+.brand { display: flex; align-items: center; gap: 10px; font: 700 20px/1 var(--display); letter-spacing: 0.01em; text-decoration: none; }
+.brand svg { flex: none; }
+.ver { font: 500 12px/1 var(--mono); color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 4px 8px; }
+.top nav { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 15px; }
+.top nav a { text-decoration: none; color: var(--muted); }
+.top nav a:hover { color: var(--ink); text-decoration: underline; }
+
+/* hero */
+.hero { padding-block: 72px 56px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.eyebrow { font: 500 13px/1.2 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--amber); margin: 0 0 16px; }
+h1 { font: 700 clamp(2.6rem, 6.4vw, 4.4rem)/1.02 var(--display); letter-spacing: -0.01em; margin: 0 0 24px; text-wrap: balance; }
+.lead { font-size: 19px; max-width: 34em; margin: 0 0 32px; }
+.lead strong { font-weight: 600; }
+.ctas { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.btn { display: inline-block; font: 600 16px/1 var(--body); padding: 14px 20px; border-radius: 8px; text-decoration: none; border: 1.5px solid var(--ink); }
+.btn.primary { background: var(--ink); color: var(--paper); }
+.btn.primary:hover { background: transparent; color: var(--ink); }
+.btn.ghost:hover { background: var(--surface); }
+.fine { margin: 20px 0 0; font-size: 14px; color: var(--muted); }
+
+/* decision record */
+.record { background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; }
+.record header { display: flex; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--rule); font: 500 12px/1.3 var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.row { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--rule); align-items: start; }
+.row:last-of-type { border-bottom: 0; }
+.row.focus { background: var(--amber-tint); }
+.row h3 { margin: 0 0 4px; font: 600 16px/1.35 var(--body); }
+.row p { margin: 0; font: 400 13px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.verdict { display: grid; gap: 6px; justify-items: start; }
+.stamp { display: inline-block; font: 500 12px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; border: 1.5px solid currentColor; border-radius: 4px; padding: 5px 8px; }
+.stamp.merge { color: var(--green); }
+.stamp.block { color: var(--red); }
+.stamp.inconclusive { color: var(--amber); }
+.exit { font: 400 12px/1 var(--mono); color: var(--muted); }
+.record footer { padding: 14px 20px; border-top: 1px solid var(--rule); font-size: 14px; color: var(--muted); }
+.record footer strong { color: var(--ink); font-weight: 600; }
+
+/* sections */
+section { padding-block: 64px; border-top: 1px solid var(--rule); }
+h2 { font: 600 clamp(1.7rem, 3.4vw, 2.4rem)/1.12 var(--display); margin: 0 0 16px; max-width: 24em; text-wrap: balance; }
+.intro { max-width: 40em; margin: 0 0 32px; color: var(--ink); }
+.intro + .intro { margin-top: -16px; }
+.source { font-size: 14px; color: var(--muted); }
+
+.traps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.traps li { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px; display: grid; gap: 12px; align-content: start; }
+.traps h3 { margin: 0; font: 600 17px/1.35 var(--body); }
+.traps p { margin: 0; font-size: 15px; color: var(--muted); }
+.answer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+
+.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 48px; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); gap: 4px 12px; align-content: start; }
+.steps li::before { content: counter(step, decimal-leading-zero); font: 500 15px/1.6 var(--mono); color: var(--amber); grid-row: span 2; }
+.steps h3 { margin: 0; font: 600 18px/1.4 var(--body); }
+.steps p { margin: 0; color: var(--muted); }
+.rule-box { margin-top: 40px; border-left: 3px solid var(--amber); padding: 4px 0 4px 20px; max-width: 46em; }
+.rule-box strong { font-weight: 600; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 15px; }
+th, td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 500 12px/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+td.num { font: 500 20px/1.2 var(--mono); font-variant-numeric: tabular-nums; width: 4.5rem; }
+.note { margin: 16px 0 0; font-size: 15px; color: var(--muted); }
+
+.install { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.install > div { min-width: 0; }
+.install h3 { margin: 0; font: 600 18px/1.4 var(--body); }
+.snippet-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; }
+pre { margin: 0; background: var(--code); border: 1px solid var(--rule); border-radius: 10px; padding: 18px 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.copy { font: 500 12px/1 var(--mono); color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 6px 9px; cursor: pointer; }
+.copy:hover { border-color: var(--ink); }
+.install .note { margin-top: 12px; }
+
+.ledger { list-style: none; margin: 0 0 24px; padding: 0; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+.ledger li { display: grid; grid-template-columns: 5rem 9rem minmax(0, 1fr); gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.ledger li:last-child { border-bottom: 0; }
+.ledger p { margin: 0; }
+.id { font: 500 14px/1.4 var(--mono); }
+.status { font: 400 13px/1.4 var(--mono); color: var(--green); }
+.status.open { color: var(--amber); }
+.links { display: flex; flex-wrap: wrap; gap: 12px 28px; font-weight: 500; }
+
+.limits { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; max-width: 46em; }
+.limits li { padding-left: 20px; position: relative; }
+.limits li::before { content: ""; position: absolute; left: 0; top: 0.72em; width: 8px; height: 8px; border: 1.5px solid var(--muted); transform: rotate(45deg); }
+.limits strong { font-weight: 600; }
+
+.foot { border-top: 1px solid var(--rule); padding-block: 32px 48px; font-size: 14px; color: var(--muted); }
+.foot .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
+.foot nav { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+
+@media (max-width: 860px) {
+  .hero { grid-template-columns: minmax(0, 1fr); padding-block: 48px 40px; gap: 40px; }
+  .traps, .steps, .install { grid-template-columns: minmax(0, 1fr); }
+  section { padding-block: 48px; }
+}
+@media (max-width: 520px) {
+  body { font-size: 16px; }
+  .lead { font-size: 17px; }
+  .row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .verdict { grid-auto-flow: column; justify-content: start; align-items: center; gap: 10px; }
+  .ledger li { grid-template-columns: 4.5rem minmax(0, 1fr); }
+  .ledger li p { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#main" aria-label="AdversaryGate, top of page">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 29 16 16 29 3 16Z" fill="none" stroke="currentColor" stroke-width="3"/></svg>
+      AdversaryGate
+      <span class="ver" data-version>v2.2.0</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#install">Install</a>
+      <a href="#findings">Findings</a>
+      <a href="https://github.com/Sanflow10/adversary-gate">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="wrap hero">
+    <div>
+      <p class="eyebrow">Merge gate for AI coding agents</p>
+      <h1>No evidence, no merge.</h1>
+      <p class="lead">AdversaryGate runs your tests on the code before and after an agent's patch, measures what the patch changed, and answers with one of three decisions. When it could not measure something, the answer is <strong>INCONCLUSIVE</strong>. A missing measurement never becomes a green check.</p>
+      <div class="ctas">
+        <a class="btn primary" href="#install">Get started</a>
+        <a class="btn ghost" href="https://github.com/Sanflow10/adversary-gate">View on GitHub</a>
+      </div>
+      <p class="fine">Open source, MIT licensed. Python 3.10 or newer.</p>
+    </div>
+
+    <figure class="record" style="margin:0" aria-label="Three decisions from the acceptance demo">
+      <header><span>decision record</span><span>demo/demo.py</span></header>
+      <div class="row">
+        <div class="verdict"><span class="stamp block">Block</span><span class="exit">exit 1</span></div>
+        <div><h3>The patch breaks a passing test</h3><p>baseline pass, patch fail · full suite [0, 1]</p></div>
+      </div>
+      <div class="row focus">
+        <div class="verdict"><span class="stamp inconclusive">Inconclusive</span><span class="exit">exit 2</span></div>
+        <div><h3>A clean patch, coverage never measured</h3><p>diff_coverage_source: none · ratio: null</p></div>
+      </div>
+      <div class="row">
+        <div class="verdict"><span class="stamp merge">Merge</span><span class="exit">exit 0</span></div>
+        <div><h3>The same patch, with evidence</h3><p>coverage 1.0 computed · mutation score 1.0 · inputs SHA-256'd</p></div>
+      </div>
+      <footer><strong>The last two rows are the same patch.</strong> Same code, same test, same run. Only the evidence differs. This is the output of the demo, which runs as an acceptance test in CI.</footer>
+    </figure>
+  </div>
+
+  <section aria-labelledby="problem-title">
+    <div class="wrap">
+      <h2 id="problem-title">“Almost right” is the expensive kind of wrong</h2>
+      <p class="intro">In Stack Overflow's 2025 Developer Survey, 66% of developers named “AI solutions that are almost right, but not quite” as a frustration. <a class="source" href="https://survey.stackoverflow.co/2025/ai">Source</a></p>
+      <p class="intro">A pipeline makes it worse when every failure looks the same. Here are four ways a patch can look verified when it is not, and what the gate answers.</p>
+      <ul class="traps">
+        <li>
+          <h3>The test never ran</h3>
+          <p>An import error or a wrong test ID exits non-zero on both sides, which a simple before/after comparison reads as “nothing changed”.</p>
+          <div class="answer"><span class="stamp inconclusive">Inconclusive</span> the run did not happen, so it proves nothing</div>
+        </li>
+        <li>
+          <h3>Coverage was never measured</h3>
+          <p>A coverage floor fed by a default value or a number someone typed is cleared on every run.</p>
+          <div class="answer"><span class="stamp inconclusive">Inconclusive</span> only a diff plus a coverage report counts</div>
+        </li>
+        <li>
+          <h3>The patch rewrote its own test</h3>
+          <p>The code gets a bug and the assertion is changed to agree with it. Both sides pass.</p>
+          <div class="answer"><span class="stamp inconclusive">Inconclusive</span> a test the patch changed is not evidence</div>
+        </li>
+        <li>
+          <h3>The change is in code the tests can't break</h3>
+          <p>A patch changes C++ or SQL, or deletes a file, and the Python test that passes never touches that code.</p>
+          <div class="answer"><span class="stamp inconclusive">Inconclusive</span> source it cannot judge is never waved through</div>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="how" aria-labelledby="how-title">
+    <div class="wrap">
+      <h2 id="how-title">Four measurements, one decision</h2>
+      <p class="intro">No language model runs inside the verifier. The rules are plain code, and they are the same whichever agent wrote the patch.</p>
+      <ol class="steps">
+        <li>
+          <h3>Runs the same test on both sides</h3>
+          <p>The claim's test runs on the baseline and on the patch, three times each. Exit codes are read one by one: only a real test failure counts as evidence. Import errors, missing tests and timeouts are unverified.</p>
+        </li>
+        <li>
+          <h3>Measures diff coverage from artefacts</h3>
+          <p>Computed from your unified diff and the coverage.py JSON report, with test files left out. Both inputs are recorded by SHA-256, so anyone can recompute the number.</p>
+        </li>
+        <li>
+          <h3>Breaks the lines the patch wrote</h3>
+          <p>Mutation testing on the changed lines only. If the test still passes with that code broken, it is too weak to vouch for the patch.</p>
+        </li>
+        <li>
+          <h3>Re-runs the full suite on both sides</h3>
+          <p>If the full suite passed on the baseline and fails on the patch, that is a collateral regression, and the answer is BLOCK.</p>
+        </li>
+      </ol>
+      <p class="rule-box"><strong>The patch can't grade itself.</strong> If it changed the test that serves as evidence, a passing run no longer counts as verified. A rewritten test that still fails is kept as evidence against the patch.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="exit-title">
+    <div class="wrap">
+      <h2 id="exit-title">Exit codes your CI can branch on</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th scope="col">Exit</th><th scope="col">Decision</th><th scope="col">When</th></tr></thead>
+          <tbody>
+            <tr><td class="num">0</td><td><span class="stamp merge">Merge</span></td><td>Every claim verified, diff coverage at least 80%, a mutation score of at least 75% when source changed, and the full suite still passes.</td></tr>
+            <tr><td class="num">1</td><td><span class="stamp block">Block</span></td><td>The claim's test passed on the baseline and fails on the patch, or the full suite did.</td></tr>
+            <tr><td class="num">2</td><td><span class="stamp inconclusive">Inconclusive</span></td><td>Something could not be measured: a harness error, no coverage evidence, a weak or unmeasured suite, or a rewritten test.</td></tr>
+            <tr><td class="num">3</td><td><span class="mono">usage error</span></td><td>Bad arguments or inputs, such as a coverage number with no evidence behind it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Evidence of breakage outranks missing evidence: BLOCK beats INCONCLUSIVE, which beats MERGE. Both floors are flags you can change.</p>
+    </div>
+  </section>
+
+  <section id="install" aria-labelledby="install-title">
+    <div class="wrap">
+      <h2 id="install-title">Add it to a pull request</h2>
+      <p class="intro">With <code>base-sha</code>, the Action builds the baseline, the diff and the coverage report itself. You name the test that has to hold.</p>
+      <div class="install">
+        <div>
+          <div class="snippet-head">
+            <h3>GitHub Action</h3>
+            <button class="copy" type="button" data-copy="action" aria-label="Copy the workflow">Copy</button>
+          </div>
+          <pre><code id="action">name: Verification gate
+on: [pull_request]
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: Sanflow10/adversary-gate@v2.2.0
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          test-path: tests/test_auth.py
+          test-id: test_token_expiry</code></pre>
+          <p class="note"><code>fetch-depth: 0</code> is required: the base commit has to be in the checkout's history.</p>
+        </div>
+        <div>
+          <div class="snippet-head">
+            <h3>Command line</h3>
+            <button class="copy" type="button" data-copy="cli" aria-label="Copy the commands">Copy</button>
+          </div>
+          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.2.0"
+
+adversary-gate \
+  --baseline ./before --patch ./after \
+  --test-path tests/test_auth.py \
+  --test-id test_token_expiry \
+  --diff changes.diff \
+  --coverage-json coverage.json</code></pre>
+          <p class="note">To see all three decisions first, clone the repository and run <code>python3 demo/demo.py</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="findings" aria-labelledby="findings-title">
+    <div class="wrap">
+      <h2 id="findings-title">Every bug in the gate is published</h2>
+      <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-031 are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
+      <ul class="ledger">
+        <li><span class="id">AG-021</span><span class="status">fixed in 2.2.0</span><p>A patch rewrote the claim's test to agree with its own bug and got MERGE, exit 0. It now ends INCONCLUSIVE.</p></li>
+        <li><span class="id">AG-022</span><span class="status">fixed in 2.2.0</span><p>Added test lines inflated diff coverage: zero of ten source lines covered still measured 0.8.</p></li>
+        <li><span class="id">AG-012</span><span class="status">fixed in 2.1.0</span><p>A patch that only changed C++ reached MERGE on a Python test. Source the gate cannot judge now forces INCONCLUSIVE.</p></li>
+        <li><span class="id">AG-024</span><span class="status open">open</span><p>Resource limits are fixed at 30 seconds and 512 MB per run, so long suites end INCONCLUSIVE.</p></li>
+      </ul>
+      <div class="links">
+        <a href="https://github.com/Sanflow10/adversary-gate/blob/main/ERRORS_AND_INCONSISTENCIES.md">Read the full findings ledger</a>
+        <a href="https://github.com/Sanflow10/adversary-gate/security/advisories/new">Report a fail-open privately</a>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="limits-title">
+    <div class="wrap">
+      <h2 id="limits-title">What it does not do</h2>
+      <ul class="limits">
+        <li><strong>Measure languages other than Python.</strong> A C++, Rust or SQL change gets INCONCLUSIVE, never a false MERGE. <code>--test-command</code> can run another language's suite through a script that sets up its environment, so a real BLOCK is still possible there.</li>
+        <li><strong>Check more than one test per run.</strong> Each run verifies one claim.</li>
+        <li><strong>Contain hostile code.</strong> Resource limits and the optional bubblewrap mode contain accidents, not attacks. Run untrusted patches inside a container or a VM.</li>
+        <li><strong>Decide for you.</strong> MERGE means the evidence cleared your floors. The merge itself stays with the person who signs the pull request.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <span>AdversaryGate is MIT licensed. Made by <a href="https://github.com/Sanflow10">Sanflow10</a>.</span>
+    <nav aria-label="Project">
+      <a href="https://github.com/Sanflow10/adversary-gate">GitHub</a>
+      <a href="https://github.com/Sanflow10/adversary-gate/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/Sanflow10/adversary-gate/blob/main/SECURITY.md">Security policy</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll("[data-copy]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    var source = document.getElementById(button.getAttribute("data-copy"));
+    var text = source.textContent;
+    var done = function (label) {
+      button.textContent = label;
+      setTimeout(function () { button.textContent = "Copy"; }, 1600);
+    };
+    var select = function () {
+      var range = document.createRange();
+      range.selectNodeContents(source);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      done("Selected");
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { done("Copied"); }, select);
+    } else {
+      select();
+    }
+  });
+});
+</script>
+</body>
+</html>
