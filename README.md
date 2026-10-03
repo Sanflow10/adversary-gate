@@ -16,7 +16,7 @@ pip install adversary-gate
 | --- | --- |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
 | 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
-| 📋 **[Findings AG-001…AG-020](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
+| 📋 **[Findings AG-001…AG-031](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
 
 ---
 
@@ -73,6 +73,8 @@ A single invariant governs the entire system:
 
 Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always outranks missing evidence: a patch whose claim could not be executed but whose collateral run broke the suite is `BLOCK`, not a shrug.
 
+**The patch does not get to write its own answer.** If the claim's test file already existed on the baseline and its bytes differ on the patch, a passing run is not `VERIFIED`: the verdict becomes `UNVERIFIED` and the decision `INCONCLUSIVE`. A test the patch *adds* is not a rewrite and is judged as before; a rewritten test that *fails* is still `REFUTED`. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`. Running the baseline's original test against the patch's code is the stronger form and is not implemented yet.
+
 ### How `diff_coverage` gets its value
 
 Coverage is an **evidence** question, not a parameter. There are exactly three ways it can be supplied, and the artefact records which one was used (`diff_coverage_source`):
@@ -82,6 +84,8 @@ Coverage is an **evidence** question, not a parameter. There are exactly three w
 | `computed` (via `auto`) | `--diff` + `--coverage-json` | The gate parses the unified diff and the coverage.py JSON report itself, and records the SHA-256 of both. **This is the only measured option.** |
 | `untrusted` | `--coverage-ratio` | A number the caller asserts. Accepted only when you say so out loud; the artefact marks it `untrusted`. |
 | `none` (via `auto`) | neither | No evidence. `diff_coverage_ratio` is `null` and the floor is not cleared → `INCONCLUSIVE`. |
+
+Test files are not part of the ratio: `diff_coverage` is covered added lines over added lines **of source files**. A test executes by construction, so counting its lines let ten unexecuted source lines plus forty test lines read as `0.8`. The artefact records `test_lines_excluded` and `test_files_excluded` next to `changed_lines`.
 
 A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)**. Before v2.1.0 the flag defaulted to `1.0`, the gate never read a diff or a coverage report, and the GitHub Action passed neither — so `diff_coverage >= 80%` was satisfied by a default value on every run.
 
@@ -337,6 +341,10 @@ Release for `v2.1.1` has not been published yet. Releases are published from
    recorded) is unreachable, not merely unlikely;
 4. refuses if that tag already exists, then creates the tag and attaches the
    artefacts in one step.
+5. moves the floating major tag (`v2`) to the new release — only forward, so
+   re-releasing an old version does not drag it back — and uploads to PyPI when
+   a `PYPI_API_TOKEN` secret exists. Without that secret it says, as a
+   warning in the run, that PyPI was **not** updated.
 
 It is triggered by hand rather than by a `v*` tag on purpose: the tag is made
 by the workflow's own token, and events that token produces do not start other
@@ -456,7 +464,7 @@ jobs:
           evidence-log: 'evidence.jsonl'
 ```
 
-> **Which ref?** There is no floating `v2` tag. `v2.1.1` carries every fix;
+> **Which ref?** There is no floating `v2` tag *yet* — the Release workflow creates it on its next run. `v2.1.1` carries every fix;
 > `v2.1.0` carries all but AG-018; `v2.0.0` and `v2.0.1` point at the audited
 > version with the bugs. `@main` follows `main` and picks up whatever lands
 > next. For

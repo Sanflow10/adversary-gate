@@ -29,9 +29,64 @@ dela entrou na `2.1.0`.
 
 ## [Unreleased]
 
-Sem entradas. A seção fica aqui de propósito e sem número: uma versão no
-`pyproject.toml` sem tag correspondente é uma promessa de artefato que não
-existe, e o bump só acontece quando esta seção vira uma com versão e data.
+Achados da [auditoria de produto de 2026-10-03](docs/AUDITORIA_PRODUTO_v2.1.1.md).
+A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
+correspondente é uma promessa de artefato que não existe, e o bump só acontece
+quando esta seção vira uma com versão e data.
+
+### Corrigido
+
+- **AG-021 (correção mínima) — um patch que reescreve o teste da claim já não
+  chega a `MERGE`.** O teste era lido da árvore do *patch*: trocar `a - b` por
+  `a + b` e `== 2` por `== 8` dava baseline verde, patch verde, mutante morto —
+  `exit 0`, `suite_strength: 1.0`. Agora, se o arquivo de teste da claim já
+  existia no baseline e seus bytes diferem no patch, um `VERIFIED` vira
+  `UNVERIFIED` (`INCONCLUSIVE`) com o motivo escrito. `REFUTED` não é rebaixado:
+  um teste reescrito que ainda falha continua sendo evidência contra o patch.
+  Um teste que o patch *adiciona* não é reescrita e segue como antes.
+  **Continua aberto** o oráculo do baseline (rodar a versão *original* do teste
+  contra o código do patch) — ver §4.1 da auditoria.
+- **AG-021 — os caminhos do `--diff` passam a alimentar a policy de caminhos
+  protegidos.** `PathPolicy` já recusava `conftest.py`, `pytest.ini`,
+  `pyproject.toml` etc., mas só enxergava `--changed-path`, que a Action nunca
+  passa. O `--diff` é a declaração autoritativa do que mudou; é *unido* a
+  `--changed-path`, não o substitui.
+- **AG-022 — linhas de teste não entram mais na cobertura do diff.** Um teste
+  executa por construção; contá-lo deixava 10 linhas de código novo sem executar
+  passarem no piso de 0,80 com 40 linhas de teste (`0.8`). Agora o ratio é sobre
+  arquivos-fonte, e o artefato grava `test_lines_excluded` e
+  `test_files_excluded` ao lado de `changed_lines`. Um diff só com testes não tem
+  linha de fonte a cobrir: ratio `1.0` por vacuidade, com `note` dizendo isso.
+- **AG-028 — `SECURITY.md` já não manda o repórter a um e-mail inexistente.** A
+  rota de fallback era "o endereço em `pyproject.toml`", que não tem endereço.
+  Agora a rota primária é um link direto para o advisory e o fallback é uma issue
+  pública *sem nenhum detalhe técnico*, que só pede um canal privado. Não há
+  e-mail na política de propósito, e um teste impede que ela volte a apontar para
+  um que não existe.
+
+### Alterado
+
+- **Release:** o workflow passa a mover a tag flutuante `vN` (só para frente: não
+  arrasta `v2` para trás ao refazer uma versão antiga) e, havendo o segredo
+  `PYPI_API_TOKEN`, também envia ao PyPI por token. Sem o segredo ele **avisa**
+  que o PyPI não foi atualizado em vez de deixá-lo atrás em silêncio (AG-026).
+  O `pypi-publish.yml` agora só dispara em `vX.Y.Z`, para a tag `v2` não iniciar
+  uma publicação.
+
+### Comportamento que muda — leia antes de atualizar
+
+Três situações que antes davam `MERGE` (ou um ratio diferente) agora dão
+`INCONCLUSIVE`, e é intencional:
+
+1. o patch altera o arquivo de teste da claim que já existia no baseline;
+2. o `--diff` nomeia um arquivo da policy (`conftest.py`, `pytest.ini`,
+   `tox.ini`, `setup.cfg`, `pyproject.toml`, `.github/workflows/*`,
+   `**/fixtures/**`, `**/Dockerfile*`, `**/docker-compose*.yml`, `**/*.env` —
+   a lista é `DEFAULT_DENYLIST`, sem mudança nesta versão);
+3. `diff_coverage.changed_lines` conta só linhas de fonte — o número é menor, e
+   o ratio, que antes era inflado por testes, pode cair abaixo do piso.
+
+`INCONCLUSIVE` não é erro: é o gate dizendo que a revisão humana decide.
 
 ---
 

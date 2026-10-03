@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from verifiers.testpaths import is_test_path
+
 
 class UnparseableDiff(ValueError):
     """The diff carries hunks but no file header this parser can attribute.
@@ -21,8 +23,20 @@ class UnparseableDiff(ValueError):
 
 @dataclass(frozen=True)
 class DiffCoverage:
+    """Covered added lines, over the added lines of **source** files only.
+
+    Test files are left out of both sides of the ratio (AG-022). A test
+    executes by construction, so counting its lines let a patch buy coverage
+    with volume: ten unexecuted source lines plus forty executed test lines
+    measured ``0.8`` and cleared the floor. What was left out is reported next
+    to the ratio rather than dropped, so the number can be re-derived from the
+    artefact.
+    """
+
     changed_lines: int
     covered_lines: int
+    excluded_test_lines: int = 0
+    excluded_test_files: tuple[str, ...] = ()
 
     @property
     def ratio(self) -> float:
@@ -120,8 +134,14 @@ def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCov
     files = payload.get("files", {})
     covered = 0
     total = 0
+    excluded_lines = 0
+    excluded_files: list[str] = []
     for filename, lines in changed.items():
+        if is_test_path(filename):
+            excluded_lines += len(lines)
+            excluded_files.append(filename)
+            continue
         total += len(lines)
         executed = set(files.get(filename, {}).get("executed_lines", []))
         covered += len(lines & executed)
-    return DiffCoverage(total, covered)
+    return DiffCoverage(total, covered, excluded_lines, tuple(sorted(excluded_files)))
