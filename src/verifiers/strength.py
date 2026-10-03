@@ -54,6 +54,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
 from sandbox.runner import DEFAULT_PROCESSES, run_test
+from verifiers.testpaths import is_test_path as _is_test_path
 
 #: Directories never worth copying or mutating.
 _IGNORE = shutil.ignore_patterns(
@@ -234,17 +235,6 @@ def _is_scan_noise(rel: str) -> bool:
         # distribution.
         part in NON_SOURCE_DIRS or part.endswith(".egg-info")
         for part in path.parts[:-1]
-    )
-
-
-def _is_test_path(rel: str) -> bool:
-    """True for test modules and fixtures -- never mutation targets."""
-    path = Path(rel)
-    return (
-        path.name.startswith("test_")
-        or path.name.endswith("_test.py")
-        or path.name == "conftest.py"
-        or "tests" in path.parts[:-1]
     )
 
 

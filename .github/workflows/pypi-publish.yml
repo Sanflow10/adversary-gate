@@ -3,7 +3,10 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - 'v*'
+      # Full versions only. A bare `v*` also matched the floating `v2` tag the
+      # Release workflow now maintains, which would have started a publish run
+      # for a version that is not a release.
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
   pypi-publish:

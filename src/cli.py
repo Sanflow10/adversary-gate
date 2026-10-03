@@ -140,9 +140,18 @@ def _resolve_coverage(args: argparse.Namespace):
             "ratio": round(measured.ratio, 6),
             "changed_lines": measured.changed_lines,
             "covered_lines": measured.covered_lines,
+            # Test files are not in the ratio (AG-022). Said here so that
+            # ``changed_lines`` is not mistaken for "every line the diff added".
+            "test_lines_excluded": measured.excluded_test_lines,
+            "test_files_excluded": list(measured.excluded_test_files),
             "diff_sha256": hashlib.sha256(diff_bytes).hexdigest(),
             "coverage_json_sha256": hashlib.sha256(cov_bytes).hexdigest(),
         }
+        if measured.changed_lines == 0 and measured.excluded_test_lines:
+            detail["note"] = (
+                "the diff adds only test lines; there is no source line to cover, "
+                "so the ratio is vacuously 1.0"
+            )
         return measured.ratio, "computed", detail
 
     if args.coverage_ratio is not None:
@@ -322,6 +331,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # for the test runs.
         coverage_ratio, coverage_source, coverage_detail = _resolve_coverage(args)
 
+        # What the patch touched, asked of the caller's own diff. It serves two
+        # questions that must agree: which paths the policy refuses (below,
+        # AG-021) and which source this engine cannot judge (further down).
+        # Kept *after* ``_resolve_coverage`` on purpose: that is what turns a
+        # missing or contradictory ``--diff`` into a usage error (exit 3), and
+        # reading the file first let ``FileNotFoundError`` escape as exit 2.
+        diff_paths = _diff_paths(args)
+
         if args.require_network_isolation and os.environ.get(
             "ADVERSARY_NETWORK_ISOLATED"
         ) != "1":
@@ -367,7 +384,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             claim,
             Path(args.baseline),
             Path(args.patch),
-            changed_paths=args.changed_path,
+            # ``--changed-path`` used to be the *only* input to the path
+            # policy, and the Action never passes it -- so the protection for
+            # conftest.py, pytest config and the like existed and was never
+            # asked about a real patch (AG-021). The diff is the authoritative
+            # statement of what changed; it is unioned, not substituted.
+            changed_paths=sorted({*args.changed_path, *(diff_paths or [])}),
             require_network_isolation=args.require_network_isolation,
             # How each side is executed: an arbitrary command when the
             # repository is not pytest, and/or wrapped in bwrap when the patch
@@ -387,11 +409,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         strength_unverified = False
         mutation_detail: Dict[str, Any]
 
-        # What the patch touched, asked of the caller's diff as well as of the
-        # directory scan. Resolved *before* the budget check below, because
-        # "the patch changed source we cannot judge" does not become false
-        # when somebody turns mutation off.
-        changed_paths = _diff_paths(args)
+        # The diff's paths (resolved above) are asked of the directory scan's
+        # question too: "the patch changed source we cannot judge" does not
+        # become false when somebody turns mutation off.
+        changed_paths = diff_paths
 
         if args.mutation_max <= 0:
             # ``--mutation-max 0`` is the documented escape hatch for the
