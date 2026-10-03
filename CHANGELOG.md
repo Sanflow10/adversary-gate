@@ -104,6 +104,14 @@ pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.2.0
   de ambiente. Corrigido, com regressão no próprio script que força a cor via
   `GIT_CONFIG_COUNT`.
 
+### Adicionado
+
+- **Site do produto** em `site/index.html`, uma página estática em inglês
+  publicada no GitHub Pages pelo workflow `Site` (`.github/workflows/pages.yml`)
+  a cada push em `main` que mude `site/`. O Pages precisa ser ligado uma vez em
+  *Settings → Pages → Source: GitHub Actions*. O teste de consistência de versão
+  passa a cobrir também a versão que o site manda instalar.
+
 ### Alterado
 
 - **Release:** o workflow passa a mover a tag flutuante `vN` (só para frente: não

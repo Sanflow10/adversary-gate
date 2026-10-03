@@ -35,6 +35,15 @@ class TestOneVersion(unittest.TestCase):
         self.assertTrue(banners, "demo/demo.py has no version banner")
         self.assertEqual(set(banners), {self.version})
 
+    def test_site_installs_the_version_being_shipped(self):
+        """The product page tells people what to install; it must not lag a release."""
+        site = (ROOT / "site" / "index.html").read_text()
+        badge = re.findall(r"data-version>v([^<]+)<", site)
+        pinned = re.findall(r"adversary-gate@v(\d+\.\d+\.\d+)", site)
+        self.assertTrue(badge, "site/index.html has no version badge")
+        self.assertTrue(pinned, "site/index.html pins no version in its install snippets")
+        self.assertEqual(set(badge) | set(pinned), {self.version})
+
     def test_newest_changelog_section(self):
         """The first numbered section is the version being shipped -- not an older one."""
         changelog = (ROOT / "CHANGELOG.md").read_text()
