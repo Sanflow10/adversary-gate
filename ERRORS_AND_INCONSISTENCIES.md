@@ -146,3 +146,24 @@ mesmo cenário, mesmo exit code, sem confiar no relatório de ninguém.
 
 
 
+---
+
+## 10. Achados da auditoria de produto de 2026-10-03 (AG-021..AG-031)
+
+Auditoria completa, com reprodução de cada item, em
+[`docs/AUDITORIA_PRODUTO_v2.1.1.md`](docs/AUDITORIA_PRODUTO_v2.1.1.md),
+executada contra `3cc103c`. **Todos abertos.**
+
+| ID | Severidade | Achado |
+|---|---|---|
+| **AG-021** | Alta — fail-open | Agente introduz bug e reescreve o teste da claim → `exit 0` / `merge`, `suite_strength: 1.0`. A proteção `critic_test_paths` existe na biblioteca, mas a CLI e a Action não a ligam. |
+| **AG-022** | Média — fail-open parcial | Linhas de teste entram no denominador da cobertura do diff: 0/10 linhas de fonte cobertas + 40 de teste → `0.8`, passa no piso. |
+| **AG-023** | Média — rigor | Mutation score com n = 1..6, sítios pegos na ordem do arquivo, sem intervalo de confiança; poucos operadores. |
+| **AG-024** | Alta — adoção | Timeout 30 s, CPU 10 s e 512 MB fixos, sem flag; `--test-command` recebe `PATH=/usr/bin:/bin` sem `HOME`; JVM sai com exit 1 (lido como falha de teste). |
+| **AG-025** | Alta — adoção (por leitura) | A Action força Python 3.12 e roda pytest com `sys.executable`, sem as dependências do projeto. |
+| **AG-026** | Alta — distribuição | Tag e Release `v2.1.1` não existem (wheel → `404`); o PyPI entrega `2.1.0`, que contém o AG-018. |
+| **AG-027** | Média — empacotamento | O wheel instala `cli`, `core`, `sandbox` e `verifiers` como pacotes top-level; sem `--version`. |
+| **AG-028** | Baixa | `SECURITY.md` manda usar o e-mail do `pyproject.toml`, que não tem e-mail. |
+| **AG-029** | Conceitual | `self_deception_index` é 0 por construção quando calculado só sobre decisões do gate. |
+| **AG-030** | Conceitual | `FAIL→PASS` (correção provada) e `PASS→PASS` (não regressão) recebem o mesmo rótulo. |
+| **AG-031** | Alta — adoção | Uma claim por execução e `test-path` obrigatório e fixo no YAML da Action. |
