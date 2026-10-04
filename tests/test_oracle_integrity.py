@@ -63,6 +63,9 @@ def _cli(root: Path, extra, *, test_path: str = "test_calc.py", test_id: str = "
             "--test-id", test_id,
             "--max-rounds", "1",
             "--rounds-used", "1",
+            # One-operator fixtures: the strength *interval* (AG-023) has its own
+            # tests; these are about something else, so the floor reads the ratio.
+            "--strength-confidence", "0",
             *extra,
         ]
     )

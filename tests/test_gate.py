@@ -357,9 +357,9 @@ class TestClaimGranularity(unittest.TestCase):
                     root / "patch",
                 )
 
-            # test_alpha passes on both sides -> the claim is discarded.
+            # test_alpha passes on both sides -> no regression (AG-030), not a fix.
             self.assertIs(v.outcome, Outcome.VERIFIED)
-            self.assertIs(v.classification, FailureClass.CLAIM_DISCARDED)
+            self.assertIs(v.classification, FailureClass.NO_REGRESSION)
             # And the id really did reach the runner.
             self.assertTrue(all(call[2] == "test_alpha" for call in calls))
 
@@ -1050,11 +1050,23 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self._tree(root, self.BASE.replace("return a + b", "return (a + b)"))
-            score, detail = self._strength(root, max_mutants=2)
+            score, detail = self._strength(root, max_mutants=2, confidence=0)
             self.assertTrue(score.is_measured, detail)
             self.assertGreaterEqual(score.mutation_score, 0.75)
             self.assertTrue(score.is_strong)
             self.assertEqual(score.mutants_killed, score.mutants_total)
+
+    def test_one_killed_mutant_is_a_ratio_not_evidence(self):
+        """AG-023: the same 1-of-1, at the default 80 % interval, is not strong."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, self.BASE.replace("return a + b", "return (a + b)"))
+            score, detail = self._strength(root, max_mutants=2)
+            self.assertEqual(score.mutation_score, 1.0)
+            self.assertLess(score.lower, 0.75)
+            self.assertFalse(score.is_strong)
+            self.assertEqual(detail["interval"], [score.lower, score.upper])
+            self.assertEqual(detail["confidence"], 0.80)
 
     def test_unchanged_source_is_unknown_not_strong(self):
         """No code changed -> nothing to measure. ``is_strong`` must stay False."""

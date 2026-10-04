@@ -172,6 +172,14 @@ inputs:
     description: 'Refuse to run unless ADVERSARY_NETWORK_ISOLATED=1 (declaration check, not isolation)'
     required: false
     default: 'false'
+  strength-confidence:
+    description: >-
+      Confidence of the Wilson interval around the mutation score; the
+      strength floor is applied to its lower bound (AG-023). At the default
+      0.80, 5 of 5 killed mutants clear 0.75 and 1 of 1 does not. '0' applies
+      the floor to the raw ratio.
+    required: false
+    default: '0.80'
   suite-strength-floor:
     description: 'Minimum required suite strength ratio (0.0 to 1.0)'
     required: false
@@ -410,6 +418,7 @@ runs:
         AG_COVERAGE_SOURCE: ${{ inputs.coverage-source }}
         AG_COVERAGE_RATIO: ${{ inputs.coverage-ratio }}
         AG_STRENGTH_FLOOR: ${{ inputs.suite-strength-floor }}
+        AG_STRENGTH_CONFIDENCE: ${{ inputs.strength-confidence }}
         AG_EVIDENCE_LOG: ${{ inputs.evidence-log }}
         AG_REQUIRE_NET: ${{ inputs.require-network-isolation }}
         AG_CRITERION_ID: ${{ inputs.criterion-id }}
@@ -456,6 +465,7 @@ runs:
           --coverage-floor "$AG_COVERAGE_FLOOR"
           --coverage-source "$AG_COVERAGE_SOURCE"
           --suite-strength-floor "$AG_STRENGTH_FLOOR"
+          --strength-confidence "$AG_STRENGTH_CONFIDENCE"
           --evidence-log "$AG_EVIDENCE_LOG"
         )
         if [ -n "$AG_TEST_PATH" ]; then

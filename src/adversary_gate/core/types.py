@@ -56,6 +56,13 @@ class FailureClass(str, Enum):
     NEW_BUG = "new_bug"
     INCOMPLETE_FIX = "incomplete_fix"
     HANG = "hang"
+    #: AG-030. A passing patch used to get one label whatever the baseline
+    #: did. FAIL -> PASS is the strongest evidence there is that the patch
+    #: fixed what the test checks (SWE-bench's FAIL_TO_PASS); PASS -> PASS
+    #: only says nothing the test checks broke. ``discarded`` is kept for the
+    #: remaining case: a test the patch added, which has no "before".
+    FIXED = "fixed"
+    NO_REGRESSION = "no_regression"
     CLAIM_DISCARDED = "discarded"
     FLAKY = "flaky"
     UNRUNNABLE = "unrunnable"
@@ -84,6 +91,8 @@ CLASSIFICATION_OUTCOME: dict[FailureClass, Outcome] = {
     FailureClass.NEW_BUG: Outcome.REFUTED,
     FailureClass.INCOMPLETE_FIX: Outcome.REFUTED,
     FailureClass.HANG: Outcome.REFUTED,
+    FailureClass.FIXED: Outcome.VERIFIED,
+    FailureClass.NO_REGRESSION: Outcome.VERIFIED,
     FailureClass.CLAIM_DISCARDED: Outcome.VERIFIED,
     FailureClass.FLAKY: Outcome.UNVERIFIED,
     FailureClass.UNRUNNABLE: Outcome.UNVERIFIED,

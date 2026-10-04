@@ -24,6 +24,10 @@ class GateMetrics:
     verified: int = 0
     refuted: int = 0
     unverified: int = 0
+    #: AG-030: of the verified claims, how many proved a fix (FAIL -> PASS)
+    #: and how many only proved nothing regressed (PASS -> PASS).
+    fixed: int = 0
+    no_regression: int = 0
 
     # --- the three losses the thesis names ---
     refuted_patches_blocked: int = 0
@@ -106,6 +110,10 @@ def compute_metrics(records: Iterable[Dict[str, Any]]) -> GateMetrics:
             metrics.refuted += 1
         elif outcome == "unverified":
             metrics.unverified += 1
+        if record.get("classification") == "fixed":
+            metrics.fixed += 1
+        elif record.get("classification") == "no_regression":
+            metrics.no_regression += 1
 
         model = _model_of(record)
         row = model_rows.setdefault(
@@ -180,6 +188,7 @@ def format_report(metrics: GateMetrics) -> str:
         f"  verified             {metrics.verified}  ({metrics.verified_rate:.1%})",
         f"  refuted              {metrics.refuted}  ({metrics.refuted_rate:.1%})",
         f"  unverified           {metrics.unverified}  ({metrics.unverified_rate:.1%})",
+        f"    of verified: fixed {metrics.fixed}, no regression {metrics.no_regression}",
         "",
         f"decisions              {metrics.decision_count}",
         f"  merge                {metrics.merge_count}",

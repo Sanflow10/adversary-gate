@@ -414,13 +414,31 @@ class Gate:
                 run_outcome,
             )
 
-        # --- patch is clean -------------------------------------------------
+        # --- patch is clean: say *how* (AG-030) -----------------------------
         if patch is ExecState.PASS:
+            if base is ExecState.FAIL:
+                return GateVerdict(
+                    claim,
+                    FailureClass.FIXED,
+                    Outcome.VERIFIED,
+                    "test fails on baseline and passes on patch: the patch fixes "
+                    "what this test checks",
+                    run_outcome,
+                )
+            if base is ExecState.PASS:
+                return GateVerdict(
+                    claim,
+                    FailureClass.NO_REGRESSION,
+                    Outcome.VERIFIED,
+                    "test passes on baseline and on patch: nothing it checks "
+                    "regressed (this is not evidence of a fix)",
+                    run_outcome,
+                )
             return GateVerdict(
                 claim,
                 FailureClass.CLAIM_DISCARDED,
                 Outcome.VERIFIED,
-                "test passes on the patch",
+                "test passes on the patch (it does not exist on the baseline)",
                 run_outcome,
             )
 

@@ -169,6 +169,7 @@ class TestEndToEnd(unittest.TestCase):
                 "--test-path", "test_calc.py", "--test-id", "test_sub_negative",
                 "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
                 "--evidence-log", str(log),
+                "--strength-confidence", "0",  # one-operator fixture; see AG-023 tests
             ])
             records = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
             verdict = [r for r in records if r.get("kind") != "decision"][-1]

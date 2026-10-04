@@ -123,6 +123,10 @@ jobs:
           diff: 'change.diff'
           coverage-json: 'cov.json'
           evidence-log: 'evidence.jsonl'
+          # One-operator fixture: one mutant, so the 80 % interval (AG-023)
+          # cannot reach the floor by construction. This job tests wiring, not
+          # strength; tests/test_rigor_and_labels.py tests the interval.
+          strength-confidence: '0'
 
       - name: The gate must merge a clean, measured patch
         run: |
@@ -260,6 +264,10 @@ jobs:
           full-suite-path: 'gate_fixture'
           coverage-command: 'coverage run -m pytest gate_fixture || true; coverage json -o "$COVERAGE_JSON"'
           evidence-log: 'evidence-base-sha.jsonl'
+          # One-operator fixture: one mutant, so the 80 % interval (AG-023)
+          # cannot reach the floor by construction. This job tests wiring, not
+          # strength; tests/test_rigor_and_labels.py tests the interval.
+          strength-confidence: '0'
 
       - name: One ref must be enough to merge
         run: |
@@ -363,6 +371,10 @@ jobs:
           base-sha: ${{ env.AG_BASE_SHA }}
           full-suite-path: 'gate_fixture'
           evidence-log: 'evidence-discover.jsonl'
+          # One-operator fixture: one mutant, so the 80 % interval (AG-023)
+          # cannot reach the floor by construction. This job tests wiring, not
+          # strength; tests/test_rigor_and_labels.py tests the interval.
+          strength-confidence: '0'
           # Matches nothing in the fixture: here only to prove the input reaches
           # the CLI (an earlier wiring of it broke the prep step instead).
           test-support: |

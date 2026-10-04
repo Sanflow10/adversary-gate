@@ -111,6 +111,7 @@ note "coverage.json has the shape the gate measures"
 PYTHONPATH="$REPO_ROOT/src" python3 "$GATE" \
   --baseline "$OUT/baseline" \
   --patch "$WORK/repo" \
+  --strength-confidence 0 \
   --test-path test_calc.py \
   --test-id test_add \
   --diff "$OUT/change.diff" \

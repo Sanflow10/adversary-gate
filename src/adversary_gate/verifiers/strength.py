@@ -46,11 +46,13 @@ from __future__ import annotations
 import difflib
 import io
 import keyword
+import math
 import shutil
 import tempfile
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from adversary_gate.core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
@@ -112,31 +114,74 @@ _KEYWORD_MUTATIONS: Dict[str, str] = {
 Mutation = Tuple[Tuple[int, int], Tuple[int, int], str]
 
 
+#: AG-023. The floor is applied to the lower bound of this two-sided Wilson
+#: interval, not to the raw ratio. 1 mutant killed out of 1 is a ratio of 1.0
+#: and evidence of almost nothing; at 80 % the lower bound reaches the 0.75
+#: floor only from 5 of 5. ``0`` means "use the point estimate" -- the
+#: pre-2.7 behaviour, said out loud with ``--strength-confidence 0``.
+DEFAULT_CONFIDENCE = 0.80
+
+#: Enough mutants for the default confidence to be reachable with room to
+#: spare (5 is the minimum at 80 %); was 6, which made one survivor fatal.
+DEFAULT_MAX_MUTANTS = 12
+
+
+def wilson_interval(killed: int, total: int, confidence: float = DEFAULT_CONFIDENCE) -> Tuple[float, float]:
+    """Two-sided Wilson score interval for ``killed / total``.
+
+    Wilson rather than the normal approximation because the cases that matter
+    here are exactly where the normal one breaks: small ``n`` and ratios at 0
+    or 1, where it returns a zero-width interval around 1.0.
+    """
+    if total <= 0:
+        return 0.0, 0.0
+    p = killed / total
+    if confidence <= 0:
+        return p, p
+    if not 0 < confidence < 1:
+        raise ValueError("confidence must be in [0, 1)")
+    z = NormalDist().inv_cdf(1 - (1 - confidence) / 2)
+    z2 = z * z
+    denominator = 1 + z2 / total
+    centre = (p + z2 / (2 * total)) / denominator
+    half = z * math.sqrt(p * (1 - p) / total + z2 / (4 * total * total)) / denominator
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
 @dataclass(frozen=True)
 class SuiteStrength:
     mutants_total: int
     mutants_killed: int
     mutation_score: float
     is_measured: bool
+    #: Wilson bounds at ``confidence``; equal to the score when confidence is 0.
+    lower: float = 0.0
+    upper: float = 0.0
+    confidence: float = DEFAULT_CONFIDENCE
 
     @property
     def is_strong(self) -> bool:
-        return self.mutation_score >= 0.75 if self.is_measured else False
+        return self.lower >= 0.75 if self.is_measured else False
 
 
 def calculate_mutation_score(
     mutants_total: int,
     mutants_killed: int,
+    confidence: float = DEFAULT_CONFIDENCE,
 ) -> SuiteStrength:
     """Calculate real mutation testing score from execution evidence."""
     if mutants_total <= 0:
-        return SuiteStrength(0, 0, 0.0, is_measured=False)
+        return SuiteStrength(0, 0, 0.0, is_measured=False, confidence=confidence)
     score = round(max(0.0, min(1.0, mutants_killed / mutants_total)), 4)
+    lower, upper = wilson_interval(mutants_killed, mutants_total, confidence)
     return SuiteStrength(
         mutants_total=mutants_total,
         mutants_killed=mutants_killed,
         mutation_score=score,
         is_measured=True,
+        lower=round(lower, 4),
+        upper=round(upper, 4),
+        confidence=confidence,
     )
 
 
@@ -469,6 +514,28 @@ def _mutants_in(source: str, limit: int) -> List[Mutation]:
     return found
 
 
+def _spread(by_line: Mapping[Tuple[str, int], List[Mutation]], limit: int) -> List[Tuple[str, Mutation]]:
+    """At most ``limit`` sites, one per changed line before any line gets two.
+
+    AG-023: sites used to be taken in file order until the budget ran out, so
+    a patch whose first changed line had six operators was judged on that
+    line alone and every later line went unmutated. Round-robin over the lines
+    the patch wrote (files in sorted order, lines ascending) keeps the sample
+    deterministic and spreads it across the change.
+    """
+    queues = [(key, list(sites)) for key, sites in sorted(by_line.items())]
+    plan: List[Tuple[str, Mutation]] = []
+    depth = 0
+    while len(plan) < limit and any(depth < len(sites) for _, sites in queues):
+        for (rel, _line), sites in queues:
+            if depth < len(sites):
+                plan.append((rel, sites[depth]))
+                if len(plan) >= limit:
+                    break
+        depth += 1
+    return plan
+
+
 def _apply(lines: List[str], start: Tuple[int, int], end: Tuple[int, int], repl: str) -> List[str]:
     """Splice one mutation into source lines. Rows are 1-based, columns 0-based."""
     (start_row, start_col), (end_row, end_col) = start, end
@@ -492,7 +559,8 @@ def measure_mutation_score(
     test_path: str,
     test_id: str = "",
     *,
-    max_mutants: int = 6,
+    max_mutants: int = DEFAULT_MAX_MUTANTS,
+    confidence: float = DEFAULT_CONFIDENCE,
     timeout_seconds: Optional[int] = 30,
     cpu_seconds: Optional[int] = 10,
     mem_bytes: Optional[int] = 512 * 1024 * 1024,
@@ -549,6 +617,11 @@ def measure_mutation_score(
         # recomputed from the artefact instead of trusted.
         detail["mutants_counted"] = result.mutants_total
         detail["mutants_killed"] = result.mutants_killed
+        # AG-023: the number the floor is applied to, and the interval it
+        # comes from -- recomputable from the two counts above.
+        detail["score"] = result.mutation_score if result.is_measured else None
+        detail["confidence"] = result.confidence
+        detail["interval"] = [result.lower, result.upper] if result.is_measured else None
         return result, detail
 
     if not changed:
@@ -569,7 +642,7 @@ def measure_mutation_score(
         )
 
     originals: Dict[str, str] = {}
-    plan: List[Tuple[str, Mutation]] = []
+    by_line: Dict[Tuple[str, int], List[Mutation]] = {}
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -582,15 +655,12 @@ def measure_mutation_score(
         edited = changed_lines(before, source)
         if not edited:
             continue
-        # Scan generously, then keep only sites on lines this patch wrote.
+        # Scan generously, then keep only sites on lines this patch wrote,
+        # grouped by line.
         for site in _mutants_in(source, 10_000):
             if site[0][0] in edited:
-                plan.append((rel, site))
-            if len(plan) >= max_mutants:
-                break
-        if len(plan) >= max_mutants:
-            break
-    plan = plan[:max_mutants]
+                by_line.setdefault((rel, site[0][0]), []).append(site)
+    plan = _spread(by_line, max_mutants)
 
     if not plan:
         deleted = detail["deleted_files"]
@@ -661,7 +731,7 @@ def measure_mutation_score(
 
         detail["survivors"] = survivors
 
-    result = calculate_mutation_score(counted, killed)
+    result = calculate_mutation_score(counted, killed, confidence)
     if result.is_measured:
         note = ""
         if foreign:

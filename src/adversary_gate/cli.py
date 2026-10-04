@@ -37,7 +37,12 @@ from adversary_gate.core.types import (
 from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
 from adversary_gate.verifiers.coverage import covered_diff_ratio, validate_diff
 from adversary_gate.verifiers.discovery import discover_claims
-from adversary_gate.verifiers.strength import classify_changes, measure_mutation_score
+from adversary_gate.verifiers.strength import (
+    DEFAULT_CONFIDENCE,
+    DEFAULT_MAX_MUTANTS,
+    classify_changes,
+    measure_mutation_score,
+)
 from adversary_gate.verifiers.testpaths import set_test_support
 
 EXIT_MERGE = 0
@@ -376,6 +381,11 @@ def _summary(verdicts) -> Dict[str, Any]:
         "refuted": sum(1 for v in verdicts if v.outcome.value == "refuted"),
         "unverified": sum(1 for v in verdicts if v.outcome.value == "unverified"),
         "classifications": [v.classification.value for v in verdicts],
+        # AG-030: the sentence a reviewer wants -- "this patch fixes what it
+        # says it fixes" -- is true only when a claim went FAIL -> PASS.
+        "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
+        "claims_no_regression": sum(1 for v in verdicts if v.classification.value == "no_regression"),
+        "fix_proven": any(v.classification.value == "fixed" for v in verdicts),
     }
 
 
@@ -467,9 +477,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-floor", type=float, default=0.80)
     parser.add_argument("--suite-strength-floor", type=float, default=0.75)
     parser.add_argument(
+        "--strength-confidence",
+        type=float,
+        default=DEFAULT_CONFIDENCE,
+        metavar="C",
+        help="confidence of the Wilson interval around the mutation score; the "
+        "strength floor is applied to its lower bound (AG-023). Default 0.80: "
+        "5 of 5 mutants killed clears 0.75, 1 of 1 does not. 0 applies the "
+        "floor to the raw ratio instead.",
+    )
+    parser.add_argument(
         "--mutation-max",
         type=int,
-        default=6,
+        default=DEFAULT_MAX_MUTANTS,
         metavar="N",
         help="max mutants to execute when measuring suite strength (0 disables the measurement)",
     )
@@ -592,6 +612,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         claims = _claims_from_args(args)
         if args.max_claims < 1:
             raise ValueError("--max-claims must be at least 1")
+        if not 0 <= args.strength_confidence < 1:
+            raise ValueError("--strength-confidence must be in [0, 1); 0 uses the raw ratio")
         if args.discover_claims and args.test_command:
             # A command suite has no node ids, so there is nothing a coverage
             # context could be resolved to.
@@ -722,6 +744,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # ------------------------------------------------------------------
         started = time.monotonic()
         strength: Optional[float] = None
+        strength_judged: Optional[float] = None
         strength_unverified = False
         mutation_detail: Dict[str, Any]
 
@@ -773,6 +796,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 test_files[0],
                 test_id="",
                 max_mutants=args.mutation_max,
+                confidence=args.strength_confidence,
                 changed_paths=changed_paths,
                 targets=test_files if len(test_files) > 1 else None,
                 run_kwargs=run_options,
@@ -783,6 +807,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # -- never the whole patch. Whether it is allowed to stand is
                 # decided just below.
                 strength = strength_obj.mutation_score
+                # What the floor judges: the lower bound, not the ratio.
+                strength_judged = strength_obj.lower
 
             if all_verified:
                 if (
@@ -867,7 +893,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             verdicts,
             args.rounds_used,
             coverage_ratio,
-            suite_strength=strength,
+            suite_strength=strength_judged,
             full_suite_exit_codes=full_codes,
             suite_strength_unverified=strength_unverified,
         )
@@ -889,6 +915,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "suite_strength": strength,
                     "suite_strength_unverified": strength_unverified,
                     "suite_strength_floor": args.suite_strength_floor,
+                    "suite_strength_lower": strength_judged,
+                    "suite_strength_confidence": args.strength_confidence,
                     "mutation": mutation_detail,
                     "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
@@ -912,11 +940,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             ),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": len(verdicts),
+            "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
+            "fix_proven": any(v.classification.value == "fixed" for v in verdicts),
             "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,
             "suite_strength_unverified": strength_unverified,
             "suite_strength_floor": args.suite_strength_floor,
+            "suite_strength_lower": strength_judged,
+            "suite_strength_confidence": args.strength_confidence,
             "mutation": mutation_detail,
             "diff_coverage_ratio": coverage_ratio,
             "diff_coverage_source": coverage_source,

@@ -118,6 +118,9 @@ def _run_cli(root: Path, *extra: str):
             "--max-rounds", "1",
             "--rounds-used", "1",
             "--full-suite-path", "",
+            # One-operator fixtures: the strength *interval* (AG-023) has its own
+            # tests; these are about something else, so the floor reads the ratio.
+            "--strength-confidence", "0",
             *extra,
         ])
     text = out.getvalue()
