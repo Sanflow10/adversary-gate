@@ -50,7 +50,7 @@ import tempfile
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
 from sandbox.runner import DEFAULT_PROCESSES, run_test
@@ -449,11 +449,13 @@ def measure_mutation_score(
     test_id: str = "",
     *,
     max_mutants: int = 6,
-    timeout_seconds: int = 30,
-    cpu_seconds: int = 10,
-    mem_bytes: int = 512 * 1024 * 1024,
+    timeout_seconds: Optional[int] = 30,
+    cpu_seconds: Optional[int] = 10,
+    mem_bytes: Optional[int] = 512 * 1024 * 1024,
     processes: int = DEFAULT_PROCESSES,
     changed_paths: Optional[Iterable[str]] = None,
+    targets: Optional[Sequence[str]] = None,
+    run_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -466,10 +468,16 @@ def measure_mutation_score(
     could be built, or when every mutant was stillborn. Callers must treat
     that as *unknown*, never as strong -- ``SuiteStrength.is_strong`` already
     does.
+
+    ``targets`` runs several test files or node ids against each mutant in one
+    invocation: a mutant is killed when any of them fails. ``run_kwargs`` is
+    how the caller's execution choices -- interpreter, environment, sandbox --
+    reach the mutant runs too. Before it existed a mutant ran unsandboxed even
+    under ``--sandbox bwrap``, and always on the gate's own interpreter.
     """
     if max_mutants <= 0:
         raise ValueError("max_mutants must be positive")
-    if not test_path:
+    if not test_path and not targets:
         raise ValueError("test_path is required to measure suite strength")
 
     patch_dir = Path(patch_dir)
@@ -582,6 +590,8 @@ def measure_mutation_score(
                     cpu_seconds=cpu_seconds,
                     mem_bytes=mem_bytes,
                     processes=processes,
+                    targets=targets,
+                    **dict(run_kwargs or {}),
                 )
                 code = outcome.exit_code
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence

@@ -24,9 +24,10 @@ import signal
 import site
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Mapping, Optional
+from typing import List, Mapping, Optional, Sequence
 
 try:
     import resource
@@ -39,6 +40,26 @@ DEFAULT_PROCESSES = 4096
 #: Truncate captured output before it reaches the evidence log. Enough to
 #: show the failing assertion, small enough to keep the artefact readable.
 OUTPUT_TAIL_BYTES = 4000
+
+#: The exit code a run gets when it died of the limits rather than of the code
+#: under test -- pytest's own "internal error", which ``exitmap`` already reads
+#: as UNRUNNABLE.
+HARNESS_DIED = 3
+
+#: Text a process prints when the memory limit, not the code under test, ended
+#: it (AG-024). Measured: under RLIMIT_AS the JVM exits 1 with "Could not
+#: reserve enough space", Node aborts with "Fatal process out of memory", and a
+#: Python allocation raises MemoryError and fails the test -- exit 1 in all
+#: three, which the exit map would otherwise read as a test failure, i.e. as
+#: evidence against the patch.
+RESOURCE_DEATH_MARKERS = (
+    "MemoryError",
+    "Could not reserve enough space",
+    "Fatal process out of memory",
+    "java.lang.OutOfMemoryError",
+    "Cannot allocate memory",
+    "std::bad_alloc",
+)
 
 
 @dataclass
@@ -76,7 +97,7 @@ def bwrap_available() -> bool:
     return shutil.which("bwrap") is not None
 
 
-def bwrap_prefix(repo_dir: Path) -> List[str]:
+def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
     """``bwrap`` argv that runs the next command inside a restricted namespace.
 
     This is *optional defence in depth* over the resource limits, not a
@@ -136,8 +157,17 @@ def bwrap_prefix(repo_dir: Path) -> List[str]:
         ]
 
     # A venv interpreter is outside /usr as well; bind exactly its prefix
-    # rather than the whole home directory it may sit in.
-    for prefix in (sys.base_prefix, sys.prefix):
+    # rather than the whole home directory it may sit in. ``python`` is the
+    # project's interpreter when one was named (AG-025): its venv (``bin/..``,
+    # read through the symlink) and the installation it points at (``bin/..``
+    # of the resolved file) are bound the same way.
+    prefixes = [sys.base_prefix, sys.prefix]
+    if python:
+        prefixes += [
+            os.path.dirname(os.path.dirname(os.path.abspath(python))),
+            os.path.dirname(os.path.dirname(os.path.realpath(python))),
+        ]
+    for prefix in prefixes:
         resolved = Path(prefix).resolve() if prefix else None
         if not resolved or not resolved.exists() or resolved == Path("/usr"):
             continue
@@ -151,7 +181,14 @@ def bwrap_prefix(repo_dir: Path) -> List[str]:
     return argv
 
 
-def _argv(repo_dir: Path, test_path: str, test_id: str, command: Optional[str]) -> List[str]:
+def _argv(
+    repo_dir: Path,
+    test_path: str,
+    test_id: str,
+    command: Optional[str],
+    python: Optional[str] = None,
+    targets: Optional[Sequence[str]] = None,
+) -> List[str]:
     """What actually gets executed: a caller's command, or pytest on a target.
 
     ``--test-command`` exists because "run my suite" is not always "run
@@ -160,25 +197,39 @@ def _argv(repo_dir: Path, test_path: str, test_id: str, command: Optional[str]) 
     repository that is not Python/pytest. The convention is documented at the
     flag: 0 passes, 1 fails, 2/3/4 are harness errors, and anything else is
     neither, exactly as the pytest table already says.
+
+    ``python`` is the interpreter that runs pytest. It defaults to the one
+    running the gate, which is only right when the gate is installed next to
+    the project's dependencies; ``--python`` names the project's own (AG-025).
+    ``targets`` runs several node ids in one invocation.
     """
     if command:
         return ["/bin/sh", "-c", command]
-    return [sys.executable, "-m", "pytest", build_target(test_path, test_id), "-q",
+    chosen = list(targets) if targets else [build_target(test_path, test_id)]
+    return [python or sys.executable, "-m", "pytest", *chosen, "-q",
             "-p", "no:cacheprovider"]
 
 
 def _limit_resources(
-    cpu_seconds: int,
-    mem_bytes: int,
+    cpu_seconds: Optional[int],
+    mem_bytes: Optional[int],
     file_bytes: int,
     open_files: int,
     processes: int,
 ):
+    """``None`` for CPU or memory means "no limit", and is applied as no call.
+
+    It is a decision the caller makes out loud (``--cpu-seconds none``,
+    ``--memory none``) and records in the artefact; the JVM and Node cannot
+    start under an address-space limit at all.
+    """
     def _apply() -> None:
         if resource is None:
             return
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+        if cpu_seconds is not None:
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+        if mem_bytes is not None:
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
         resource.setrlimit(resource.RLIMIT_NOFILE, (open_files, open_files))
@@ -192,9 +243,9 @@ def run_test(
     repo_dir: Path,
     test_path: str,
     test_id: str = "",
-    timeout_seconds: int = 30,
-    cpu_seconds: int = 10,
-    mem_bytes: int = 512 * 1024 * 1024,
+    timeout_seconds: Optional[int] = 30,
+    cpu_seconds: Optional[int] = 10,
+    mem_bytes: Optional[int] = 512 * 1024 * 1024,
     env: Optional[Mapping[str, str]] = None,
     file_bytes: int = 16 * 1024 * 1024,
     open_files: int = 256,
@@ -202,6 +253,8 @@ def run_test(
     require_network_isolation: bool = False,
     command: Optional[str] = None,
     sandbox: Optional[str] = None,
+    python: Optional[str] = None,
+    targets: Optional[Sequence[str]] = None,
 ) -> SandboxResult:
     """Run one test target under resource limits and return raw evidence.
 
@@ -213,6 +266,16 @@ def run_test(
     :func:`_argv` for the pass/fail/harness convention). ``sandbox`` wraps
     the whole thing in ``bwrap`` when asked; it is opt-in because it needs a
     binary this package cannot install for you.
+
+    ``timeout_seconds``, ``cpu_seconds`` and ``mem_bytes`` accept ``None`` for
+    "no limit"; zero and negatives are still refused, because a limit of zero
+    is a typo, not a policy.
+
+    ``HOME`` points at a private directory created for this run and removed
+    after it, unless ``env`` names one. Tools that insist on a home (npm,
+    cargo, pip caches) get somewhere to write that is neither the repository
+    nor the operator's real home. The user site the gate itself sees stays
+    importable through ``PYTHONUSERBASE``, which does not follow ``HOME``.
     """
     for name, value in (
         ("timeout_seconds", timeout_seconds),
@@ -222,7 +285,7 @@ def run_test(
         ("open_files", open_files),
         ("processes", processes),
     ):
-        if value <= 0:
+        if value is not None and value <= 0:
             raise ValueError(f"{name} must be positive")
 
     if require_network_isolation and os.environ.get("ADVERSARY_NETWORK_ISOLATED") != "1":
@@ -236,14 +299,16 @@ def run_test(
         raise ValueError(f"repo_dir is not a directory: {repo_dir}")
 
     safe_env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    if site.USER_BASE:
+        safe_env["PYTHONUSERBASE"] = site.USER_BASE
     if env:
         safe_env.update(env)
 
-    argv = _argv(root, test_path, test_id, command)
+    argv = _argv(root, test_path, test_id, command, python=python, targets=targets)
     if sandbox == "bwrap":
         # Resolved *before* Popen so a missing binary is a usage error the
         # caller sees, not a run that quietly happened unsandboxed.
-        argv = bwrap_prefix(root) + argv
+        argv = bwrap_prefix(root, python=python) + argv
     elif sandbox not in (None, "", "none"):
         raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none' or 'bwrap')")
 
@@ -252,6 +317,13 @@ def run_test(
         if resource
         else None
     )
+
+    # Created last, after everything above that can raise, so the ``finally``
+    # below is the only exit and always removes it.
+    private_home: Optional[str] = None
+    if "HOME" not in safe_env:
+        private_home = tempfile.mkdtemp(prefix="adversary-home-")
+        safe_env["HOME"] = private_home
 
     proc: Optional[subprocess.Popen[str]] = None
     try:
@@ -274,7 +346,7 @@ def run_test(
             if command
             else _detect_harness_error(proc.returncode, stdout, stderr)
         )
-        return SandboxResult(code, stdout, stderr, False)
+        return SandboxResult(_detect_resource_death(code, stdout, stderr), stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:
         assert proc is not None
         try:
@@ -291,6 +363,25 @@ def run_test(
         # -1 is deliberately distinct from pytest's own codes: a timeout is
         # the harness giving up, not pytest reporting a failure.
         return SandboxResult(-1, out or "", err or "", True)
+    finally:
+        if private_home is not None:
+            shutil.rmtree(private_home, ignore_errors=True)
+
+
+def _detect_resource_death(exit_code: int, stdout: str, stderr: str) -> int:
+    """A run the limits killed is not a test that failed (AG-024).
+
+    Only exit 1 is rewritten, because it is the only code the exit map counts
+    as evidence; anything else is already unrunnable. The rewrite goes in the
+    safe direction: a real failure that happens to print one of these markers
+    becomes INCONCLUSIVE, never MERGE.
+    """
+    if exit_code != 1:
+        return exit_code
+    combined = f"{stdout}\n{stderr}"
+    if any(marker in combined for marker in RESOURCE_DEATH_MARKERS):
+        return HARNESS_DIED
+    return exit_code
 
 
 def _detect_harness_error(exit_code: int, stdout: str, stderr: str) -> int:

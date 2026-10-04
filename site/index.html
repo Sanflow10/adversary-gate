@@ -190,7 +190,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
     <a class="brand" href="#main" aria-label="AdversaryGate, top of page">
       <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 29 16 16 29 3 16Z" fill="none" stroke="currentColor" stroke-width="3"/></svg>
       AdversaryGate
-      <span class="ver" data-version>v2.2.0</span>
+      <span class="ver" data-version>v2.3.0</span>
     </a>
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
@@ -268,8 +268,8 @@ pre code { background: none; padding: 0; font-size: inherit; }
       <p class="intro">No language model runs inside the verifier. The rules are plain code, and they are the same whichever agent wrote the patch.</p>
       <ol class="steps">
         <li>
-          <h3>Runs the same test on both sides</h3>
-          <p>The claim's test runs on the baseline and on the patch, three times each. Exit codes are read one by one: only a real test failure counts as evidence. Import errors, missing tests and timeouts are unverified.</p>
+          <h3>Runs the same tests on both sides</h3>
+          <p>Name the tests, or let coverage pick the ones that executed the changed lines. Each runs on the baseline and on the patch, three times per side, on your project's Python. Only a real test failure counts as evidence. Import errors, missing tests, timeouts and runs killed by their limits are unverified.</p>
         </li>
         <li>
           <h3>Measures diff coverage from artefacts</h3>
@@ -297,7 +297,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
           <tbody>
             <tr><td class="num">0</td><td><span class="stamp merge">Merge</span></td><td>Every claim verified, diff coverage at least 80%, a mutation score of at least 75% when source changed, and the full suite still passes.</td></tr>
             <tr><td class="num">1</td><td><span class="stamp block">Block</span></td><td>The claim's test passed on the baseline and fails on the patch, or the full suite did.</td></tr>
-            <tr><td class="num">2</td><td><span class="stamp inconclusive">Inconclusive</span></td><td>Something could not be measured: a harness error, no coverage evidence, a weak or unmeasured suite, or a rewritten test.</td></tr>
+            <tr><td class="num">2</td><td><span class="stamp inconclusive">Inconclusive</span></td><td>Something could not be measured: a harness error, a run killed by its limits, no coverage evidence, a weak or unmeasured suite, or a rewritten test.</td></tr>
             <tr><td class="num">3</td><td><span class="mono">usage error</span></td><td>Bad arguments or inputs, such as a coverage number with no evidence behind it.</td></tr>
           </tbody>
         </table>
@@ -309,7 +309,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
   <section id="install" aria-labelledby="install-title">
     <div class="wrap">
       <h2 id="install-title">Add it to a pull request</h2>
-      <p class="intro">With <code>base-sha</code>, the Action builds the baseline, the diff and the coverage report itself. You name the test that has to hold.</p>
+      <p class="intro">With <code>base-sha</code>, the Action builds the baseline, the diff and a per-test coverage report itself, then verifies the tests that executed the lines the pull request changed. They run on the Python you set up, with your dependencies.</p>
       <div class="install">
         <div>
           <div class="snippet-head">
@@ -327,24 +327,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: Sanflow10/adversary-gate@v2.2.0
+      - uses: actions/setup-python@v5
         with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          test-path: tests/test_auth.py
-          test-id: test_token_expiry</code></pre>
-          <p class="note"><code>fetch-depth: 0</code> is required: the base commit has to be in the checkout's history.</p>
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest coverage
+
+      - uses: Sanflow10/adversary-gate@v2.3.0
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}</code></pre>
+          <p class="note"><code>fetch-depth: 0</code> is required: the base commit has to be in the checkout's history. To name the tests yourself, add <code>claims</code> with one <code>path::test</code> per line.</p>
         </div>
         <div>
           <div class="snippet-head">
             <h3>Command line</h3>
             <button class="copy" type="button" data-copy="cli" aria-label="Copy the commands">Copy</button>
           </div>
-          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.2.0"
+          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.3.0"
 
 adversary-gate \
   --baseline ./before --patch ./after \
+  --python .venv/bin/python \
   --test-path tests/test_auth.py \
   --test-id test_token_expiry \
+  --test-id test_refresh \
   --diff changes.diff \
   --coverage-json coverage.json</code></pre>
           <p class="note">To see all three decisions first, clone the repository and run <code>python3 demo/demo.py</code>.</p>
@@ -358,10 +363,11 @@ adversary-gate \
       <h2 id="findings-title">Every bug in the gate is published</h2>
       <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-031 are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
       <ul class="ledger">
+        <li><span class="id">AG-024</span><span class="status">fixed in 2.3.0</span><p>A test killed by the memory limit exited 1 and was read as the patch breaking it. It is now a harness death, and every limit is a flag.</p></li>
+        <li><span class="id">AG-025</span><span class="status">fixed in 2.3.0</span><p>The Action replaced the job's Python with its own, so tests ran without the project's dependencies. They now run on yours.</p></li>
         <li><span class="id">AG-021</span><span class="status">fixed in 2.2.0</span><p>A patch rewrote the claim's test to agree with its own bug and got MERGE, exit 0. It now ends INCONCLUSIVE.</p></li>
-        <li><span class="id">AG-022</span><span class="status">fixed in 2.2.0</span><p>Added test lines inflated diff coverage: zero of ten source lines covered still measured 0.8.</p></li>
         <li><span class="id">AG-012</span><span class="status">fixed in 2.1.0</span><p>A patch that only changed C++ reached MERGE on a Python test. Source the gate cannot judge now forces INCONCLUSIVE.</p></li>
-        <li><span class="id">AG-024</span><span class="status open">open</span><p>Resource limits are fixed at 30 seconds and 512 MB per run, so long suites end INCONCLUSIVE.</p></li>
+        <li><span class="id">AG-023</span><span class="status open">open</span><p>The mutation score comes from at most six mutants per run, with no confidence interval.</p></li>
       </ul>
       <div class="links">
         <a href="https://github.com/Sanflow10/adversary-gate/blob/main/ERRORS_AND_INCONSISTENCIES.md">Read the full findings ledger</a>
@@ -375,7 +381,7 @@ adversary-gate \
       <h2 id="limits-title">What it does not do</h2>
       <ul class="limits">
         <li><strong>Measure languages other than Python.</strong> A C++, Rust or SQL change gets INCONCLUSIVE, never a false MERGE. <code>--test-command</code> can run another language's suite through a script that sets up its environment, so a real BLOCK is still possible there.</li>
-        <li><strong>Check more than one test per run.</strong> Each run verifies one claim.</li>
+        <li><strong>Find tests outside pytest.</strong> Automatic discovery reads pytest node IDs from coverage. A suite run through <code>--test-command</code> is named by hand.</li>
         <li><strong>Contain hostile code.</strong> Resource limits and the optional bubblewrap mode contain accidents, not attacks. Run untrusted patches inside a container or a VM.</li>
         <li><strong>Decide for you.</strong> MERGE means the evidence cleared your floors. The merge itself stays with the person who signs the pull request.</li>
       </ul>

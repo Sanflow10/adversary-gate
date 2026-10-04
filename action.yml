@@ -2,7 +2,9 @@ name: 'AdversaryGate'
 description: 'Evidence-based fail-closed verification gate for AI coding agents'
 author: 'AdversaryGate Authors'
 branding:
-  icon: 'shield-check'
+  # Feather's 'shield'. 'shield-check' is not in the set GitHub Actions
+  # branding accepts, so the Marketplace rejected the listing's icon.
+  icon: 'shield'
   color: 'blue'
 
 inputs:
@@ -29,16 +31,69 @@ inputs:
     description: >-
       Shell command that writes the coverage JSON report to the path in
       $COVERAGE_JSON, run in the patch tree. Only used when base-sha is set
-      and coverage-json is not. Default measures a pytest suite with coverage.py.
+      and coverage-json is not. `coverage` in it is the project's interpreter
+      running coverage.py ($ADVERSARY_PYTHON -m coverage). Default measures
+      the pytest suite, recording which test ran each line when claims are
+      discovered.
     required: false
-    default: 'coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
+  python:
+    description: >-
+      Interpreter that runs your tests -- the one your dependencies are
+      installed in. Default: the first `python`/`python3` on PATH that can
+      import pytest (i.e. what your own actions/setup-python step put there),
+      else the gate's private interpreter. The Action no longer changes which
+      Python later steps of your job see.
+    required: false
   test-path:
-    description: 'Relative path to target test file (any file that exists in the patch tree)'
-    required: true
+    description: >-
+      Relative path to the test file the claims live in. Optional: name tests
+      with `claims` instead, or leave all of them empty to have the gate
+      discover the tests that executed the changed lines.
+    required: false
   test-id:
     description: >-
-      Node ID or test name to verify. Optional when test-command is given --
-      a suite that is one command has no node IDs to name.
+      Node ID or test name inside test-path; one per line to verify several.
+      Optional when test-command is given -- a suite that is one command has
+      no node IDs to name.
+    required: false
+  claims:
+    description: 'Tests to verify, one pytest node ID per line (path::test_name)'
+    required: false
+  discover-claims:
+    description: >-
+      'auto' (default), 'true' or 'false'. Verify the tests that executed a
+      changed source line, read from per-test coverage contexts. 'auto' turns
+      it on when no test-path, claims or test-command is given. Test files the
+      patch rewrote are never used: their verdict would be the patch grading
+      itself.
+    required: false
+    default: 'auto'
+  max-claims:
+    description: 'Cap on discovered claims; each one costs several test runs'
+    required: false
+    default: '10'
+  timeout:
+    description: "Wall-clock seconds per test run, or 'none'"
+    required: false
+    default: '30'
+  cpu-seconds:
+    description: "CPU seconds per test run, or 'none'"
+    required: false
+    default: '10'
+  memory:
+    description: >-
+      Address-space limit per test run (e.g. 512M, 4G) or 'none'. The JVM and
+      Node cannot start under one -- use 'none' for them.
+    required: false
+    default: '512M'
+  pass-env:
+    description: >-
+      Variables copied from the job into the test runs, one per line or
+      space-separated (e.g. PATH, JAVA_HOME). Runs start from a minimal
+      environment on purpose.
+    required: false
+  env:
+    description: 'Variables set in the test runs, one NAME=VALUE per line. Only names are recorded.'
     required: false
   test-command:
     description: >-
@@ -129,26 +184,140 @@ outputs:
     description: 'Final decision: merge, block, or inconclusive'
     value: ${{ steps.gate.outputs.decision }}
   outcome:
-    description: 'Verdict outcome: verified, refuted, or unverified'
+    description: >-
+      Outcome of the verdict that explains the decision (the first refuted,
+      else the first unverified): verified, refuted, or unverified
     value: ${{ steps.gate.outputs.outcome }}
+  claims-total:
+    description: 'How many claims were verified in this run'
+    value: ${{ steps.gate.outputs.claims-total }}
+  python:
+    description: 'The interpreter the tests ran on'
+    value: ${{ steps.python.outputs.python }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Set up Python environment
+    # AG-025. This step used to be a plain setup-python, which puts 3.12 first
+    # on PATH for the rest of the caller's job: the gate then ran the tests on
+    # an interpreter none of the project's dependencies were installed in, and
+    # every step after the Action inherited it too. The gate's own Python is
+    # now fetched without touching PATH and lives in a private venv.
+    - name: Set up the gate's own Python
+      id: gate-python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+        update-environment: false
 
-    # AG-005: the Action used to call src/cli.py on a bare runner. ``pytest`` is
-    # a declared dependency of the package but is not present in a clean runner,
-    # so the harness died with "No module named pytest" and the gate reported
-    # INCONCLUSIVE for reasons unrelated to the patch. Install first, then run.
-    # ``coverage`` is not a package dependency: it is here only because this
-    # Action may have to produce the coverage artefact itself.
-    - name: Install AdversaryGate and its dependencies
+    # AG-005: ``pytest`` is a declared dependency of the package but is not
+    # present on a clean runner, so the harness died with "No module named
+    # pytest". Installed into the venv, it is also the fallback interpreter
+    # for a job that set up no Python of its own.
+    - name: Install AdversaryGate into a private venv
+      id: gate-venv
       shell: bash
-      run: python -m pip install "${{ github.action_path }}" coverage
+      env:
+        AG_SETUP_PYTHON: ${{ steps.gate-python.outputs.python-path }}
+        AG_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        VENV="${RUNNER_TEMP}/adversary-gate/venv"
+        "$AG_SETUP_PYTHON" -m venv "$VENV"
+        "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$AG_ACTION_PATH" coverage
+        echo "python=$VENV/bin/python" >> "$GITHUB_OUTPUT"
+
+    # Which interpreter runs the tests: the caller's, when they named one or
+    # set one up with pytest in it; the venv's otherwise, said out loud.
+    # coverage.py has to run on that same interpreter to see the same code.
+    # When it is missing there it is installed into a directory of its own,
+    # never into the project's environment.
+    - name: Resolve the project's Python
+      id: python
+      shell: bash
+      env:
+        AG_PYTHON_IN: ${{ inputs.python }}
+        AG_GATE_PYTHON: ${{ steps.gate-venv.outputs.python }}
+        AG_TEST_COMMAND: ${{ inputs.test-command }}
+      run: |
+        set -euo pipefail
+        TOOLS="${RUNNER_TEMP}/adversary-gate/tools"
+        mkdir -p "$TOOLS/bin"
+        PROJECT=""
+        if [ -n "$AG_PYTHON_IN" ]; then
+          PROJECT="$(command -v "$AG_PYTHON_IN" || true)"
+          if [ -z "$PROJECT" ] || [ ! -x "$PROJECT" ]; then
+            echo "::error::python: '$AG_PYTHON_IN' is not an executable interpreter"
+            exit 3
+          fi
+          if [ -z "$AG_TEST_COMMAND" ] && ! "$PROJECT" -c 'import pytest' >/dev/null 2>&1; then
+            echo "::warning title=AdversaryGate::$PROJECT cannot import pytest, so no claim can run on it and the decision will be inconclusive; pip install pytest in that environment"
+          fi
+        else
+          for candidate in python python3; do
+            found="$(command -v "$candidate" || true)"
+            if [ -n "$found" ] && "$found" -c 'import pytest' >/dev/null 2>&1; then
+              PROJECT="$found"
+              break
+            fi
+          done
+          if [ -z "$PROJECT" ]; then
+            PROJECT="$AG_GATE_PYTHON"
+            echo "::notice title=AdversaryGate::no python on PATH can import pytest, so the tests run on the gate's own Python 3.12. Set up your project's Python and install its dependencies and pytest before this step, or set the 'python' input."
+          fi
+        fi
+
+        PYPATH=""
+        if ! "$PROJECT" -c 'import coverage' >/dev/null 2>&1; then
+          if ! "$PROJECT" -m pip install --quiet --disable-pip-version-check --target "$TOOLS/site" coverage; then
+            echo "::error::coverage.py is not installed for $PROJECT and could not be installed beside it; pip install coverage in that environment"
+            exit 3
+          fi
+          PYPATH="$TOOLS/site"
+        fi
+        {
+          echo '#!/usr/bin/env bash'
+          if [ -n "$PYPATH" ]; then
+            printf 'export PYTHONPATH=%q${PYTHONPATH:+:$PYTHONPATH}\n' "$PYPATH"
+          fi
+          printf 'exec %q -m coverage "$@"\n' "$PROJECT"
+        } > "$TOOLS/bin/coverage"
+        chmod +x "$TOOLS/bin/coverage"
+
+        # Per-test contexts are what lets the gate find the tests that ran
+        # the changed lines (AG-031).
+        printf '[run]\ndynamic_context = test_function\n' > "$TOOLS/coveragerc"
+
+        echo "python=$PROJECT" >> "$GITHUB_OUTPUT"
+        echo "bin=$TOOLS/bin" >> "$GITHUB_OUTPUT"
+        echo "rcfile=$TOOLS/coveragerc" >> "$GITHUB_OUTPUT"
+        echo "::notice title=AdversaryGate::tests run on $("$PROJECT" -c 'import sys; print(sys.executable, sys.version.split()[0])')"
+
+    # Whether claims are discovered, decided once so the two steps below
+    # agree: the coverage it needs is recorded with per-test contexts only
+    # when it is on.
+    - name: Decide how claims are found
+      id: claims
+      shell: bash
+      env:
+        AG_DISCOVER: ${{ inputs.discover-claims }}
+        AG_TEST_PATH: ${{ inputs.test-path }}
+        AG_CLAIMS: ${{ inputs.claims }}
+        AG_TEST_COMMAND: ${{ inputs.test-command }}
+      run: |
+        set -euo pipefail
+        case "$AG_DISCOVER" in
+          true) DISCOVER=true ;;
+          false) DISCOVER=false ;;
+          auto)
+            if [ -z "$AG_TEST_PATH" ] && [ -z "${AG_CLAIMS//[[:space:]]/}" ] && [ -z "$AG_TEST_COMMAND" ]; then
+              DISCOVER=true
+            else
+              DISCOVER=false
+            fi ;;
+          *) echo "::error::discover-claims must be auto, true or false, got '$AG_DISCOVER'"; exit 3 ;;
+        esac
+        echo "discover=$DISCOVER" >> "$GITHUB_OUTPUT"
 
     # base-sha: one ref in, three artefacts out. Kept in its own step so the
     # separation holds -- the gate measures files, the Action prepares them.
@@ -160,19 +329,30 @@ runs:
         AG_BASE_SHA: ${{ inputs.base-sha }}
         AG_COVERAGE_JSON_IN: ${{ inputs.coverage-json }}
         AG_COVERAGE_CMD: ${{ inputs.coverage-command }}
+        AG_DISCOVER: ${{ steps.claims.outputs.discover }}
+        AG_TOOLS_BIN: ${{ steps.python.outputs.bin }}
+        ADVERSARY_PYTHON: ${{ steps.python.outputs.python }}
+        ADVERSARY_COVERAGE_RC: ${{ steps.python.outputs.rcfile }}
       run: |
         set -euo pipefail
         OUT="${RUNNER_TEMP}/adversary-gate"
         mkdir -p "$OUT"
+        # `coverage` in any coverage-command is the project's interpreter
+        # running coverage.py, whatever else is on PATH.
+        export PATH="$AG_TOOLS_BIN:$PATH"
+        if [ -z "$AG_COVERAGE_CMD" ]; then
+          if [ "$AG_DISCOVER" = "true" ]; then
+            AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --show-contexts -o "$COVERAGE_JSON"'
+          else
+            AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
+          fi
+        fi
 
         EXTRA=()
         if [ -n "$AG_COVERAGE_JSON_IN" ]; then
           EXTRA+=(--skip-coverage)
         else
-          EXTRA+=(--coverage-file "$OUT/coverage.json")
-          if [ -n "$AG_COVERAGE_CMD" ]; then
-            EXTRA+=(--coverage-command "$AG_COVERAGE_CMD")
-          fi
+          EXTRA+=(--coverage-file "$OUT/coverage.json" --coverage-command "$AG_COVERAGE_CMD")
         fi
 
         bash "${{ github.action_path }}/scripts/prepare_evidence.sh" \
@@ -202,6 +382,16 @@ runs:
         AG_BASE_SHA: ${{ inputs.base-sha }}
         AG_TEST_PATH: ${{ inputs.test-path }}
         AG_TEST_ID: ${{ inputs.test-id }}
+        AG_CLAIMS: ${{ inputs.claims }}
+        AG_DISCOVER: ${{ steps.claims.outputs.discover }}
+        AG_MAX_CLAIMS: ${{ inputs.max-claims }}
+        AG_GATE_PYTHON: ${{ steps.gate-venv.outputs.python }}
+        AG_PROJECT_PYTHON: ${{ steps.python.outputs.python }}
+        AG_TIMEOUT: ${{ inputs.timeout }}
+        AG_CPU_SECONDS: ${{ inputs.cpu-seconds }}
+        AG_MEMORY: ${{ inputs.memory }}
+        AG_PASS_ENV: ${{ inputs.pass-env }}
+        AG_ENV: ${{ inputs.env }}
         AG_TEST_COMMAND: ${{ inputs.test-command }}
         AG_FULL_SUITE_COMMAND: ${{ inputs.full-suite-command }}
         AG_FULL_SUITE_PATH: ${{ inputs.full-suite-path }}
@@ -249,18 +439,43 @@ runs:
         ARGS=(
           --baseline "$BASELINE"
           --patch "$PATCH"
-          --test-path "$AG_TEST_PATH"
+          --python "$AG_PROJECT_PYTHON"
+          --timeout "$AG_TIMEOUT"
+          --cpu-seconds "$AG_CPU_SECONDS"
+          --memory "$AG_MEMORY"
           --bug-kind "$AG_BUG_KIND"
           --coverage-floor "$AG_COVERAGE_FLOOR"
           --coverage-source "$AG_COVERAGE_SOURCE"
           --suite-strength-floor "$AG_STRENGTH_FLOOR"
           --evidence-log "$AG_EVIDENCE_LOG"
         )
-        # Omitted rather than passed empty: with no test-command a missing
-        # test-id is a usage error the gate should report, not silently fill in.
-        if [ -n "$AG_TEST_ID" ]; then
-          ARGS+=(--test-id "$AG_TEST_ID")
+        if [ -n "$AG_TEST_PATH" ]; then
+          ARGS+=(--test-path "$AG_TEST_PATH")
         fi
+        # One per line. Omitted rather than passed empty: with no test-command
+        # a missing test-id is a usage error the gate should report, not
+        # silently fill in.
+        # `if`, not `[ ] &&`: the step runs under `bash -e`, and a loop whose
+        # last test was false would end the step with that status.
+        trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+        while IFS= read -r line; do
+          line="$(trim "$line")"
+          if [ -n "$line" ]; then ARGS+=(--test-id "$line"); fi
+        done <<< "$AG_TEST_ID"
+        while IFS= read -r line; do
+          line="$(trim "$line")"
+          if [ -n "$line" ]; then ARGS+=(--claim "$line"); fi
+        done <<< "$AG_CLAIMS"
+        if [ "$AG_DISCOVER" = "true" ]; then
+          ARGS+=(--discover-claims --max-claims "$AG_MAX_CLAIMS")
+        fi
+        # Names only, split on any whitespace, never glob-expanded.
+        while read -r -a names; do
+          for name in "${names[@]}"; do ARGS+=(--pass-env "$name"); done
+        done <<< "$AG_PASS_ENV"
+        while IFS= read -r line; do
+          if [ -n "$(trim "$line")" ]; then ARGS+=(--env "$line"); fi
+        done <<< "$AG_ENV"
         if [ -n "$AG_TEST_COMMAND" ]; then
           ARGS+=(--test-command "$AG_TEST_COMMAND")
         fi
@@ -309,13 +524,18 @@ runs:
         # fire. Exiting 0 was the only case that ever worked.
         # `cmd || var=$?` is a handled failure, so -e does not stop for it.
         EXIT_CODE=0
-        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" python3 "${{ github.action_path }}/src/cli.py" "${ARGS[@]}") || EXIT_CODE=$?
+        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" "$AG_GATE_PYTHON" "${{ github.action_path }}/src/cli.py" "${ARGS[@]}") || EXIT_CODE=$?
         echo "$JSON_OUT"
 
-        DECISION=$(echo "$JSON_OUT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('decision', 'inconclusive'))" 2>/dev/null || echo "inconclusive")
-        OUTCOME=$(echo "$JSON_OUT" | python3 -c "import sys, json; print(json.load(sys.stdin).get('outcome', 'unverified'))" 2>/dev/null || echo "unverified")
+        field() { # $1=key, $2=fallback; `or` because a run with no claim reports null
+          echo "$JSON_OUT" | "$AG_GATE_PYTHON" -c "import sys, json; print(json.load(sys.stdin).get('$1') or '$2')" 2>/dev/null || echo "$2"
+        }
+        DECISION="$(field decision inconclusive)"
+        OUTCOME="$(field outcome unverified)"
+        CLAIMS_TOTAL="$(field claims_total 0)"
 
-        echo "decision=${DECISION}" >> $GITHUB_OUTPUT
-        echo "outcome=${OUTCOME}" >> $GITHUB_OUTPUT
+        echo "decision=${DECISION}" >> "$GITHUB_OUTPUT"
+        echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
+        echo "claims-total=${CLAIMS_TOTAL}" >> "$GITHUB_OUTPUT"
 
         exit $EXIT_CODE

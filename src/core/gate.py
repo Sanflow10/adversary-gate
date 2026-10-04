@@ -342,9 +342,9 @@ class Gate:
         patch_dir: Path,
         *,
         changed_paths: Iterable[str] = (),
-        timeout_seconds: int = 30,
-        cpu_seconds: int = 10,
-        mem_bytes: int = 512 * 1024 * 1024,
+        timeout_seconds: Optional[int] = 30,
+        cpu_seconds: Optional[int] = 10,
+        mem_bytes: Optional[int] = 512 * 1024 * 1024,
         require_network_isolation: bool = False,
         run_kwargs: Optional[dict] = None,
     ) -> GateVerdict:
