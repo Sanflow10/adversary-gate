@@ -16,7 +16,7 @@ pip install adversary-gate
 | --- | --- |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
 | 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
-| 📋 **[Findings AG-001…AG-031](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
+| 📋 **[Findings AG-001…AG-032](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
 
 ---
 
