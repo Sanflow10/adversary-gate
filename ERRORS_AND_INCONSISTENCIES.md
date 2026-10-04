@@ -213,7 +213,20 @@ do baseline (`test_*`, `*_test.py`, qualquer coisa sob `tests/`), e o oráculo
 é acionado se o patch mudou qualquer um deles — mesmo com o arquivo da claim
 intacto. Um `tests/helpers.py` entortado para concordar com o bug dá `REFUTED`.
 
-**Continua aberto:** helpers fora de caminhos de teste (ex.: `testing_utils.py`
-na raiz) vêm do patch; a checagem colateral da suíte inteira ainda roda os
-testes do patch, não os do baseline; claims não-Python (`--test-command` com
-`test-id`) caem na regra antiga (`UNVERIFIED`).
+**Fechado na 2.6.0** — os três itens que tinham ficado abertos:
+
+* **Helpers fora de caminhos de teste.** Não há como distinguir pelo caminho um
+  helper de código sob teste (`numpy.testing` é API pública; chutar errado
+  em qualquer direção é furo). Viraram **declarados**: `--test-support GLOB`
+  (Action: `test-support`). Declarados contam como teste em todo lugar —
+  fora da cobertura e da mutação, e restaurados do baseline pelo oráculo. O
+  heurístico ganhou só convenções que nunca são código de produto
+  (`__tests__/`, `*.test.*`, `*.spec.*`, `*_test.go`, `*Test.java`, `*_spec.rb`).
+* **Suíte colateral.** Quando o patch mudou testes do baseline, a suíte inteira
+  também roda com os testes do baseline contra o código do patch
+  (`full_suite_oracle`); um teste que não é de nenhuma claim, entortado para
+  concordar com o bug, vira regressão colateral → `BLOCK`.
+* **Claims de `--test-command` com `test-id`.** O id é rótulo, não nó a
+  coletar: o transplante sempre se aplica.
+
+Testes: `tests/test_baseline_oracle.py`.

@@ -1,6 +1,6 @@
 {
-  "record_id": "7140f6c196c14abe8a600d0919f959c6",
-  "ts": "2026-10-04T14:12:58.394406+00:00",
+  "record_id": "b711be3f61fa429492e67e84bc8010ca",
+  "ts": "2026-10-04T14:34:01.227621+00:00",
   "kind": "decision",
   "decision": "inconclusive",
   "rounds_used": 4,
@@ -44,6 +44,7 @@
   },
   "full_suite_ran": true,
   "full_suite_exit_codes": null,
+  "full_suite_oracle": null,
   "execution": {
     "python": "/tmp/claude-1000/-home-sa/7c1788d6-949d-4f26-bf8f-bec5b5e68aec/scratchpad/v2/bin/python",
     "timeout_seconds": 30,
@@ -52,7 +53,8 @@
     "sandbox": "none",
     "env_passed": [],
     "env_passed_missing": [],
-    "env_set": []
+    "env_set": [],
+    "test_support": []
   },
   "discovery": null
 }

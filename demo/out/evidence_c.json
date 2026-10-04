@@ -1,6 +1,6 @@
 {
-  "record_id": "0e61db9a74054b1eb2b3f014c6fb201d",
-  "ts": "2026-10-04T14:13:02.494485+00:00",
+  "record_id": "c5162c7d9bb745cd9f6ccc7433722714",
+  "ts": "2026-10-04T14:34:05.253768+00:00",
   "kind": "decision",
   "decision": "merge",
   "rounds_used": 4,
@@ -49,6 +49,7 @@
   },
   "full_suite_ran": true,
   "full_suite_exit_codes": null,
+  "full_suite_oracle": null,
   "execution": {
     "python": "/tmp/claude-1000/-home-sa/7c1788d6-949d-4f26-bf8f-bec5b5e68aec/scratchpad/v2/bin/python",
     "timeout_seconds": 30,
@@ -57,7 +58,8 @@
     "sandbox": "none",
     "env_passed": [],
     "env_passed_missing": [],
-    "env_set": []
+    "env_set": [],
+    "test_support": []
   },
   "discovery": null
 }
