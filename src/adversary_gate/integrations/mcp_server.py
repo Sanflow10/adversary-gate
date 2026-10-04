@@ -168,7 +168,15 @@ def build_server():
         from mcp.server.mcpserver import MCPServer as Server  # mcp >= 2
     except ImportError:  # pragma: no cover - mcp 1.x
         from mcp.server.fastmcp import FastMCP as Server
-    server = Server("adversary-gate")
+    instructions = (
+        "Call verify_repo before reporting a code change as done. merge: a human may "
+        "look; block: fix the code, not the tests; inconclusive: say what was not "
+        "measured. Policy, baseline and interpreter are the operator's (gate_policy)."
+    )
+    try:
+        server = Server("adversary-gate", instructions=instructions, version=__version__)
+    except TypeError:  # pragma: no cover - mcp 1.x FastMCP has no version argument
+        server = Server("adversary-gate", instructions=instructions)
     server.tool()(verify_repo)
     server.tool()(gate_policy)
     return server

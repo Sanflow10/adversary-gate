@@ -418,6 +418,45 @@ jobs:
           assert decision["execution"]["test_support"] == ["gate_fixture/testing_utils.py"], decision["execution"]
           PY
 
+  docker-mcp:
+    # The image MCP registries (Glama) build and introspect. Built and asked
+    # for its tools here, because a Dockerfile nobody builds rots quietly.
+    name: Docker image starts the MCP server
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t adversary-gate-mcp:ci .
+
+      - name: Set up Python for the MCP client
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Introspect the server inside the container
+        run: |
+          python -m pip install --quiet mcp
+          python - <<'PY'
+          import asyncio
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def main():
+              params = StdioServerParameters(command="docker", args=["run", "-i", "--rm", "adversary-gate-mcp:ci"])
+              async with stdio_client(params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      info = await session.initialize()
+                      tools = {tool.name for tool in (await session.list_tools()).tools}
+                      print("server", info.server_info.name, info.server_info.version, sorted(tools))
+                      assert {"verify_repo", "gate_policy"} <= tools, tools
+                      result = await session.call_tool("gate_policy", {})
+                      assert not result.is_error, result
+
+          asyncio.run(main())
+          PY
+
   static-analysis:
     # Belt and braces for a gate that runs other people's code: the tool that
     # decides whether a patch is safe should not itself be shipping an obvious
