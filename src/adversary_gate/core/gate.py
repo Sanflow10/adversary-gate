@@ -22,6 +22,11 @@ it does not merge.
 
 from __future__ import annotations
 
+import ast
+import os
+import re
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +53,7 @@ from adversary_gate.core.types import (
 from adversary_gate.sandbox.runner import SandboxResult, run_test
 from adversary_gate.verifiers.coverage import DiffCoverage, covered_diff_ratio
 from adversary_gate.verifiers.stability import StabilityPolicy, policy_for
+from adversary_gate.verifiers.testpaths import is_test_path
 
 
 def _bytes_differ(before: Path, after: Path) -> bool:
@@ -60,6 +66,90 @@ def _bytes_differ(before: Path, after: Path) -> bool:
         return before.read_bytes() != after.read_bytes()
     except OSError:
         return True
+
+
+#: Tooling state that never belongs in a transplanted tree.
+_COPY_IGNORE = shutil.ignore_patterns(
+    ".git", "__pycache__", "*.pyc", ".pytest_cache", "node_modules"
+)
+_TREE_SKIP = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".tox", ".nox"})
+
+#: ``test_add[1-2]`` -> ``test_add``: a parametrised id names one function.
+_PARAMS = re.compile(r"\[.*\]$")
+
+
+def _defines_test(test_file: Path, test_id: str) -> Optional[bool]:
+    """Whether ``test_id`` is written in ``test_file`` -- ``None`` when we cannot tell.
+
+    Read from the AST rather than by running pytest, so the answer does not
+    depend on the file being importable. A test that exists only through
+    inheritance or generation reads as absent; the caller treats "absent" as
+    the stricter branch (it still re-runs every test the baseline file had),
+    so a miss here costs a run, never a false verdict.
+    """
+    if not test_id:
+        return True  # the whole file is the claim
+    if test_file.suffix != ".py":
+        return None
+    try:
+        body = ast.parse(test_file.read_text()).body
+    except (OSError, SyntaxError, ValueError):
+        return None
+    for name in (_PARAMS.sub("", part) for part in test_id.split("::")):
+        node = next(
+            (
+                n for n in body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and n.name == name
+            ),
+            None,
+        )
+        if node is None:
+            return False
+        body = getattr(node, "body", [])
+    return True
+
+
+def _baseline_test_files(baseline_dir: Path):
+    base = Path(baseline_dir)
+    for current, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _TREE_SKIP and not (Path(current) / d / "pyvenv.cfg").is_file()]
+        for name in files:
+            source = Path(current) / name
+            rel = source.relative_to(base).as_posix()
+            if not source.is_symlink() and is_test_path(rel):
+                yield rel, source
+
+
+def _rewritten_test_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+    """Baseline test files the patch changed or deleted."""
+    return sorted(
+        rel for rel, source in _baseline_test_files(baseline_dir)
+        if _bytes_differ(source, Path(patch_dir) / rel)
+    )
+
+
+def _transplant(baseline_dir: Path, patch_dir: Path, test_path: str, into: Path) -> Path:
+    """The patch's code with the baseline's tests put back.
+
+    Not only ``test_path``: every file the baseline had that counts as a test
+    file (``is_test_path`` -- ``test_*``, ``*_test.py``, anything under a
+    ``tests`` directory) is restored, changed or deleted by the patch alike.
+    Otherwise the baseline's test would run on top of the patch's
+    ``tests/helpers.py``, and a rewritten helper is a rewritten answer. Test
+    files the patch *added* stay: nothing on the baseline speaks for them.
+    """
+    tree = into / "tree"
+    shutil.copytree(patch_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
+    restore = dict(_baseline_test_files(baseline_dir))
+    restore.setdefault(test_path, Path(baseline_dir) / test_path)
+    for rel, source in restore.items():
+        target = tree / rel
+        if target.is_symlink() or target.is_dir():
+            continue  # the harness/path policies own these shapes
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return tree
 
 
 @dataclass(frozen=True)
@@ -411,56 +501,106 @@ class Gate:
 
         policy = policy_for(claim.bug_kind)
         baseline_applicable = (baseline_dir / claim.test_path).is_file()
-        # AG-021. The claim's test is read from the *patch* tree, so a patch
-        # that rewrites it also writes the answer it will be judged against:
-        # break ``a - b`` into ``a + b``, change ``== 2`` into ``== 8``, and
-        # baseline passes, patch passes, mutation kills its one mutant -- MERGE.
-        # Only a test that already existed on the baseline can have been
-        # rewritten; a test the patch adds has no earlier answer to change.
-        oracle_rewritten = baseline_applicable and _bytes_differ(
-            baseline_dir / claim.test_path, patch_dir / claim.test_path
+        limits = dict(
+            timeout_seconds=timeout_seconds,
+            cpu_seconds=cpu_seconds,
+            mem_bytes=mem_bytes,
+            require_network_isolation=require_network_isolation,
+            extra=extra,
         )
 
-        baseline_codes: List[int] = []
-        patch_codes: List[int] = []
-        # Retain output from the final run on each side. The original threw
-        # every SandboxResult away except its exit_code, which is why the
-        # evidence log contained no evidence.
-        baseline_output = ""
-        patch_output = ""
+        # AG-021. The claim's test is read from the *patch* tree, so a patch
+        # that rewrites it also writes the answer it will be judged against.
+        # Only a test that already existed on the baseline can have been
+        # rewritten; a test the patch adds has no earlier answer to change.
+        # A helper is part of the answer too: a patch that leaves the claim's
+        # file alone and bends ``tests/helpers.py`` rewrote the test all the
+        # same, so any baseline test file the patch changed engages the oracle.
+        rewritten = baseline_applicable and (
+            _bytes_differ(baseline_dir / claim.test_path, patch_dir / claim.test_path)
+            or bool(_rewritten_test_files(baseline_dir, patch_dir))
+        )
+        if not rewritten:
+            verdict, details = self._judge(claim, baseline_dir, patch_dir, baseline_applicable, policy, limits)
+            return finish(self._explain(verdict, details))
 
-        for _ in range(policy.runs):
-            if baseline_applicable:
-                result = run_test(
-                    baseline_dir,
-                    claim.test_path,
-                    claim.test_id,
-                    timeout_seconds,
-                    cpu_seconds,
-                    mem_bytes,
-                    require_network_isolation=require_network_isolation,
-                    **extra,
+        # The baseline oracle. Whatever the patch did to the test file, the
+        # baseline's copy of it is what the patch's code answers to: it is
+        # transplanted into a copy of the patch tree and run there.
+        present = _defines_test(baseline_dir / claim.test_path, claim.test_id)
+        if present is None:
+            return finish(self._rewritten_unjudgeable(claim, baseline_dir, patch_dir, policy, limits))
+
+        with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
+            tree = _transplant(baseline_dir, patch_dir, claim.test_path, Path(scratch))
+            if present:
+                verdict, details = self._judge(claim, baseline_dir, tree, True, policy, limits)
+                verdict.oracle = "baseline"
+                changed = _rewritten_test_files(baseline_dir, patch_dir) or [claim.test_path]
+                verdict.reason = (
+                    f"judged by the baseline's version of {claim.test_path} and its test "
+                    f"files (the patch rewrote {', '.join(changed)}): {verdict.reason}"
                 )
-                baseline_codes.append(result.exit_code)
-                baseline_output = result.output_tail
+                return finish(self._explain(verdict, details))
+
+            # The claim is a test the patch added to a file that already
+            # existed. Nothing on the baseline can judge the new test itself --
+            # it is judged like any added test -- but every test the baseline
+            # shipped in that file must still hold on the patch's code, or the
+            # rewrite is where a weakened assertion hides.
+            kept = self._baseline_file_holds(claim, baseline_dir, tree, policy, limits)
+        if kept is not None:
+            return finish(kept)
+        verdict, details = self._judge(claim, baseline_dir, patch_dir, False, policy, limits)
+        verdict.oracle = "baseline-file"
+        verdict.reason = (
+            f"{claim.test_id} is new in {claim.test_path}; every test the baseline "
+            f"shipped in that file passes on the patch, and the new one: {verdict.reason}"
+        )
+        return finish(self._explain(verdict, details))
+
+    # ------------------------------------------------------------------
+    # oracle plumbing
+    # ------------------------------------------------------------------
+    def _runs(self, directory: Path, test_path: str, test_id: str, policy, limits) -> tuple:
+        codes: List[int] = []
+        output = ""
+        for _ in range(policy.runs):
             result = run_test(
-                patch_dir,
-                claim.test_path,
-                claim.test_id,
-                timeout_seconds,
-                cpu_seconds,
-                mem_bytes,
-                require_network_isolation=require_network_isolation,
-                **extra,
+                directory,
+                test_path,
+                test_id,
+                limits["timeout_seconds"],
+                limits["cpu_seconds"],
+                limits["mem_bytes"],
+                require_network_isolation=limits["require_network_isolation"],
+                **limits["extra"],
             )
-            patch_codes.append(result.exit_code)
-            patch_output = result.output_tail
+            codes.append(result.exit_code)
+            # Retain output from the final run. The original threw every
+            # SandboxResult away except its exit_code, which is why the
+            # evidence log contained no evidence.
+            output = result.output_tail
+        return codes, output
+
+    def _judge(
+        self, claim, baseline_dir: Path, patch_dir: Path, baseline_applicable: bool, policy, limits
+    ) -> tuple:
+        """Run the claim on both sides and classify; ``patch_dir`` may be a transplant."""
+        baseline_codes: List[int] = []
+        baseline_output = ""
+        if baseline_applicable:
+            baseline_codes, baseline_output = self._runs(
+                baseline_dir, claim.test_path, claim.test_id, policy, limits
+            )
+        patch_codes, patch_output = self._runs(
+            patch_dir, claim.test_path, claim.test_id, policy, limits
+        )
 
         baseline_state, _, baseline_detail = self._resolve_side(
             baseline_codes, policy, label="baseline"
         )
         patch_state, _, patch_detail = self._resolve_side(patch_codes, policy, label="patch")
-
         if not baseline_applicable:
             baseline_state = ExecState.NOT_APPLICABLE
 
@@ -475,31 +615,83 @@ class Gate:
             baseline_output=baseline_output,
             patch_output=patch_output,
         )
+        return self.classify(claim, run_outcome), (baseline_detail, patch_detail)
 
-        verdict = self.classify(claim, run_outcome)
-
-        if oracle_rewritten and verdict.outcome is Outcome.VERIFIED:
-            # Only VERIFIED is withdrawn. REFUTED stays: a rewritten test that
-            # still fails on the patch is direct evidence against it, and
-            # evidence we watched happen outranks evidence we cannot trust.
-            verdict = GateVerdict(
-                claim,
-                FailureClass.INVALID,
-                Outcome.UNVERIFIED,
-                f"the patch rewrote the claim's own test ({claim.test_path}); a "
-                "verdict from a test the patch itself changed is not evidence, "
-                "because whoever writes the patch can write the answer. Run the "
-                "baseline's version of the test against the patch, or review the "
-                "test change by hand",
-                run_outcome,
-            )
-
+    @staticmethod
+    def _explain(verdict: GateVerdict, details: tuple) -> GateVerdict:
         if verdict.outcome is Outcome.UNVERIFIED:
             # Attach *how* each side behaved: an unverified verdict that does
             # not say what broke is indistinguishable from a clean one in a
             # log, which is how self-deception survives an audit trail.
-            verdict.reason = f"{verdict.reason} [{baseline_detail}; {patch_detail}]"
-        return finish(verdict)
+            verdict.reason = f"{verdict.reason} [{details[0]}; {details[1]}]"
+        return verdict
+
+    def _baseline_file_holds(
+        self, claim, baseline_dir: Path, tree: Path, policy, limits
+    ) -> Optional[GateVerdict]:
+        """``None`` when the baseline's whole test file passes on both sides.
+
+        Otherwise the verdict that says why the new test cannot be judged on
+        its own: the baseline's tests fail on the patch's code (REFUTED), or
+        there is no clean reference to compare against (UNVERIFIED).
+        """
+        base_codes, base_out = self._runs(baseline_dir, claim.test_path, "", policy, limits)
+        tree_codes, tree_out = self._runs(tree, claim.test_path, "", policy, limits)
+        base_state, _, base_detail = self._resolve_side(base_codes, policy, label="baseline file")
+        tree_state, tree_stable, tree_detail = self._resolve_side(
+            tree_codes, policy, label="baseline file on patch"
+        )
+        run_outcome = ExecutionOutcome(
+            base_state,
+            tree_state,
+            baseline_failures=sum(1 for c in base_codes if c != 0),
+            patch_failures=sum(1 for c in tree_codes if c != 0),
+            run_count=policy.runs,
+            baseline_exit_codes=tuple(base_codes),
+            patch_exit_codes=tuple(tree_codes),
+            baseline_output=base_out,
+            patch_output=tree_out,
+        )
+        if base_state is ExecState.PASS and tree_state is ExecState.PASS:
+            return None
+        if base_state is ExecState.PASS and tree_state is ExecState.FAIL and tree_stable:
+            verdict = GateVerdict(
+                claim,
+                FailureClass.REGRESSION,
+                Outcome.REFUTED,
+                f"the patch rewrote {claim.test_path}, and a test the baseline shipped "
+                "in it fails on the patch's code",
+                run_outcome,
+            )
+        else:
+            verdict = GateVerdict(
+                claim,
+                FailureClass.INVALID,
+                Outcome.UNVERIFIED,
+                f"the patch rewrote {claim.test_path} and added {claim.test_id} to it, "
+                "but the baseline's tests in that file give no clean reference "
+                f"[{base_detail}; {tree_detail}]",
+                run_outcome,
+            )
+        verdict.oracle = "baseline-file"
+        return verdict
+
+    def _rewritten_unjudgeable(self, claim, baseline_dir, patch_dir, policy, limits) -> GateVerdict:
+        """A rewritten test we cannot transplant: the pre-oracle rule (AG-021)."""
+        verdict, details = self._judge(claim, baseline_dir, patch_dir, True, policy, limits)
+        if verdict.outcome is Outcome.VERIFIED:
+            # Only VERIFIED is withdrawn. REFUTED stays: a rewritten test that
+            # still fails on the patch is direct evidence against it.
+            verdict = GateVerdict(
+                claim,
+                FailureClass.INVALID,
+                Outcome.UNVERIFIED,
+                f"the patch rewrote the claim's own test ({claim.test_path}) and the "
+                "baseline's version could not be located to judge it with; a verdict "
+                "from a test the patch itself changed is not evidence",
+                verdict.outcome_run,
+            )
+        return self._explain(verdict, details)
 
     # ------------------------------------------------------------------
     # decision

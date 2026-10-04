@@ -12,9 +12,10 @@ Three rules keep the list honest:
 * **Only source lines count.** A test always executes its own lines; a changed
   test file proves nothing about the code under test (the same reason AG-022
   keeps tests out of the coverage ratio).
-* **A test file the patch rewrote is not an oracle.** Its verdict would be the
-  patch grading itself (AG-021). Those files are left out and named in the
-  detail, so the exclusion is visible rather than silent.
+* **A test file the patch rewrote is not its own oracle.** Its verdict would be
+  the patch grading itself (AG-021). Until the baseline oracle those files were
+  left out; now they are kept, the gate judges them with the baseline's copy,
+  and they are named in the detail so the substitution is visible.
 * **No contexts is a usage error, not "no tests".** A report recorded without
   contexts cannot answer the question; reading it as "nothing covers this"
   would turn a missing measurement into a decision.
@@ -167,14 +168,16 @@ def discover_claims(
             nodes.add(node)
 
     rewritten = sorted({path for path, _ in nodes if _rewritten(Path(baseline_dir), Path(patch_dir), path)})
-    kept = sorted(node for node in nodes if node[0] not in rewritten)
+    kept = sorted(nodes)
 
     detail: Dict[str, object] = {
         "source": "coverage contexts",
         "changed_source_files": sorted(source_lines),
         "contexts_seen": len(contexts),
         "tests_found": len(nodes),
-        "excluded_rewritten_test_files": rewritten,
+        # Kept, not excluded: ``Gate.verify_claim`` judges these with the
+        # baseline's copy of the file (the baseline oracle).
+        "rewritten_test_files_judged_by_baseline": rewritten,
         "unresolved_contexts": unresolved,
         "max_claims": max_claims,
         "truncated": max(0, len(kept) - max_claims),

@@ -238,6 +238,7 @@ def _verdict_record(verdict: GateVerdict) -> Dict[str, Any]:
         "classification": verdict.classification.value,
         "outcome": verdict.outcome.value,
         "reason": verdict.reason,
+        "oracle": verdict.oracle,
         "duration_seconds": round(verdict.duration_seconds, 6),
     }
     if verdict.outcome_run is not None:
@@ -390,8 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="verify the tests that executed the changed source lines, read from "
         "the coverage report's per-test contexts (needs --diff and "
-        "--coverage-json written with --show-contexts). Test files the patch "
-        "rewrote are left out.",
+        "--coverage-json written with --show-contexts). Tests in files the "
+        "patch rewrote are judged with the baseline's copy of the file.",
     )
     parser.add_argument(
         "--max-claims",

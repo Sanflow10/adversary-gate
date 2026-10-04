@@ -63,9 +63,9 @@ inputs:
     description: >-
       'auto' (default), 'true' or 'false'. Verify the tests that executed a
       changed source line, read from per-test coverage contexts. 'auto' turns
-      it on when no test-path, claims or test-command is given. Test files the
-      patch rewrote are never used: their verdict would be the patch grading
-      itself.
+      it on when no test-path, claims or test-command is given. Tests in a file
+      the patch rewrote are judged with the baseline's copy of that file, never
+      with the patch's.
     required: false
     default: 'auto'
   max-claims:

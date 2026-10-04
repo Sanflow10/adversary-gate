@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
+from adversary_gate.cli import EXIT_BLOCK, EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
 from adversary_gate.core.gate import Gate
 from adversary_gate.core.types import CriticClaim, Decision, FailureClass, Outcome
 from adversary_gate.verifiers.coverage import covered_diff_ratio
@@ -82,8 +82,13 @@ class TestClaimTestIsNotTheBuilders(unittest.TestCase):
             CriticClaim("test_calc.py", "test_sub"), root / "baseline", root / "patch"
         )
 
-    def test_a_rewritten_claim_test_is_not_a_verification(self):
-        """The exact AG-021 shape, at the library boundary: passes, still not VERIFIED."""
+    def test_the_baseline_test_refutes_the_ag021_patch(self):
+        """The exact AG-021 shape: the baseline's copy of the test is what the bug answers to.
+
+        Until the oracle this was UNVERIFIED -> INCONCLUSIVE: the gate knew not
+        to trust the rewritten test, but had nothing else to run. Now the
+        baseline's ``assert sub(5, 3) == 2`` runs against ``a + b`` and fails.
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write(root, "baseline", "calc.py", BASE_CALC)
@@ -93,14 +98,15 @@ class TestClaimTestIsNotTheBuilders(unittest.TestCase):
 
             verdict = self._verify(root)
 
-            self.assertIs(verdict.outcome, Outcome.UNVERIFIED, verdict.reason)
-            self.assertIs(verdict.classification, FailureClass.INVALID)
-            self.assertIn("test_calc.py", verdict.reason)
+            self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
+            self.assertIs(verdict.classification, FailureClass.REGRESSION)
+            self.assertEqual(verdict.oracle, "baseline")
+            self.assertIn("baseline's version of test_calc.py", verdict.reason)
             self.assertIn("rewrote", verdict.reason)
-            self.assertIs(Gate([]).decide([verdict], 4, 1.0), Decision.INCONCLUSIVE)
+            self.assertIs(Gate([]).decide([verdict], 4, 1.0), Decision.BLOCK)
 
-    def test_the_reason_still_says_how_each_side_behaved(self):
-        """An UNVERIFIED verdict that hides what ran is how self-deception survives."""
+    def test_the_evidence_says_how_each_side_behaved(self):
+        """Baseline passed with its test, the transplant failed with the same test."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write(root, "baseline", "calc.py", BASE_CALC)
@@ -108,12 +114,26 @@ class TestClaimTestIsNotTheBuilders(unittest.TestCase):
             _write(root, "patch", "calc.py", BUGGY_CALC)
             _write(root, "patch", "test_calc.py", TEST_REWRITTEN)
 
-            reason = self._verify(root).reason
-            self.assertIn("baseline: passed", reason)
-            self.assertIn("patch: passed", reason)
+            run = self._verify(root).outcome_run
+            self.assertTrue(run.baseline_exit_codes)
+            self.assertEqual(set(run.baseline_exit_codes), {0})
+            self.assertEqual(set(run.patch_exit_codes), {1})
+            self.assertIn("== 2", run.patch_output)  # the baseline's assertion ran
 
-    def test_the_cli_no_longer_merges_the_ag021_patch(self):
-        """End to end, with a real diff and a real coverage artefact: exit 2, not 0."""
+    def test_the_patch_tree_is_not_modified(self):
+        """The transplant is a copy: the patch's own test file is left as it was."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write(root, "baseline", "calc.py", BASE_CALC)
+            _write(root, "baseline", "test_calc.py", TEST_OLD)
+            _write(root, "patch", "calc.py", BUGGY_CALC)
+            _write(root, "patch", "test_calc.py", TEST_REWRITTEN)
+
+            self._verify(root)
+            self.assertEqual((root / "patch" / "test_calc.py").read_text(), TEST_REWRITTEN)
+
+    def test_the_cli_blocks_the_ag021_patch(self):
+        """End to end, with a real diff and a real coverage artefact: exit 1, not 0 (nor 2)."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write(root, "baseline", "calc.py", BASE_CALC)
@@ -133,8 +153,8 @@ class TestClaimTestIsNotTheBuilders(unittest.TestCase):
                 ],
             )
 
-            self.assertEqual(code, EXIT_INCONCLUSIVE)
-            self.assertEqual(_last_decision(log)["decision"], "inconclusive")
+            self.assertEqual(code, EXIT_BLOCK)
+            self.assertEqual(_last_decision(log)["decision"], "block")
 
     def test_it_does_not_depend_on_the_caller_supplying_a_diff(self):
         """No --diff, a declared-untrusted coverage claim: the bytes still differ."""
@@ -149,7 +169,7 @@ class TestClaimTestIsNotTheBuilders(unittest.TestCase):
                 root, ["--coverage-ratio", "1.0", "--coverage-source", "untrusted"]
             )
 
-            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertEqual(code, EXIT_BLOCK)
 
     def test_a_rewritten_test_that_fails_is_still_a_block(self):
         """Direct evidence outranks the missing kind: we watched it fail."""

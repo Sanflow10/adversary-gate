@@ -304,19 +304,20 @@ class TestDiscovery(unittest.TestCase):
         claims, _ = self._discover({"2": ["test_calc.py::test_sub|run", "test_calc.py::test_p[1-2]|run"]})
         self.assertEqual(claims, [("test_calc.py", "test_p"), ("test_calc.py", "test_sub")])
 
-    def test_a_test_file_the_patch_rewrote_is_not_an_oracle(self):
+    def test_a_test_file_the_patch_rewrote_is_kept_and_named(self):
+        """The baseline oracle judges it; discovery no longer has to drop it."""
         rewritten = TESTS.replace("== 2", "== 8")
         shutil.rmtree(self.root)
         self.root = _fixture(patch_tests=rewritten)
         claims, detail = self._discover({"2": ["test_calc.test_sub"]})
-        self.assertEqual(claims, [])
-        self.assertEqual(detail["excluded_rewritten_test_files"], ["test_calc.py"])
+        self.assertEqual(claims, [("test_calc.py", "test_sub")])
+        self.assertEqual(detail["rewritten_test_files_judged_by_baseline"], ["test_calc.py"])
 
     def test_a_test_file_the_patch_added_is_kept(self):
         (self.root / "patch" / "test_new.py").write_text("from calc import sub\n\n\ndef test_new():\n    assert sub(1, 1) == 0\n")
         claims, detail = self._discover({"2": ["test_new.test_new"]})
         self.assertEqual(claims, [("test_new.py", "test_new")])
-        self.assertEqual(detail["excluded_rewritten_test_files"], [])
+        self.assertEqual(detail["rewritten_test_files_judged_by_baseline"], [])
 
     def test_no_contexts_is_a_usage_error_not_an_empty_answer(self):
         report = {"files": {"calc.py": {"executed_lines": [1, 2]}}}

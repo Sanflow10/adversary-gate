@@ -76,6 +76,7 @@ class EvidenceLog:
             "classification": verdict.classification.value,
             "outcome": verdict.outcome.value,
             "reason": verdict.reason,
+            "oracle": verdict.oracle,
             "duration_seconds": round(verdict.duration_seconds, 6),
             # --- the executed evidence ---
             "baseline": run.baseline.value if run else None,

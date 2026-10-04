@@ -151,6 +151,12 @@ class GateVerdict:
     reason: str
     outcome_run: Optional[ExecutionOutcome] = None
     duration_seconds: float = 0.0
+    #: Which copy of the claim's test produced the verdict: ``patch`` (the
+    #: test file is untouched, or new), ``baseline`` (the patch rewrote it and
+    #: the baseline's copy was run against the patch's code) or
+    #: ``baseline-file`` (a test added to a rewritten file, judged after every
+    #: test the baseline had in that file passed on the patch).
+    oracle: str = "patch"
     # No ``suite_strength`` here on purpose. It used to be a field defaulting
     # to 1.0, it was never assigned anything else, and patch-level strength is
     # now measured in ``verifiers.strength.measure_mutation_score`` and passed
