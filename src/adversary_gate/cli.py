@@ -16,13 +16,14 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from adversary_gate import __version__
 from adversary_gate.core.exitmap import PYTEST_OK
-from adversary_gate.core.gate import Gate, GateConfig
+from adversary_gate.core.gate import Gate, GateConfig, rewritten_test_files, transplant_tree
 from adversary_gate.core.metrics import compute_metrics, format_report
 from adversary_gate.core.types import (
     AcceptanceCriterion,
@@ -37,6 +38,7 @@ from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_te
 from adversary_gate.verifiers.coverage import covered_diff_ratio, validate_diff
 from adversary_gate.verifiers.discovery import discover_claims
 from adversary_gate.verifiers.strength import classify_changes, measure_mutation_score
+from adversary_gate.verifiers.testpaths import set_test_support
 
 EXIT_MERGE = 0
 EXIT_BLOCK = 1
@@ -356,6 +358,17 @@ def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     return sorted(validate_diff(text))
 
 
+def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
+    """What the collateral run judged the patch's code with, when it was not the patch's tests."""
+    if not rewritten:
+        return None
+    return {
+        "source": "baseline",
+        "rewritten_test_files": list(rewritten),
+        "exit_code": exit_code,
+    }
+
+
 def _summary(verdicts) -> Dict[str, Any]:
     return {
         "claims_total": len(verdicts),
@@ -386,6 +399,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="a test to verify, by pytest node id; repeatable",
     )
     parser.add_argument("--claim-json", help='{"claims": [...]}, one or more claims')
+    parser.add_argument(
+        "--test-support",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="a path (fnmatch glob, repo-relative; '*' crosses '/') that is test "
+        "support, not code under test -- e.g. testing_utils.py or 'helpers/*'. "
+        "Repeatable. Treated like a test file everywhere: out of diff coverage "
+        "and mutation, and put back from the baseline by the baseline oracle, so "
+        "a patch cannot bend it to agree with a bug. test_*, *_test.py, "
+        "conftest.py and anything under tests/ need no declaration.",
+    )
     parser.add_argument(
         "--discover-claims",
         action="store_true",
@@ -540,9 +565,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """One decision. ``--test-support`` is module state; it never outlives the call."""
+    try:
+        return _main(argv)
+    finally:
+        set_test_support(())
+
+
+def _main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         parser = build_parser()
         args = parser.parse_args(argv)
+        # Every call sets it, empty included: a previous main() in the same
+        # process must not leave its declarations behind.
+        set_test_support(args.test_support)
 
         criteria: List[AcceptanceCriterion] = []
         for raw in args.criterion:
@@ -593,6 +629,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "memory_bytes": args.memory,
             "sandbox": args.sandbox,
             **env_record,
+            "test_support": list(args.test_support),
         }
 
         discovery: Optional[Dict[str, Any]] = None
@@ -778,6 +815,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # because it declared how its tests execute.
         full_command = args.full_suite_command or args.test_command
         full_suite_ran = bool(full_command) or bool(args.full_suite_path)
+        rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
+        oracle_full_code: Optional[int] = None
 
         def _full_run(directory: Path) -> SandboxResult:
             if full_command:
@@ -807,6 +846,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # v2.0.1 wrote ``null`` for both, which made "the suite passed" and
             # "the suite never ran" indistinguishable in the evidence.
             patch_full = _full_run(Path(args.patch))
+            # The baseline oracle, for the whole suite: when the patch changed
+            # tests the baseline already had, the suite the patch must still
+            # pass is the *baseline's*, run against the patch's code. The
+            # patch's own copy alone would let a bent test vouch for itself
+            # outside the claims, where no claim was looking.
+            if rewritten_tests:
+                with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
+                    tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                    oracle_full = _full_run(tree)
+                oracle_full_code = oracle_full.exit_code
+                if patch_full.exit_code == PYTEST_OK and oracle_full.exit_code != PYTEST_OK:
+                    patch_full = oracle_full
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
@@ -841,6 +892,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "mutation": mutation_detail,
                     "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
+                    "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
                     "execution": execution,
                     "discovery": discovery,
                 },
@@ -870,6 +922,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "diff_coverage_source": coverage_source,
             "diff_coverage": coverage_detail,
             "full_suite_ran": full_suite_ran,
+            "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
             "measurement_seconds": round(mutation_seconds, 6),
             "execution": execution,
         }

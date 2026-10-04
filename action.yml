@@ -68,6 +68,14 @@ inputs:
       with the patch's.
     required: false
     default: 'auto'
+  test-support:
+    description: >-
+      Paths that are test support rather than code under test, one glob per
+      line (repo-relative; '*' crosses '/'), e.g. testing_utils.py or
+      helpers/*. Kept out of diff coverage and mutation, and put back from the
+      baseline by the baseline oracle, so a patch cannot bend a helper to agree
+      with its bug. test_*, *_test.py, conftest.py and tests/ need no entry.
+    required: false
   max-claims:
     description: 'Cap on discovered claims; each one costs several test runs'
     required: false
@@ -341,7 +349,11 @@ runs:
         # running coverage.py, whatever else is on PATH.
         export PATH="$AG_TOOLS_BIN:$PATH"
         if [ -z "$AG_COVERAGE_CMD" ]; then
-          if [ "$AG_DISCOVER" = "true" ]; then
+          while IFS= read -r line; do
+          line="$(trim "$line")"
+          if [ -n "$line" ]; then ARGS+=(--test-support "$line"); fi
+        done <<< "$AG_TEST_SUPPORT"
+        if [ "$AG_DISCOVER" = "true" ]; then
             AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --show-contexts -o "$COVERAGE_JSON"'
           else
             AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
@@ -385,6 +397,7 @@ runs:
         AG_CLAIMS: ${{ inputs.claims }}
         AG_DISCOVER: ${{ steps.claims.outputs.discover }}
         AG_MAX_CLAIMS: ${{ inputs.max-claims }}
+        AG_TEST_SUPPORT: ${{ inputs.test-support }}
         AG_GATE_PYTHON: ${{ steps.gate-venv.outputs.python }}
         AG_PROJECT_PYTHON: ${{ steps.python.outputs.python }}
         AG_TIMEOUT: ${{ inputs.timeout }}

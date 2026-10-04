@@ -129,7 +129,7 @@ def _rewritten_test_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
     )
 
 
-def _transplant(baseline_dir: Path, patch_dir: Path, test_path: str, into: Path) -> Path:
+def _transplant(baseline_dir: Path, patch_dir: Path, test_path: Optional[str], into: Path) -> Path:
     """The patch's code with the baseline's tests put back.
 
     Not only ``test_path``: every file the baseline had that counts as a test
@@ -142,7 +142,8 @@ def _transplant(baseline_dir: Path, patch_dir: Path, test_path: str, into: Path)
     tree = into / "tree"
     shutil.copytree(patch_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
     restore = dict(_baseline_test_files(baseline_dir))
-    restore.setdefault(test_path, Path(baseline_dir) / test_path)
+    if test_path:
+        restore.setdefault(test_path, Path(baseline_dir) / test_path)
     for rel, source in restore.items():
         target = tree / rel
         if target.is_symlink() or target.is_dir():
@@ -150,6 +151,16 @@ def _transplant(baseline_dir: Path, patch_dir: Path, test_path: str, into: Path)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     return tree
+
+
+def rewritten_test_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+    """Public: the baseline test files (declared support included) the patch changed or deleted."""
+    return _rewritten_test_files(baseline_dir, patch_dir)
+
+
+def transplant_tree(baseline_dir: Path, patch_dir: Path, into: Path) -> Path:
+    """Public: a copy of the patch's tree with every baseline test file put back."""
+    return _transplant(baseline_dir, patch_dir, None, into)
 
 
 @dataclass(frozen=True)
@@ -528,6 +539,11 @@ class Gate:
         # baseline's copy of it is what the patch's code answers to: it is
         # transplanted into a copy of the patch tree and run there.
         present = _defines_test(baseline_dir / claim.test_path, claim.test_id)
+        if extra.get("command"):
+            # A command suite reads ``test_id`` as a label, not as a node to
+            # collect: whatever the command runs, it runs from the transplanted
+            # files. Nothing to locate, so nothing to give up on.
+            present = True
         if present is None:
             return finish(self._rewritten_unjudgeable(claim, baseline_dir, patch_dir, policy, limits))
 

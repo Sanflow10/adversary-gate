@@ -29,7 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from adversary_gate.cli import EXIT_MERGE, main
+from adversary_gate.cli import EXIT_BLOCK
 from adversary_gate.core.gate import Gate, _defines_test
+from adversary_gate.verifiers.testpaths import declared_test_support, is_test_path
 from adversary_gate.core.types import CriticClaim, Decision, FailureClass, Outcome
 
 CALC = "def sub(a, b):\n    return a - b\n\n\ndef add(a, b):\n    return a + b\n"
@@ -198,6 +200,122 @@ class TestDefinesTest(unittest.TestCase):
     def test_unknown_is_none(self):
         self.assertIsNone(_defines_test(self._file("def (:\n"), "test_a"))
         self.assertIsNone(_defines_test(Path("run_tests.sh"), "case_1"))
+
+
+class TestDeclaredTestSupport(unittest.TestCase):
+    """A helper whose path says nothing: ``testing_utils.py`` at the root."""
+
+    def _tree(self, root: Path) -> None:
+        for side, calc, expected in (("baseline", "return a - b", 2), ("patch", "return a + b", 8)):
+            (root / side).mkdir(parents=True)
+            (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+            (root / side / "testing_utils.py").write_text(f"EXPECTED = {expected}\n")
+            (root / side / "test_calc.py").write_text(
+                "from calc import sub\nfrom testing_utils import EXPECTED\n\n\n"
+                "def test_sub():\n    assert sub(5, 3) == EXPECTED\n"
+            )
+
+    def _verify(self, root: Path):
+        return Gate([]).verify_claim(CriticClaim("test_calc.py", "test_sub"), root / "baseline", root / "patch")
+
+    def test_undeclared_it_is_source_and_comes_from_the_patch(self):
+        """The control, and the reason the flag exists: nothing in the path says 'helper'."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            self.assertIs(self._verify(root).outcome, Outcome.VERIFIED)
+
+    def test_declared_it_comes_from_the_baseline(self):
+        with tempfile.TemporaryDirectory() as directory, declared_test_support(["testing_utils.py"]):
+            root = Path(directory)
+            self._tree(root)
+            verdict = self._verify(root)
+            self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
+            self.assertIn("testing_utils.py", verdict.reason)
+
+    def test_the_cli_flag_reaches_the_oracle_and_the_artefact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log = root / "ev.jsonl"
+            code = main([
+                "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                "--test-path", "test_calc.py", "--test-id", "test_sub",
+                "--test-support", "testing_utils.py",
+                "--coverage-ratio", "1.0", "--coverage-source", "untrusted",
+                "--evidence-log", str(log),
+            ])
+            self.assertEqual(code, EXIT_BLOCK)
+            decision = [json.loads(line) for line in log.read_text().splitlines() if '"kind":"decision"' in line][-1]
+            self.assertEqual(decision["execution"]["test_support"], ["testing_utils.py"])
+        # and the declaration does not outlive the call
+        self.assertFalse(is_test_path("testing_utils.py"))
+
+    def test_conventions_from_other_languages(self):
+        for path in ("web/button.test.js", "web/__tests__/x.js", "src/api.spec.ts",
+                     "pkg/calc_test.go", "src/test/java/CalcTest.java", "spec/calc_spec.rb"):
+            with self.subTest(path=path):
+                self.assertTrue(is_test_path(path))
+        for path in ("calc.py", "testing_utils.py", "numpy/testing/utils.py", "src/contest.py"):
+            with self.subTest(path=path):
+                self.assertFalse(is_test_path(path))
+
+
+class TestCommandClaimsUseTheOracle(unittest.TestCase):
+    """--test-command with a test-id: the id is a label, the transplant still applies."""
+
+    def test_a_rewritten_shell_check_is_judged_by_the_baseline_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc, expected in (("baseline", "a - b", "2"), ("patch", "a + b", "8")):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(f"def sub(a, b):\n    return {calc}\n")
+                (root / side / "check.sh").write_text(
+                    'out=$(python3 -c "from calc import sub; print(sub(5, 3))")\n'
+                    f'[ "$out" = "{expected}" ] || exit 1\n'
+                )
+            verdict = Gate([]).verify_claim(
+                CriticClaim("check.sh", "case_sub"), root / "baseline", root / "patch",
+                run_kwargs={"command": "sh check.sh", "env": {"PATH": "/usr/bin:/bin"}},
+            )
+            self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
+            self.assertEqual(verdict.oracle, "baseline")
+
+
+class TestCollateralSuiteUsesTheBaselineTests(unittest.TestCase):
+    """A bent test that is not any claim's: only the full suite can see it."""
+
+    def test_a_bent_non_claim_test_is_a_collateral_regression(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, add, expected in (("baseline", "a + b", 5), ("patch", "a + b + 1", 6)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(
+                    f"def sub(a, b):\n    return a - b\n\n\ndef add(a, b):\n    return {add}\n"
+                )
+                (root / side / "test_sub.py").write_text(
+                    "from calc import sub\n\n\ndef test_sub():\n    assert sub(5, 3) == 2\n"
+                )
+                (root / side / "test_add.py").write_text(
+                    f"from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == {expected}\n"
+                )
+            log = root / "ev.jsonl"
+            out = []
+            import contextlib, io
+            with contextlib.redirect_stdout(io.StringIO()) as buffer:
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--test-path", "test_sub.py", "--test-id", "test_sub",
+                    "--full-suite-path", ".",
+                    "--coverage-ratio", "1.0", "--coverage-source", "untrusted",
+                    "--evidence-log", str(log),
+                ])
+            payload = json.loads(buffer.getvalue())
+            self.assertEqual(code, EXIT_BLOCK, payload["decision"])
+            self.assertEqual(payload["full_suite_oracle"]["source"], "baseline")
+            self.assertEqual(payload["full_suite_oracle"]["rewritten_test_files"], ["test_add.py"])
+            self.assertEqual(payload["full_suite_exit_codes"][0], 0)
+            self.assertNotEqual(payload["full_suite_exit_codes"][1], 0)
 
 
 if __name__ == "__main__":
