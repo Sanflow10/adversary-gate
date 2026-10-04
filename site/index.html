@@ -195,6 +195,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
       <a href="#install">Install</a>
+      <a href="#agents">Agents</a>
       <a href="#findings">Findings</a>
       <a href="https://github.com/Sanflow10/adversary-gate">GitHub</a>
     </nav>
@@ -226,7 +227,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
       </div>
       <div class="row">
         <div class="verdict"><span class="stamp merge">Merge</span><span class="exit">exit 0</span></div>
-        <div><h3>The same patch, with evidence</h3><p>coverage 1.0 computed · mutation score 1.0 · inputs SHA-256'd</p></div>
+        <div><h3>The same patch, with evidence</h3><p>coverage 1.0 computed · 5/5 mutants killed · inputs SHA-256'd</p></div>
       </div>
       <footer><strong>The last two rows are the same patch.</strong> Same code, same test, same run. Only the evidence differs. This is the output of the demo, which runs as an acceptance test in CI.</footer>
     </figure>
@@ -250,8 +251,8 @@ pre code { background: none; padding: 0; font-size: inherit; }
         </li>
         <li>
           <h3>The patch rewrote its own test</h3>
-          <p>The code gets a bug and the assertion is changed to agree with it. Both sides pass.</p>
-          <div class="answer"><span class="stamp inconclusive">Inconclusive</span> a test the patch changed is not evidence</div>
+          <p>The code gets a bug and the assertion, or a helper it imports, is changed to agree with it. Both sides pass.</p>
+          <div class="answer"><span class="stamp block">Block</span> the baseline's copy of the test runs against the new code</div>
         </li>
         <li>
           <h3>The change is in code the tests can't break</h3>
@@ -277,14 +278,14 @@ pre code { background: none; padding: 0; font-size: inherit; }
         </li>
         <li>
           <h3>Breaks the lines the patch wrote</h3>
-          <p>Mutation testing on the changed lines only. If the test still passes with that code broken, it is too weak to vouch for the patch.</p>
+          <p>Mutation testing on the changed lines only, one mutant per line before any line gets two. The floor reads the lower bound of an 80% confidence interval, so one killed mutant is not enough to call a suite strong.</p>
         </li>
         <li>
           <h3>Re-runs the full suite on both sides</h3>
           <p>If the full suite passed on the baseline and fails on the patch, that is a collateral regression, and the answer is BLOCK.</p>
         </li>
       </ol>
-      <p class="rule-box"><strong>The patch can't grade itself.</strong> If it changed the test that serves as evidence, a passing run no longer counts as verified. A rewritten test that still fails is kept as evidence against the patch.</p>
+      <p class="rule-box"><strong>The patch can't grade itself.</strong> If it changed a test the baseline already had, or a test helper, or any pytest configuration file, the gate runs the baseline's copy against the new code. A test bent to agree with a bug fails there, and the answer is BLOCK.</p>
     </div>
   </section>
 
@@ -295,14 +296,14 @@ pre code { background: none; padding: 0; font-size: inherit; }
         <table>
           <thead><tr><th scope="col">Exit</th><th scope="col">Decision</th><th scope="col">When</th></tr></thead>
           <tbody>
-            <tr><td class="num">0</td><td><span class="stamp merge">Merge</span></td><td>Every claim verified, diff coverage at least 80%, a mutation score of at least 75% when source changed, and the full suite still passes.</td></tr>
+            <tr><td class="num">0</td><td><span class="stamp merge">Merge</span></td><td>Every claim verified, diff coverage at least 80%, a mutation score whose 80% lower confidence bound is at least 75% when source changed, and the full suite still passes.</td></tr>
             <tr><td class="num">1</td><td><span class="stamp block">Block</span></td><td>The claim's test passed on the baseline and fails on the patch, or the full suite did.</td></tr>
-            <tr><td class="num">2</td><td><span class="stamp inconclusive">Inconclusive</span></td><td>Something could not be measured: a harness error, a run killed by its limits, no coverage evidence, a weak or unmeasured suite, or a rewritten test.</td></tr>
+            <tr><td class="num">2</td><td><span class="stamp inconclusive">Inconclusive</span></td><td>Something could not be measured: a harness error, a run killed by its limits, no coverage evidence, too few mutants, a weak or unmeasured suite, or a changed harness file.</td></tr>
             <tr><td class="num">3</td><td><span class="mono">usage error</span></td><td>Bad arguments or inputs, such as a coverage number with no evidence behind it.</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="note">Evidence of breakage outranks missing evidence: BLOCK beats INCONCLUSIVE, which beats MERGE. Both floors are flags you can change.</p>
+      <p class="note">Evidence of breakage outranks missing evidence: BLOCK beats INCONCLUSIVE, which beats MERGE. Both floors are flags you can change. A passing claim also says how it passed: <code>fixed</code> when the test failed before the patch, <code>no_regression</code> when it passed on both sides.</p>
     </div>
   </section>
 
@@ -358,6 +359,47 @@ adversary-gate \
     </div>
   </section>
 
+  <section id="agents" aria-labelledby="agents-title">
+    <div class="wrap">
+      <h2 id="agents-title">Let the agent call it, not configure it</h2>
+      <p class="intro">An agent that writes code can call the gate before it reports a task as done. The agent names what to judge. Whoever runs the agent decides how strictly, and against which baseline: whoever picks the baseline picks the oracle.</p>
+      <div class="install">
+        <div>
+          <div class="snippet-head">
+            <h3>MCP server for coding agents</h3>
+            <button class="copy" type="button" data-copy="mcp" aria-label="Copy the MCP setup">Copy</button>
+          </div>
+          <pre><code id="mcp">pip install "adversary-gate[mcp]==2.8.0"
+
+# Hermes Agent: ~/.hermes/config.yaml
+mcp_servers:
+  adversary_gate:
+    command: "adversary-gate-mcp"
+    timeout: 900
+    env:
+      ADVERSARY_GATE_BASE_REF: "origin/main"
+      ADVERSARY_GATE_PYTHON: "/opt/project-venv/bin/python"
+      ADVERSARY_GATE_POLICY: "--sandbox bwrap"
+    tools:
+      include: [verify_repo, gate_policy]</code></pre>
+          <p class="note"><code>verify_repo</code> judges the repository's working tree, uncommitted changes included. Floors, sandbox, baseline and interpreter come from the environment above, never from the tool call. <code>adversary-gate-mcp --print-hermes-skill</code> prints a skill that tells the agent to fix code rather than tests on BLOCK, and never to report INCONCLUSIVE as done. Works with any MCP client.</p>
+        </div>
+        <div>
+          <div class="snippet-head">
+            <h3>Risk triage with Jev</h3>
+            <button class="copy" type="button" data-copy="jev" aria-label="Copy the triage command">Copy</button>
+          </div>
+          <pre><code id="jev">export TYPESAFE_API_KEY=sk-...
+
+adversary-gate ... \
+  --diff changes.diff \
+  --triage jev</code></pre>
+          <p class="note">TypeSafe AI's Jev rates the diff's risk in about 100 ms. A confident <em>high</em> raises this run's floors: strength confidence to 0.95, coverage to 0.90. Any other answer, an error or a timeout changes nothing, so a manipulated "low" opens no door. The diff is sent to TypeSafe's API, truncated to 64 KiB, which is why this is opt-in. Jev is in early access; the client follows its published API.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="findings" aria-labelledby="findings-title">
     <div class="wrap">
       <h2 id="findings-title">Every bug in the gate is published</h2>
@@ -368,6 +410,7 @@ adversary-gate \
         <li><span class="id">AG-025</span><span class="status">fixed in 2.3.0</span><p>The Action replaced the job's Python with its own, so tests ran without the project's dependencies. They now run on yours.</p></li>
         <li><span class="id">AG-021</span><span class="status">fixed in 2.5.0</span><p>A patch rewrote the claim's test to agree with its own bug and got MERGE, exit 0. Since 2.5.0 the baseline's copy of the test runs against the patch's code, and the attack is BLOCK.</p></li>
         <li><span class="id">AG-012</span><span class="status">fixed in 2.1.0</span><p>A patch that only changed C++ reached MERGE on a Python test. Source the gate cannot judge now forces INCONCLUSIVE.</p></li>
+        <li><span class="id">AG-030</span><span class="status">fixed in 2.7.0</span><p>"The test failed before and passes now" and "it passed both times" got the same label. They are now <code>fixed</code> and <code>no_regression</code>, and the output says whether a fix was proven.</p></li>
         <li><span class="id">AG-023</span><span class="status">fixed in 2.7.0</span><p>The mutation score came from at most six mutants with no confidence interval. The floor now reads the lower bound of an 80% Wilson interval: 1 of 1 killed is no longer "strong".</p></li>
       </ul>
       <div class="links">

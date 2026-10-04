@@ -1,6 +1,6 @@
 {
-  "record_id": "f49d49f3754c400ca910fd6c22b4606a",
-  "ts": "2026-10-04T15:50:57.577346+00:00",
+  "record_id": "ecf1d0bf31b84ababa5efed14d842968",
+  "ts": "2026-10-04T16:06:52.551624+00:00",
   "kind": "decision",
   "decision": "merge",
   "rounds_used": 4,
@@ -86,7 +86,7 @@
   "full_suite_exit_codes": null,
   "full_suite_oracle": null,
   "execution": {
-    "python": "/tmp/claude-1000/-home-sa/7c1788d6-949d-4f26-bf8f-bec5b5e68aec/scratchpad/v2/bin/python",
+    "python": "python",
     "timeout_seconds": 30,
     "cpu_seconds": 10,
     "memory_bytes": 536870912,

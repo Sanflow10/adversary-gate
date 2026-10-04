@@ -6,7 +6,7 @@
    "s": "\u001b[1m"
   },
   {
-   "t": "repositório: /home/sa/adversary-gate",
+   "t": "repositório: adversary-gate",
    "s": "\u001b[90m"
   },
   {
@@ -42,11 +42,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
+   "t": "      --baseline /tmp/ag-demo-nj0zbq6c/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-502h5wta/patch_broken",
+   "t": "      --patch /tmp/ag-demo-nj0zbq6c/patch_broken",
    "s": "\u001b[90m"
   },
   {
@@ -94,7 +94,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 4.1s",
+   "t": "    tempo       : 6.4s",
    "s": "\u001b[90m"
   },
   {
@@ -118,11 +118,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
+   "t": "      --baseline /tmp/ag-demo-nj0zbq6c/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-502h5wta/patch_clean",
+   "t": "      --patch /tmp/ag-demo-nj0zbq6c/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -162,7 +162,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 5.7s",
+   "t": "    tempo       : 8.7s",
    "s": "\u001b[90m"
   },
   {
@@ -186,11 +186,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
+   "t": "      --baseline /tmp/ag-demo-nj0zbq6c/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-502h5wta/patch_clean",
+   "t": "      --patch /tmp/ag-demo-nj0zbq6c/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -202,11 +202,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --diff /tmp/ag-demo-502h5wta/change.diff",
+   "t": "      --diff /tmp/ag-demo-nj0zbq6c/change.diff",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --coverage-json /tmp/ag-demo-502h5wta/coverage.json",
+   "t": "      --coverage-json /tmp/ag-demo-nj0zbq6c/coverage.json",
    "s": "\u001b[90m"
   },
   {
@@ -238,7 +238,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 5.4s",
+   "t": "    tempo       : 9.0s",
    "s": "\u001b[90m"
   },
   {

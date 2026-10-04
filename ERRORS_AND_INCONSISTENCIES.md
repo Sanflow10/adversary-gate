@@ -234,9 +234,8 @@ Testes: `tests/test_baseline_oracle.py`.
 ## 13. AG-023 e AG-030 — fechados na 2.7.0
 
 Antes de corrigir, conferido que não estavam corrigidos em lugar nenhum: `main`
-local e remota, as branches `claude/keen-hamilton-bemwz8`, `master`,
-`backup/local-pre-sync`, `docs/auditoria-v2` e a cópia antiga em
-`~/adversary_gate_v2`. `classify` dava `discarded` para `FAIL→PASS` e
+local e remota, todas as outras branches do repositório e a cópia antiga
+do projeto. `classify` dava `discarded` para `FAIL→PASS` e
 `PASS→PASS`, e não havia intervalo de confiança no código.
 
 * **AG-023.** O piso de força da suíte é aplicado ao limite inferior de um

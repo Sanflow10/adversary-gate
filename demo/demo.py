@@ -237,7 +237,7 @@ def main() -> int:
     build_fixtures(root)
 
     emit(f"{B}AdversaryGate v2.8.0 — demonstração ao vivo{R}", B)
-    emit(f"repositório: {REPO}", GREY)
+    emit(f"repositório: {REPO.name}", GREY)
     emit()
     emit(f"  Três cenários. B e C são {B}o mesmo patch{R}: mesmo código, mesmos")
     emit(f"  testes, mesma execução. A única diferença é que C trouxe evidência.")
@@ -288,6 +288,11 @@ def main() -> int:
     for letter in ("A", "B", "C"):
         ev = results[letter]["evidence"]
         if ev is not None:
+            # Checked-in artefacts must not carry the absolute paths of the
+            # machine that produced them; the interpreter is named, not located.
+            execution = ev.get("execution") or {}
+            if execution.get("python"):
+                execution["python"] = Path(execution["python"]).name
             (out / f"evidence_{letter.lower()}.json").write_text(
                 json.dumps(ev, ensure_ascii=False, indent=2))
     (out / "transcript.txt").write_text(
