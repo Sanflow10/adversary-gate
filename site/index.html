@@ -190,7 +190,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
     <a class="brand" href="#main" aria-label="AdversaryGate, top of page">
       <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 29 16 16 29 3 16Z" fill="none" stroke="currentColor" stroke-width="3"/></svg>
       AdversaryGate
-      <span class="ver" data-version>v2.3.0</span>
+      <span class="ver" data-version>v2.4.0</span>
     </a>
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
@@ -332,7 +332,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt pytest coverage
 
-      - uses: Sanflow10/adversary-gate@v2.3.0
+      - uses: Sanflow10/adversary-gate@v2.4.0
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}</code></pre>
           <p class="note"><code>fetch-depth: 0</code> is required: the base commit has to be in the checkout's history. To name the tests yourself, add <code>claims</code> with one <code>path::test</code> per line.</p>
@@ -342,7 +342,7 @@ jobs:
             <h3>Command line</h3>
             <button class="copy" type="button" data-copy="cli" aria-label="Copy the commands">Copy</button>
           </div>
-          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.3.0"
+          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.4.0"
 
 adversary-gate \
   --baseline ./before --patch ./after \
@@ -361,8 +361,9 @@ adversary-gate \
   <section id="findings" aria-labelledby="findings-title">
     <div class="wrap">
       <h2 id="findings-title">Every bug in the gate is published</h2>
-      <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-031 are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
+      <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-032 are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
       <ul class="ledger">
+        <li><span class="id">AG-032</span><span class="status">fixed in 2.4.0</span><p>A patch shipped its own <code>.pytest.ini</code> and a plugin that lied only for the exact bytes of its bug, and got MERGE, exit 0. Every test-harness file is now compared tree against tree with the baseline.</p></li>
         <li><span class="id">AG-024</span><span class="status">fixed in 2.3.0</span><p>A test killed by the memory limit exited 1 and was read as the patch breaking it. It is now a harness death, and every limit is a flag.</p></li>
         <li><span class="id">AG-025</span><span class="status">fixed in 2.3.0</span><p>The Action replaced the job's Python with its own, so tests ran without the project's dependencies. They now run on yours.</p></li>
         <li><span class="id">AG-021</span><span class="status">fixed in 2.2.0</span><p>A patch rewrote the claim's test to agree with its own bug and got MERGE, exit 0. It now ends INCONCLUSIVE.</p></li>

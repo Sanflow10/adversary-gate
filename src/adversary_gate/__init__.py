@@ -7,4 +7,4 @@ project with a ``core`` package of its own shadowed, or was shadowed by, the
 gate's.
 """
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"

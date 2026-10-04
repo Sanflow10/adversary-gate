@@ -11,12 +11,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0` e `v2.2.0`**, mais a
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0` e `v2.3.0`**, mais a
 flutuante `v2`, que o Release move para a 2.x mais nova. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
-`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.3.0` é
+`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.4.0` é
 publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
-partir do commit que a contém — se `v2.3.0` não aparece em *Releases*, o
+partir do commit que a contém — se `v2.4.0` não aparece em *Releases*, o
 workflow ainda não rodou, e esta seção ainda é uma promessa.
 
 O AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
@@ -39,6 +39,20 @@ AG-018, o AG-021 e o AG-022** — confira com `pip index versions adversary-gate
 A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
+
+---
+
+## [2.4.0] — 2026-10-04
+
+Fecha o AG-032 (fail-open) e o AG-027; AG-023 parcial; AG-029 mitigado.
+
+```bash
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.4.0/adversary_gate-2.4.0-py3-none-any.whl
+```
+
+**Quebra para quem importa como biblioteca:** `core.*`, `verifiers.*`,
+`sandbox.*` e `cli` passam a ser `adversary_gate.core.*` etc. A CLI e a Action
+não mudam.
 
 ### Segurança
 
