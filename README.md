@@ -8,6 +8,8 @@
 
 An evidence-based fail-closed verification gate for AI coding agents where **uncertainty is a first-class result (`INCONCLUSIVE`)** instead of a silent approval.
 
+**Measures Python/pytest repositories today.** On other stacks it runs your suite via `--test-command` but answers `INCONCLUSIVE`, never `MERGE` — see [Language support](#-language-support--read-this-if-your-repo-is-not-python).
+
 ```bash
 pip install adversary-gate
 ```
