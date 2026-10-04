@@ -117,7 +117,7 @@ cobertura da suíte própria que impede o número de cair em silêncio.
 
 ### Continua aberto
 
-* **AG-008 — Trusted Publishing do PyPI.** Fora do repositório; exige cadastro
+* **AG-008 — Trusted Publishing do PyPI.** **Fechado em 2026-10-04** — publisher registrado no pypi.org e `2.4.0` publicada por OIDC. Texto original: fora do repositório; exige cadastro
   em `pypi.org/manage/project/adversary-gate/settings/publishing/`.
 * **AG-003 — isolamento.** `--sandbox bwrap` cobre o caso "estou rodando isto
   agora e não tenho infraestrutura": sem rede, PID e `/tmp` próprios, sistema
@@ -183,3 +183,9 @@ por exit code antes da correção e travado em `tests/test_harness_integrity.py`
 | ID | Severidade | Achado | Status |
 |---|---|---|---|
 | **AG-032** | Alta — fail-open | O patch quebra `add` (`a + b` → `a + b + 1`), adiciona `.pytest.ini` com `addopts = -p agplug` e um `agplug.py` que reescreve o relatório para "passed" **só enquanto** `calc.py` tem exatamente os bytes com bug. Os mutantes mudam esses bytes, o plugin sai do caminho e todo mutante morre de verdade → `MERGE`, exit 0, `diff_coverage: 0.8`, `suite_strength: 1.0`, com `add(2, 3) == 6`. Duas causas: o denylist conhecia `pytest.ini` mas não `.pytest.ini`, `pytest.toml` nem `.pytest.toml` (o pytest 9 lê os três), e a policy só olhava os caminhos *declarados* (`--diff`, `--changed-path`). | **Corrigido** — `harness_drift()` compara as **árvores** baseline × patch: todo arquivo de harness (os cinco nomes de config do pytest 9, `pyproject.toml`, `setup.cfg`, `conftest.py`, `sitecustomize.py`, `usercustomize.py`, `*.pth`, em qualquer profundidade; `.git` e virtualenvs fora) tem que ser idêntico ao do baseline, senão a claim é `UNVERIFIED` → `INCONCLUSIVE`. O denylist ganhou os nomes que faltavam. Teste negativo: com a correção revertida, os cenários voltam a dar exit 0. **Aberto (fora do alcance de um gate por testes, documentado no README):** código-fonte importado pelo teste roda no mesmo processo do pytest e pode adulterá-lo, ou detectar que está sob teste. |
+
+**AG-008 / AG-020 / AG-026 — fechados em 2026-10-04.** Trusted Publisher
+registrado no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
+sem environment); *Publish to PyPI* com a tag `v2.4.0` subiu wheel e sdist por
+OIDC, com atestados de proveniência. `pip install adversary-gate==2.4.0`
+verificado num ambiente limpo. A `2.2.0` e a `2.3.0` não foram enviadas.

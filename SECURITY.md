@@ -62,8 +62,10 @@ them produces a `MERGE` it should not:
 - **Only pytest and `--test-command` are executed.** There is no mutation
   adapter yet, so non-Python stacks cannot reach `MERGE` at all — that is a
   missing feature, not a bypass.
-- **No signed releases and no PyPI Trusted Publishing yet** (AG-008). Verify
-  artifacts against the tag, not against PyPI, until that is resolved.
+- **Releases are not signed with a project key.** Since `2.4.0` PyPI uploads go
+  through Trusted Publishing (AG-008 closed) and carry PyPI provenance
+  attestations tying each file to `pypi-publish.yml` in this repository; the
+  GitHub Release artefacts carry no signature. Verify them against the tag.
 
 ## Reporting a vulnerability
 

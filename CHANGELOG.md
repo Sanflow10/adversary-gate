@@ -19,12 +19,10 @@ publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
 partir do commit que a contém — se `v2.4.0` não aparece em *Releases*, o
 workflow ainda não rodou, e esta seção ainda é uma promessa.
 
-O AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
-pypi.org não conhece o repositório — `invalid-publisher: valid token, but no
-corresponding publisher` — enquanto o passo `Build binary wheel and source
-distribution` passa em toda execução. Ele só fecha quando alguém com acesso ao
-PyPI registrar o publisher (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
-sem environment) na página do projeto, e isso não se faz daqui.
+O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
+no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
+environment) e a `2.4.0` subiu por OIDC, com atestados de proveniência. A
+`2.2.0` e a `2.3.0` nunca chegaram ao PyPI: lá a sequência é `2.1.0` → `2.4.0`.
 
 Rotas de publicação até aqui: `2.0.0`, `2.0.1` e `2.1.0` subiram ao PyPI **por
 upload com API token**, não por OIDC. A partir da `2.2.0` o workflow Release

@@ -284,9 +284,9 @@ pip install adversary-gate
 Check what PyPI is serving before you trust it — `pip index versions
 adversary-gate`. Anything **below `2.2.0` is missing the fixes for AG-018,
 AG-021 and AG-022**, two of which are fail-opens (a patch reaching `MERGE` it
-should not). PyPI only gets a release when the Release workflow has a
-`PYPI_API_TOKEN` secret or the Trusted Publisher is registered (AG-008); the
-GitHub Release below always gets it. Every other route works too, and **none of
+should not). PyPI gets a release through **Actions → Publish to PyPI → Run workflow**
+(Trusted Publishing, AG-008 closed) — `2.2.0` and `2.3.0` were never uploaded,
+so PyPI jumps from `2.1.0` to `2.4.0`. The GitHub Release below always gets it. Every other route works too, and **none of
 them needs PyPI**:
 
 ```bash
@@ -320,7 +320,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- only once 2.4.0 is there; 2.1.0 still has AG-018, AG-021 and AG-022
+# PyPI -- 2.4.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
 pip install adversary-gate==2.4.0
 ```
 
@@ -378,17 +378,12 @@ simply was not a question. Running it against a patch that changed only
 `calculator.cpp` (rewriting `a - b` to `a * b`) merges on the strength of a
 Python test whose only assertion is `assert True`.
 
-**AG-008 is still open.** The Trusted Publisher was never registered in the PyPI
-project settings: GitHub mints a valid OIDC token and PyPI answers
-`invalid-publisher: valid token, but no corresponding publisher`, so the upload
-step of `pypi-publish.yml` has failed on every tag pushed so far — `v2.0.0`,
-`v2.0.1` and `v2.1.0` alike — while `Build binary wheel and source distribution`
-passes every time. Registering it takes the PyPI project's own Publishing page
-(`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no environment) and cannot
-be done from this repository. Until that happens a `v*` tag builds the
-distributions and then dies at upload, unless a `PYPI_API_TOKEN` secret is set:
-**Publish to PyPI** uses the token when it exists and Trusted Publishing when it
-does not.
+**AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
+project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
+environment), and `2.4.0` went up through it — OIDC, no token — with PyPI
+provenance attestations attached to the wheel and the sdist. Until then the
+upload step had failed on every tag with `invalid-publisher: valid token, but
+no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
 
 ---
 
