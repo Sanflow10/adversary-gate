@@ -1,6 +1,6 @@
 {
-  "record_id": "40ec6c5ea2dc4b978238c867f03ba7c6",
-  "ts": "2026-10-04T14:33:57.533696+00:00",
+  "record_id": "361fa33ea6124d7fb471450b731838a3",
+  "ts": "2026-10-04T15:09:41.008585+00:00",
   "kind": "decision",
   "decision": "block",
   "rounds_used": 4,
@@ -12,6 +12,9 @@
   "classifications": [
     "regression"
   ],
+  "claims_fixed": 0,
+  "claims_no_regression": 0,
+  "fix_proven": false,
   "diff_coverage_source": "untrusted",
   "diff_coverage": {
     "source": "untrusted",
@@ -21,6 +24,8 @@
   "suite_strength": 0.0,
   "suite_strength_unverified": false,
   "suite_strength_floor": 0.75,
+  "suite_strength_lower": 0.0,
+  "suite_strength_confidence": 0.8,
   "mutation": {
     "measured": true,
     "reason": "",
@@ -42,7 +47,13 @@
     ],
     "mutants_counted": 1,
     "stillborn": 0,
-    "mutants_killed": 0
+    "mutants_killed": 0,
+    "score": 0.0,
+    "confidence": 0.8,
+    "interval": [
+      0.0,
+      0.6216
+    ]
   },
   "full_suite_ran": true,
   "full_suite_exit_codes": [

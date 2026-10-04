@@ -1,4 +1,4 @@
-AdversaryGate v2.6.0 — demonstração ao vivo
+AdversaryGate v2.7.0 — demonstração ao vivo
 repositório: /home/sa/adversary-gate
 
   Três cenários. B e C são o mesmo patch: mesmo código, mesmos
@@ -8,10 +8,10 @@ repositório: /home/sa/adversary-gate
   CENÁRIO A — patch quebra o teste
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-ij2lblx4/baseline
-      --patch /tmp/ag-demo-ij2lblx4/patch_broken
+      --baseline /tmp/ag-demo-8lu6ya8m/baseline
+      --patch /tmp/ag-demo-8lu6ya8m/patch_broken
       --test-path test_sum.py
-      --test-id test_add
+      --test-id test_ops
       --coverage-source untrusted
       --coverage-ratio 1.0
 
@@ -19,45 +19,45 @@ repositório: /home/sa/adversary-gate
     decision    : block
     outcome     : refuted
     coverage    : 1.0   (source=untrusted)
-    força suíte : 0.0   (medida=True)
+    força suíte : 0.0   (limite inferior 0.0, medida=True)
     suíte total : ran=True
-    tempo       : 3.9s
+    tempo       : 3.0s
 
 ==========================================================================
   CENÁRIO B — patch limpo, SEM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-ij2lblx4/baseline
-      --patch /tmp/ag-demo-ij2lblx4/patch_clean
+      --baseline /tmp/ag-demo-8lu6ya8m/baseline
+      --patch /tmp/ag-demo-8lu6ya8m/patch_clean
       --test-path test_sum.py
-      --test-id test_add
+      --test-id test_ops
 
     exit code   : 2
     decision    : inconclusive
     outcome     : verified
     coverage    : None   (source=none)
-    força suíte : 1.0   (medida=True)
+    força suíte : 1.0   (limite inferior 0.7527, medida=True)
     suíte total : ran=True
-    tempo       : 3.7s
+    tempo       : 4.0s
 
 ==========================================================================
   CENÁRIO C — patch limpo, COM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-ij2lblx4/baseline
-      --patch /tmp/ag-demo-ij2lblx4/patch_clean
+      --baseline /tmp/ag-demo-8lu6ya8m/baseline
+      --patch /tmp/ag-demo-8lu6ya8m/patch_clean
       --test-path test_sum.py
-      --test-id test_add
-      --diff /tmp/ag-demo-ij2lblx4/change.diff
-      --coverage-json /tmp/ag-demo-ij2lblx4/coverage.json
+      --test-id test_ops
+      --diff /tmp/ag-demo-8lu6ya8m/change.diff
+      --coverage-json /tmp/ag-demo-8lu6ya8m/coverage.json
 
     exit code   : 0
     decision    : merge
     outcome     : verified
     coverage    : 1.0   (source=computed)
-    força suíte : 1.0   (medida=True)
+    força suíte : 1.0   (limite inferior 0.7527, medida=True)
     suíte total : ran=True
-    tempo       : 4.0s
+    tempo       : 3.9s
 
 ==========================================================================
   ARTEFATO DE EVIDÊNCIA — cenário C (demo/out/evidence_c.json)
@@ -65,12 +65,12 @@ repositório: /home/sa/adversary-gate
 
   diff_coverage_ratio   = 1.0
   diff_coverage_source = computed
-  changed/covered      = 1/1 linhas adicionadas executadas
-  diff_sha256          = d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d
-  coverage_json_sha256 = 9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632
+  changed/covered      = 5/5 linhas adicionadas executadas
+  diff_sha256          = 584281a50da44155517f2cb1414c539c7b7af66898f67b3acbc64892586cf9fe
+  coverage_json_sha256 = f02574e3a229d0bcaf9c1497e46d5b2ce424ddf5a9ac3f5f622584319f1dc461
 
-  suite_strength       = 1.0  (floor 0.75)
-  mutantes             = 1/1 mortos, 0 stillborn
+  suite_strength       = 1.0  (limite inferior 0.7527 a 0.8, floor 0.75)
+  mutantes             = 5/5 mortos, 0 stillborn
   changed_files        = ['calc.py']
   deleted_files        = []
 

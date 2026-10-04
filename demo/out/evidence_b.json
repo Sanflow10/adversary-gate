@@ -1,6 +1,6 @@
 {
-  "record_id": "b711be3f61fa429492e67e84bc8010ca",
-  "ts": "2026-10-04T14:34:01.227621+00:00",
+  "record_id": "0a134f98298b4470a8a4af168e671c85",
+  "ts": "2026-10-04T15:09:44.967344+00:00",
   "kind": "decision",
   "decision": "inconclusive",
   "rounds_used": 4,
@@ -10,8 +10,11 @@
   "refuted": 0,
   "unverified": 0,
   "classifications": [
-    "discarded"
+    "no_regression"
   ],
+  "claims_fixed": 0,
+  "claims_no_regression": 1,
+  "fix_proven": false,
   "diff_coverage_source": "none",
   "diff_coverage": {
     "source": "none",
@@ -21,6 +24,8 @@
   "suite_strength": 1.0,
   "suite_strength_unverified": false,
   "suite_strength_floor": 0.75,
+  "suite_strength_lower": 0.7527,
+  "suite_strength_confidence": 0.8,
   "mutation": {
     "measured": true,
     "reason": "",
@@ -35,12 +40,42 @@
         "line": 2,
         "replaces": "-",
         "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 6,
+        "replaces": "+",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 10,
+        "replaces": "/",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 14,
+        "replaces": "*",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 18,
+        "replaces": "*",
+        "result": "killed"
       }
     ],
     "survivors": [],
-    "mutants_counted": 1,
+    "mutants_counted": 5,
     "stillborn": 0,
-    "mutants_killed": 1
+    "mutants_killed": 5,
+    "score": 1.0,
+    "confidence": 0.8,
+    "interval": [
+      0.7527,
+      1.0
+    ]
   },
   "full_suite_ran": true,
   "full_suite_exit_codes": null,

@@ -1,4 +1,4 @@
-# AdversaryGate (v2.6.0)
+# AdversaryGate (v2.7.0)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -67,11 +67,13 @@ A single invariant governs the entire system:
 
 ### Patch Decision Matrix
 
-- **`Decision.MERGE`**: Requires **every** verdict to be `VERIFIED`, a **measured** `diff_coverage >= 80%`, `suite_strength >= 75%` when strength was measurable, and the full repository test suite to pass on the patch side.
+- **`Decision.MERGE`**: Requires **every** verdict to be `VERIFIED`, a **measured** `diff_coverage >= 80%`, a suite strength whose **80 % lower confidence bound** is `>= 0.75` when strength was measurable (`suite_strength_lower`), and the full repository test suite to pass on the patch side.
 - **`Decision.BLOCK`**: Triggered if any claim is `REFUTED`, or if the patch fails the full test suite **that the baseline passed** (*collateral regression*). Checked **before** the coverage floor: direct evidence of breakage outranks missing evidence.
 - **`Decision.INCONCLUSIVE`**: Triggered on `UNVERIFIED` outcomes, open circuit breakers, **coverage that was never measured**, a weak test suite (`suite_strength < 0.75`), a strength that could not be measured even though source changed, or a full suite that was already red before the patch. **Never merges.**
 
 Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always outranks missing evidence: a patch whose claim could not be executed but whose collateral run broke the suite is `BLOCK`, not a shrug.
+
+**A passing claim says *how* it passed (AG-030).** `VERIFIED` comes with one of three classifications: `fixed` — the test **failed on the baseline and passes on the patch**, the strongest evidence there is that the patch fixes what the test checks (SWE-bench's *FAIL_TO_PASS*); `no_regression` — it passed on both sides, which only says nothing it checks broke; `discarded` — a test the patch added, with no "before". The output carries `claims_fixed` and `fix_proven`, so *"this patch fixes what it says it fixes"* is a field, not an inference — and `MERGE` with `fix_proven: false` is a patch that broke nothing and proved nothing about the bug it was for.
 
 **The patch does not get to write its own answer — the baseline does.** If the claim's test file already existed on the baseline and its bytes differ on the patch, the patch's copy is never run for the verdict. The gate copies the patch tree, puts the **baseline's** test file back, and runs the claim there: the patch's code answers to the test that existed before it (the *baseline oracle*; the artefact records `"oracle": "baseline"`). So a bug hidden behind a rewritten assertion is `REFUTED` → `BLOCK`, and an honest refactor of the test file is `VERIFIED` instead of stuck. A test the patch *added to an existing file* has no baseline copy: it is judged like any added test, but only after **every test the baseline shipped in that file** has passed on the patch's code (`"oracle": "baseline-file"`) — so the new test cannot be the cover for an old one the patch bent. The oracle covers three more places a test's answer can hide:
 
@@ -106,6 +108,8 @@ It is a **mutation score** — `mutants killed / mutants executable` — produce
 - A mutant that no longer runs at all (syntax/collection error) is *stillborn* and excluded from both sides of the ratio rather than counted as a kill.
 - `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
 - If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
+- **The floor reads a confidence bound, not the ratio (AG-023).** A ratio from one mutant is `1.0` and evidence of almost nothing. The gate computes a two-sided **Wilson interval** around `killed / counted` and applies `--suite-strength-floor` to its **lower bound** (`--strength-confidence`, default `0.80`; `0` restores the raw ratio). At the default, **5 of 5** killed mutants clear 0.75 (lower bound 0.753) and 4 of 4 do not (0.709). The artefact records `suite_strength` (the ratio), `suite_strength_lower`, `mutation.interval` and `mutation.confidence`. Consequence, said plainly: a patch whose changed lines hold fewer than five mutable operators cannot reach `MERGE` at the default — it is `INCONCLUSIVE`, because the gate cannot tell a strong suite from a lucky one on that sample.
+- **Sites are spread across the change.** One mutant per changed line before any line gets a second, files and lines in order (deterministic). Sites used to be taken in file order until the budget ran out, so a first line with six operators was the whole sample. The budget (`--mutation-max`) defaults to **12**.
 
 `--mutation-max N` bounds the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
 
@@ -317,7 +321,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **2.6.0** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **2.7.0** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -326,19 +330,19 @@ PYTHONPATH=src python3 -m adversary_gate --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- 2.6.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
-pip install adversary-gate==2.6.0
+# PyPI -- 2.7.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
+pip install adversary-gate==2.7.0
 ```
 
 ```bash
-# GitHub Release -- 2.6.0: every fix in this document.
+# GitHub Release -- 2.7.0: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.6.0/adversary_gate-2.6.0-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.7.0/adversary_gate-2.7.0-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v2.6.0` has not been published yet. (There is no `v2.1.1`: that
+Release for `v2.7.0` has not been published yet. (There is no `v2.1.1`: that
 version was written up and never released; its fixes are in `2.2.0`.) Releases
 are published from
 **Actions → Release → Run workflow**. That workflow:
@@ -357,7 +361,7 @@ are published from
    warning in the run, that PyPI was **not** updated.
 
 To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v2.6.0`). It builds from that tag's
+→ Run workflow** and give it the tag (`v2.7.0`). It builds from that tag's
 tree, refuses a tag whose `pyproject.toml` names another version, and
 authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
 Publishing when it does not.
@@ -544,7 +548,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v2.6.0` carries every fix, and the Release workflow that
+> **Which ref?** `v2.7.0` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v2` tag, which follows every 2.x
 > release. `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
 > at the audited version with the bugs. `@main` follows `main` and picks up whatever lands

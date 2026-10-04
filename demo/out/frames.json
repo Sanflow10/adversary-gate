@@ -1,12 +1,12 @@
 {
- "title": "AdversaryGate v2.1.0 — demonstração ao vivo",
+ "title": "AdversaryGate v2.7.0 — demonstração ao vivo",
  "lines": [
   {
-   "t": "\u001b[1mAdversaryGate v2.1.0 — demonstração ao vivo\u001b[0m",
+   "t": "\u001b[1mAdversaryGate v2.7.0 — demonstração ao vivo\u001b[0m",
    "s": "\u001b[1m"
   },
   {
-   "t": "repositório: /tmp/opencode/ag-remote",
+   "t": "repositório: /home/sa/adversary-gate",
    "s": "\u001b[90m"
   },
   {
@@ -42,11 +42,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-t3jmrr8z/baseline",
+   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-t3jmrr8z/patch_broken",
+   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_broken",
    "s": "\u001b[90m"
   },
   {
@@ -54,7 +54,7 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --test-id test_add",
+   "t": "      --test-id test_ops",
    "s": "\u001b[90m"
   },
   {
@@ -86,7 +86,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    força suíte : 0.0   (medida=True)",
+   "t": "    força suíte : 0.0   (limite inferior 0.0, medida=True)",
    "s": "\u001b[37m"
   },
   {
@@ -94,7 +94,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 19.6s",
+   "t": "    tempo       : 3.0s",
    "s": "\u001b[90m"
   },
   {
@@ -118,11 +118,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-t3jmrr8z/baseline",
+   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-t3jmrr8z/patch_clean",
+   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -130,7 +130,7 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --test-id test_add",
+   "t": "      --test-id test_ops",
    "s": "\u001b[90m"
   },
   {
@@ -154,7 +154,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    força suíte : 1.0   (medida=True)",
+   "t": "    força suíte : 1.0   (limite inferior 0.7527, medida=True)",
    "s": "\u001b[37m"
   },
   {
@@ -162,7 +162,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 16.9s",
+   "t": "    tempo       : 4.0s",
    "s": "\u001b[90m"
   },
   {
@@ -186,11 +186,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-t3jmrr8z/baseline",
+   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-t3jmrr8z/patch_clean",
+   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -198,15 +198,15 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --test-id test_add",
+   "t": "      --test-id test_ops",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --diff /tmp/ag-demo-t3jmrr8z/change.diff",
+   "t": "      --diff /tmp/ag-demo-8lu6ya8m/change.diff",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --coverage-json /tmp/ag-demo-t3jmrr8z/coverage.json",
+   "t": "      --coverage-json /tmp/ag-demo-8lu6ya8m/coverage.json",
    "s": "\u001b[90m"
   },
   {
@@ -230,7 +230,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    força suíte : 1.0   (medida=True)",
+   "t": "    força suíte : 1.0   (limite inferior 0.7527, medida=True)",
    "s": "\u001b[37m"
   },
   {
@@ -238,7 +238,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 17.8s",
+   "t": "    tempo       : 3.9s",
    "s": "\u001b[90m"
   },
   {
@@ -270,15 +270,15 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "  \u001b[1mchanged/covered\u001b[0m      = 1/1 linhas adicionadas executadas",
+   "t": "  \u001b[1mchanged/covered\u001b[0m      = 5/5 linhas adicionadas executadas",
    "s": "\u001b[37m"
   },
   {
-   "t": "  \u001b[1mdiff_sha256\u001b[0m          = d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d",
+   "t": "  \u001b[1mdiff_sha256\u001b[0m          = 584281a50da44155517f2cb1414c539c7b7af66898f67b3acbc64892586cf9fe",
    "s": "\u001b[36m"
   },
   {
-   "t": "  \u001b[1mcoverage_json_sha256\u001b[0m = 9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632",
+   "t": "  \u001b[1mcoverage_json_sha256\u001b[0m = f02574e3a229d0bcaf9c1497e46d5b2ce424ddf5a9ac3f5f622584319f1dc461",
    "s": "\u001b[36m"
   },
   {
@@ -286,11 +286,11 @@
    "s": ""
   },
   {
-   "t": "  \u001b[1msuite_strength\u001b[0m       = 1.0  (floor 0.75)",
+   "t": "  \u001b[1msuite_strength\u001b[0m       = 1.0  (limite inferior 0.7527 a 0.8, floor 0.75)",
    "s": "\u001b[37m"
   },
   {
-   "t": "  \u001b[1mmutantes\u001b[0m             = 1/1 mortos, 0 stillborn",
+   "t": "  \u001b[1mmutantes\u001b[0m             = 5/5 mortos, 0 stillborn",
    "s": "\u001b[37m"
   },
   {

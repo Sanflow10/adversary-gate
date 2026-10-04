@@ -1,6 +1,6 @@
 {
-  "record_id": "c5162c7d9bb745cd9f6ccc7433722714",
-  "ts": "2026-10-04T14:34:05.253768+00:00",
+  "record_id": "cb425d3ebd474988a5e442d22d3e0755",
+  "ts": "2026-10-04T15:09:48.891520+00:00",
   "kind": "decision",
   "decision": "merge",
   "rounds_used": 4,
@@ -10,22 +10,27 @@
   "refuted": 0,
   "unverified": 0,
   "classifications": [
-    "discarded"
+    "no_regression"
   ],
+  "claims_fixed": 0,
+  "claims_no_regression": 1,
+  "fix_proven": false,
   "diff_coverage_source": "computed",
   "diff_coverage": {
     "source": "computed",
     "ratio": 1.0,
-    "changed_lines": 1,
-    "covered_lines": 1,
+    "changed_lines": 5,
+    "covered_lines": 5,
     "test_lines_excluded": 0,
     "test_files_excluded": [],
-    "diff_sha256": "d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d",
-    "coverage_json_sha256": "9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632"
+    "diff_sha256": "584281a50da44155517f2cb1414c539c7b7af66898f67b3acbc64892586cf9fe",
+    "coverage_json_sha256": "f02574e3a229d0bcaf9c1497e46d5b2ce424ddf5a9ac3f5f622584319f1dc461"
   },
   "suite_strength": 1.0,
   "suite_strength_unverified": false,
   "suite_strength_floor": 0.75,
+  "suite_strength_lower": 0.7527,
+  "suite_strength_confidence": 0.8,
   "mutation": {
     "measured": true,
     "reason": "",
@@ -40,12 +45,42 @@
         "line": 2,
         "replaces": "-",
         "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 6,
+        "replaces": "+",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 10,
+        "replaces": "/",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 14,
+        "replaces": "*",
+        "result": "killed"
+      },
+      {
+        "file": "calc.py",
+        "line": 18,
+        "replaces": "*",
+        "result": "killed"
       }
     ],
     "survivors": [],
-    "mutants_counted": 1,
+    "mutants_counted": 5,
     "stillborn": 0,
-    "mutants_killed": 1
+    "mutants_killed": 5,
+    "score": 1.0,
+    "confidence": 0.8,
+    "interval": [
+      0.7527,
+      1.0
+    ]
   },
   "full_suite_ran": true,
   "full_suite_exit_codes": null,

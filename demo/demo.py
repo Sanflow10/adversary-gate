@@ -39,23 +39,48 @@ RED, GREEN, YELLOW, CYAN, GREY, WHITE = (
     "\033[31m", "\033[32m", "\033[33m", "\033[36m", "\033[90m", "\033[37m",
 )
 
-BASE_CALC = "def add(a, b):\n    return a + b\n"
-BROKEN_CALC = "def add(a, b):\n    return a - b\n"
-CLEAN_CALC = "def add(a, b):\n    return (a + b)\n"
-TEST_SUM = "from calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n"
+#: Five operations, one per line, each pinned by one assertion. Five is not
+#: decoration: the strength floor reads the lower bound of an 80 % Wilson
+#: interval (AG-023), and 5 of 5 killed mutants is the smallest sample that
+#: clears 0.75. A one-operator fixture would be INCONCLUSIVE in scenario C,
+#: correctly -- one killed mutant is a ratio, not evidence.
+OPS = [("add", "+"), ("sub", "-"), ("mul", "*"), ("div", "/"), ("mod", "%")]
 
-# The only added line in the clean patch is line 2 of calc.py.
-CLEAN_DIFF = (
-    "--- a/calc.py\n"
-    "+++ b/calc.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    " def add(a, b):\n"
-    "-    return a + b\n"
-    "+    return (a + b)\n"
+
+def _calc(wrap: bool = False, broken: bool = False) -> str:
+    out = []
+    for i, (name, op) in enumerate(OPS):
+        expr = f"a {op} b"
+        if broken and name == "add":
+            expr = "a - b"
+        elif wrap:
+            expr = f"({expr})"
+        out.append(f"def {name}(a, b):\n    return {expr}\n")
+    return "\n\n".join(out)
+
+
+BASE_CALC = _calc()
+BROKEN_CALC = _calc(broken=True)
+CLEAN_CALC = _calc(wrap=True)
+TEST_SUM = (
+    "from calc import add, sub, mul, div, mod\n\n\n"
+    "def test_ops():\n"
+    "    assert add(2, 2) == 4\n    assert sub(5, 3) == 2\n    assert mul(3, 4) == 12\n"
+    "    assert div(8, 2) == 4\n    assert mod(7, 3) == 1\n"
 )
 
-# Line 2 executed, and only line 2 was added -> measured coverage is 1.0.
-COVERAGE_JSON = json.dumps({"files": {"calc.py": {"executed_lines": [1, 2]}}})
+#: The clean patch adds exactly the five return lines (2, 6, 10, 14, 18).
+RETURN_LINES = [2 + 4 * i for i in range(len(OPS))]
+CLEAN_DIFF = "".join(
+    f"--- a/calc.py\n+++ b/calc.py\n@@ -{n},1 +{n},1 @@\n"
+    f"-{BASE_CALC.splitlines()[n - 1]}\n+{CLEAN_CALC.splitlines()[n - 1]}\n"
+    for n in RETURN_LINES
+)
+
+# Every def and return line executed; every added line covered -> 1.0.
+COVERAGE_JSON = json.dumps({"files": {"calc.py": {
+    "executed_lines": sorted({n for r in RETURN_LINES for n in (r - 1, r)})
+}}})
 
 EXPECTED = {"A": ("BLOCK", 1), "B": ("INCONCLUSIVE", 2), "C": ("MERGE", 0)}
 
@@ -117,7 +142,7 @@ def scenario(letter: str, label: str, patch: str, extra: list[str], root: Path) 
         "--baseline", str(root / "baseline"),
         "--patch", str(root / patch),
         "--test-path", "test_sum.py",
-        "--test-id", "test_add",
+        "--test-id", "test_ops",
         *extra,
     ]
     emit(f"  $ adversary-gate \\", GREY)
@@ -137,7 +162,8 @@ def scenario(letter: str, label: str, patch: str, extra: list[str], root: Path) 
     emit(f"    coverage    : {payload.get('diff_coverage_ratio')!r}"
          f"   (source={payload.get('diff_coverage_source')})", WHITE)
     emit(f"    força suíte : {payload.get('suite_strength')!r}"
-         f"   (medida={not payload.get('suite_strength_unverified')})", WHITE)
+         f"   (limite inferior {payload.get('suite_strength_lower')!r},"
+         f" medida={not payload.get('suite_strength_unverified')})", WHITE)
     emit(f"    suíte total : ran={payload.get('full_suite_ran')}", WHITE)
     emit(f"    tempo       : {elapsed:.1f}s", GREY)
 
@@ -173,7 +199,8 @@ def show_evidence(results: dict[str, dict]) -> None:
     emit()
     mut = ev.get("mutation") or {}
     emit(f"  {B}suite_strength{R}       = {ev.get('suite_strength')}"
-         f"  (floor {ev.get('suite_strength_floor')})", WHITE)
+         f"  (limite inferior {ev.get('suite_strength_lower')} a"
+         f" {ev.get('suite_strength_confidence')}, floor {ev.get('suite_strength_floor')})", WHITE)
     emit(f"  {B}mutantes{R}             = {mut.get('mutants_killed')}/{mut.get('mutants_counted')}"
          f" mortos, {mut.get('stillborn')} stillborn", WHITE)
     emit(f"  {B}changed_files{R}        = {mut.get('changed_files')}", WHITE)
@@ -209,7 +236,7 @@ def main() -> int:
 
     build_fixtures(root)
 
-    emit(f"{B}AdversaryGate v2.6.0 — demonstração ao vivo{R}", B)
+    emit(f"{B}AdversaryGate v2.7.0 — demonstração ao vivo{R}", B)
     emit(f"repositório: {REPO}", GREY)
     emit()
     emit(f"  Três cenários. B e C são {B}o mesmo patch{R}: mesmo código, mesmos")
@@ -252,7 +279,7 @@ def main() -> int:
 
     if opts.json:
         Path(opts.json).write_text(json.dumps(
-            {"title": "AdversaryGate v2.6.0 — demonstração ao vivo",
+            {"title": "AdversaryGate v2.7.0 — demonstração ao vivo",
              "lines": [{"t": t, "s": s} for t, s in lines],
              "ok": ok}, ensure_ascii=False, indent=1))
         print(f"\nframes -> {opts.json}", file=sys.stderr)

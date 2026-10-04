@@ -163,14 +163,14 @@ Status, não omitido.**
 |---|---|---|---|
 | **AG-021** | Alta — fail-open | Agente introduz bug e reescreve o teste da claim → `exit 0` / `merge`, `suite_strength: 1.0`. A proteção `critic_test_paths` existia na biblioteca, mas a CLI e a Action não a ligavam. | **Corrigido** — mínima na 2.2.0 (teste reescrito deixa de ser `VERIFIED`); **oráculo do baseline na 2.5.0** (o teste *original* roda contra o código do patch → o ataque vira `BLOCK`). Ver §12. |
 | **AG-022** | Média — fail-open parcial | Linhas de teste entram no denominador da cobertura do diff: 0/10 linhas de fonte cobertas + 40 de teste → `0.8`, passa no piso. | **Corrigido** — ratio só sobre fonte; exclusão gravada no artefato. |
-| **AG-023** | Média — rigor | Mutation score com n = 1..6, sítios pegos na ordem do arquivo, sem intervalo de confiança; poucos operadores. | **Parcial** — operadores `*` `/` `//` `%` `**`, `+=` `-=` `*=` `/=` e `True`/`False`, só em posição de operador binário (`*args`, `**kw`, `import *`, `*` e `/` de assinatura ficam de fora). **Aberto:** n pequeno, ordem do arquivo, sem intervalo de confiança. |
+| **AG-023** | Média — rigor | Mutation score com n = 1..6, sítios pegos na ordem do arquivo, sem intervalo de confiança; poucos operadores. | **Corrigido (2.7.0)** — operadores ampliados (2.4.0); o piso lê o **limite inferior de um intervalo de Wilson a 80 %** (`--strength-confidence`, `0` volta à razão); sítios espalhados, um por linha alterada antes de repetir; orçamento padrão 12. Consequência: menos de 5 mutantes mortos não chega a `MERGE`. Ver §13. |
 | **AG-024** | Alta — adoção | Timeout 30 s, CPU 10 s e 512 MB fixos, sem flag; `--test-command` recebe `PATH=/usr/bin:/bin` sem `HOME`; JVM sai com exit 1 (lido como falha de teste). | **Corrigido (2.3.0)** — `--timeout`, `--cpu-seconds`, `--memory` (aceitam `none`), `--pass-env`, `--env`; `HOME` privado por execução; morte por limite de memória (exit 1 + `MemoryError`, `Could not reserve enough space`, `Fatal process out of memory`…) vira exit 3 → `INCONCLUSIVE`; tudo registrado em `execution`. **Aberto:** a detecção é por texto na saída — uma ferramenta que morra sem imprimir nenhum desses marcadores continua lida como falha de teste. |
 | **AG-025** | Alta — adoção (por leitura) | A Action força Python 3.12 e roda pytest com `sys.executable`, sem as dependências do projeto. | **Corrigido (2.3.0)** — `--python`; a Action instala o gate num venv privado (`update-environment: false`), roda os testes no Python do projeto e o coverage.py nesse mesmo interpretador; os mutantes passaram a receber o mesmo interpretador, ambiente e sandbox. Verificado por job de CI com Python 3.11 e uma dependência que só existe nele. |
 | **AG-026** | Alta — distribuição | Tag e Release `v2.1.1` não existem (wheel → `404`); o PyPI entrega `2.1.0`, que contém o AG-018. | **Parcial** — o workflow de Release agora move a tag `vN`, envia ao PyPI por token quando o segredo existe e avisa quando não existe. A `2.1.1` não será publicada: o conteúdo dela foi para a `2.2.0`, já com versão e CHANGELOG cortados. A GitHub Release `v2.2.0` (e a `v2`) foi publicada pelo workflow. **Aberto:** o PyPI segue em `2.1.0` até o token ou o Trusted Publisher funcionar (AG-008). |
 | **AG-027** | Média — empacotamento | O wheel instala `cli`, `core`, `sandbox` e `verifiers` como pacotes top-level; sem `--version`. | **Corrigido** — tudo sob `adversary_gate/` (o wheel instala só esse pacote), `python -m adversary_gate`, `--version`; testes de consistência travam os dois. |
 | **AG-028** | Baixa | `SECURITY.md` manda usar o e-mail do `pyproject.toml`, que não tem e-mail. | **Corrigido** — link direto para o advisory + fallback por issue sem detalhe técnico. **Aberto:** não há e-mail monitorado; e *Private vulnerability reporting* precisa estar habilitado em Settings → Code security (não verificável daqui). |
 | **AG-029** | Conceitual | `self_deception_index` é 0 por construção quando calculado só sobre decisões do gate. | **Mitigado (documentação)** — saiu do pitch do README; README, `SECURITY.md` e a docstring dizem que é 0 por construção. **Aberto:** métricas que cruzam a decisão com o que aconteceu depois (override, revert) exigem dados de fora do gate. |
-| **AG-030** | Conceitual | `FAIL→PASS` (correção provada) e `PASS→PASS` (não regressão) recebem o mesmo rótulo. | Aberto |
+| **AG-030** | Conceitual | `FAIL→PASS` (correção provada) e `PASS→PASS` (não regressão) recebem o mesmo rótulo. | **Corrigido (2.7.0)** — `fixed` × `no_regression` (`discarded` fica para teste novo); saída ganha `claims_fixed` e `fix_proven`; métricas contam os dois. Ver §13. |
 | **AG-031** | Alta — adoção | Uma claim por execução e `test-path` obrigatório e fixo no YAML da Action. | **Corrigido (2.3.0)** — várias claims (`--test-id` e `--claim` repetíveis, `--claim-json` com N) e `--discover-claims`: os testes que executaram uma linha de fonte alterada, lidos dos contextos por teste do coverage.py; arquivos de teste reescritos pelo patch ficam de fora e nomeados. Na Action, sem teste nomeado, a descoberta liga sozinha. **Aberto:** só pytest — com `--test-command` não há node id para descobrir. |
 
 ---
@@ -230,3 +230,25 @@ intacto. Um `tests/helpers.py` entortado para concordar com o bug dá `REFUTED`.
   coletar: o transplante sempre se aplica.
 
 Testes: `tests/test_baseline_oracle.py`.
+
+## 13. AG-023 e AG-030 — fechados na 2.7.0
+
+Antes de corrigir, conferido que não estavam corrigidos em lugar nenhum: `main`
+local e remota, as branches `claude/keen-hamilton-bemwz8`, `master`,
+`backup/local-pre-sync`, `docs/auditoria-v2` e a cópia antiga em
+`~/adversary_gate_v2`. `classify` dava `discarded` para `FAIL→PASS` e
+`PASS→PASS`, e não havia intervalo de confiança no código.
+
+* **AG-023.** O piso de força da suíte é aplicado ao limite inferior de um
+  intervalo de Wilson bilateral a 80 % (escolha do mantenedor entre 80 %,
+  95 % e só-reportar). 5/5 → 0,753 passa; 4/4 → 0,709 e 1/1 → 0,378 não.
+  Sítios de mutação em round-robin pelas linhas alteradas; orçamento padrão
+  6 → 12. Fixtures de um operador em testes de outras coisas, no CI da Action,
+  no benchmark e no `test_prepare_evidence.sh` passam `--strength-confidence 0`
+  com comentário; o demo passou a ter 5 operações e chega a `MERGE` no padrão.
+* **AG-030.** `FailureClass.FIXED` (`fixed`) para `FAIL→PASS`,
+  `FailureClass.NO_REGRESSION` (`no_regression`) para `PASS→PASS`;
+  `discarded` fica só para teste que não existe no baseline. Saída:
+  `claims_fixed`, `fix_proven`; `GateMetrics.fixed` / `no_regression`.
+
+Testes: `tests/test_rigor_and_labels.py`.
