@@ -1,4 +1,4 @@
-# AdversaryGate (v2.7.0)
+# AdversaryGate (v2.8.0)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -321,7 +321,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **2.7.0** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **2.8.0** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -330,19 +330,19 @@ PYTHONPATH=src python3 -m adversary_gate --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- 2.7.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
-pip install adversary-gate==2.7.0
+# PyPI -- 2.8.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
+pip install adversary-gate==2.8.0
 ```
 
 ```bash
-# GitHub Release -- 2.7.0: every fix in this document.
+# GitHub Release -- 2.8.0: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.7.0/adversary_gate-2.7.0-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.8.0/adversary_gate-2.8.0-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v2.7.0` has not been published yet. (There is no `v2.1.1`: that
+Release for `v2.8.0` has not been published yet. (There is no `v2.1.1`: that
 version was written up and never released; its fixes are in `2.2.0`.) Releases
 are published from
 **Actions → Release → Run workflow**. That workflow:
@@ -361,7 +361,7 @@ are published from
    warning in the run, that PyPI was **not** updated.
 
 To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v2.7.0`). It builds from that tag's
+→ Run workflow** and give it the tag (`v2.8.0`). It builds from that tag's
 tree, refuses a tag whose `pyproject.toml` names another version, and
 authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
 Publishing when it does not.
@@ -548,7 +548,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v2.7.0` carries every fix, and the Release workflow that
+> **Which ref?** `v2.8.0` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v2` tag, which follows every 2.x
 > release. `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
 > at the audited version with the bugs. `@main` follows `main` and picks up whatever lands
@@ -606,6 +606,45 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 ---
 
 <a name="execution-boundary" id="execution-boundary"></a>
+
+## 🤖 Coding agents: Hermes (MCP) and Jev (triage)
+
+Two integrations, one rule: **nothing an integration says can make the gate more lenient.**
+
+### An agent that cannot grade itself — MCP server (Hermes, Claude Code, any MCP client)
+
+```bash
+pip install "adversary-gate[mcp]"          # in an environment the agent cannot write to
+adversary-gate-mcp                         # stdio MCP server
+adversary-gate-mcp --print-hermes-skill    # SKILL.md for ~/.hermes/skills/adversary-gate/
+adversary-gate-mcp --print-hermes-config   # the mcp_servers block for ~/.hermes/config.yaml
+```
+
+Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`. `verify_repo` judges the repository's **working tree** — committed or not, untracked files included — against a baseline: it materialises the baseline with `git archive`, writes the diff, runs coverage.py with per-test contexts (data file in a scratch directory, nothing written into the repo), discovers the claims when none are named, and runs the gate. The answer carries `decision`, `mergeable`, `fix_proven`, every claim's `oracle`, and the full artefact.
+
+**The agent says what to judge; the operator says how strictly, and against what.** The tool arguments name evidence only. Everything that decides the answer comes from the server's environment, set in the agent's MCP config by whoever runs it:
+
+| Variable | Why the agent may not set it |
+|---|---|
+| `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused. |
+| `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the answer says `"baseline_chosen_by": "agent"`. |
+| `ADVERSARY_GATE_PYTHON` | the interpreter's site-packages are harness too — a plugin installed there runs inside pytest. Use one the agent cannot write to. |
+
+`pytest_args` accepts test paths only; an option (`-p evil`) is refused. The shipped Hermes skill tells the agent to call the gate before saying "done", to fix code rather than tests on `block`, to never report `inconclusive` as success, and to promote a self-written skill only on `merge`.
+
+### Risk triage with Jev (TypeSafe AI) — advice that can only tighten
+
+```bash
+export TYPESAFE_API_KEY=sk-...
+adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70 by default
+```
+
+[Jev](https://www.datacamp.com/blog/system-one-models-jev) is a calibrated decision model: text and a schema in, a typed answer with a probability out, in ~100 ms. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
+
+- **The diff leaves the machine** (truncated to 64 KiB, `https` only). That is why it is opt-in.
+- Jev is early-access (launched 2026-09-15). The client follows TypeSafe's published request/response shape and is tested against a local server speaking it — **not** against the live API from this repository.
+
+---
 
 ## 🛡️ Execution boundary (read this before trusting it with untrusted code)
 

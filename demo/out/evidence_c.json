@@ -1,6 +1,6 @@
 {
-  "record_id": "cb425d3ebd474988a5e442d22d3e0755",
-  "ts": "2026-10-04T15:09:48.891520+00:00",
+  "record_id": "f49d49f3754c400ca910fd6c22b4606a",
+  "ts": "2026-10-04T15:50:57.577346+00:00",
   "kind": "decision",
   "decision": "merge",
   "rounds_used": 4,
@@ -94,7 +94,8 @@
     "env_passed": [],
     "env_passed_missing": [],
     "env_set": [],
-    "test_support": []
+    "test_support": [],
+    "triage": null
   },
   "discovery": null
 }

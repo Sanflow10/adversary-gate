@@ -1,8 +1,8 @@
 {
- "title": "AdversaryGate v2.7.0 — demonstração ao vivo",
+ "title": "AdversaryGate v2.8.0 — demonstração ao vivo",
  "lines": [
   {
-   "t": "\u001b[1mAdversaryGate v2.7.0 — demonstração ao vivo\u001b[0m",
+   "t": "\u001b[1mAdversaryGate v2.8.0 — demonstração ao vivo\u001b[0m",
    "s": "\u001b[1m"
   },
   {
@@ -42,11 +42,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
+   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_broken",
+   "t": "      --patch /tmp/ag-demo-502h5wta/patch_broken",
    "s": "\u001b[90m"
   },
   {
@@ -94,7 +94,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 3.0s",
+   "t": "    tempo       : 4.1s",
    "s": "\u001b[90m"
   },
   {
@@ -118,11 +118,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
+   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_clean",
+   "t": "      --patch /tmp/ag-demo-502h5wta/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -162,7 +162,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 4.0s",
+   "t": "    tempo       : 5.7s",
    "s": "\u001b[90m"
   },
   {
@@ -186,11 +186,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --baseline /tmp/ag-demo-8lu6ya8m/baseline",
+   "t": "      --baseline /tmp/ag-demo-502h5wta/baseline",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --patch /tmp/ag-demo-8lu6ya8m/patch_clean",
+   "t": "      --patch /tmp/ag-demo-502h5wta/patch_clean",
    "s": "\u001b[90m"
   },
   {
@@ -202,11 +202,11 @@
    "s": "\u001b[90m"
   },
   {
-   "t": "      --diff /tmp/ag-demo-8lu6ya8m/change.diff",
+   "t": "      --diff /tmp/ag-demo-502h5wta/change.diff",
    "s": "\u001b[90m"
   },
   {
-   "t": "      --coverage-json /tmp/ag-demo-8lu6ya8m/coverage.json",
+   "t": "      --coverage-json /tmp/ag-demo-502h5wta/coverage.json",
    "s": "\u001b[90m"
   },
   {
@@ -238,7 +238,7 @@
    "s": "\u001b[37m"
   },
   {
-   "t": "    tempo       : 3.9s",
+   "t": "    tempo       : 5.4s",
    "s": "\u001b[90m"
   },
   {

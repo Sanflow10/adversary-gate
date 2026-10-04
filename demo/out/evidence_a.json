@@ -1,6 +1,6 @@
 {
-  "record_id": "361fa33ea6124d7fb471450b731838a3",
-  "ts": "2026-10-04T15:09:41.008585+00:00",
+  "record_id": "3e387ba9caf940fc842dced6fb949a38",
+  "ts": "2026-10-04T15:50:46.469896+00:00",
   "kind": "decision",
   "decision": "block",
   "rounds_used": 4,
@@ -70,7 +70,8 @@
     "env_passed": [],
     "env_passed_missing": [],
     "env_set": [],
-    "test_support": []
+    "test_support": [],
+    "triage": null
   },
   "discovery": null
 }
