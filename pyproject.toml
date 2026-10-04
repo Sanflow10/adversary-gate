@@ -23,11 +23,11 @@ Repository = "https://github.com/Sanflow10/adversary-gate.git"
 Issues = "https://github.com/Sanflow10/adversary-gate/issues"
 
 [project.scripts]
-adversary-gate = "cli:main"
+adversary-gate = "adversary_gate.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["cli"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["adversary_gate*"]

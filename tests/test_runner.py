@@ -27,8 +27,8 @@ from pathlib import Path
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 sys.path.insert(0, SRC)
 
-import sandbox.runner as runner  # noqa: E402
-from sandbox.runner import (  # noqa: E402
+import adversary_gate.sandbox.runner as runner  # noqa: E402
+from adversary_gate.sandbox.runner import (  # noqa: E402
     DEFAULT_PROCESSES,
     OUTPUT_TAIL_BYTES,
     SandboxResult,

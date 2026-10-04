@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CLI = REPO / "src" / "cli.py"
+CLI = REPO / "src" / "adversary_gate" / "cli.py"
 
 B, R, DIM = "\033[1m", "\033[0m", "\033[2m"
 RED, GREEN, YELLOW, CYAN, GREY, WHITE = (

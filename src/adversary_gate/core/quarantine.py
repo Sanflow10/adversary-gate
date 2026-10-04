@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List
 
-from core.types import CriticClaim, GateVerdict, Outcome
+from adversary_gate.core.types import CriticClaim, GateVerdict, Outcome
 
 
 @dataclass(frozen=True)

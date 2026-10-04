@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from verifiers.testpaths import is_test_path
+from adversary_gate.verifiers.testpaths import is_test_path
 
 
 class UnparseableDiff(ValueError):

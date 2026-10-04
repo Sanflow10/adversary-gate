@@ -24,7 +24,7 @@ requested test actually ran.
 
 from __future__ import annotations
 
-from core.types import ExecState
+from adversary_gate.core.types import ExecState
 
 PYTEST_OK = 0
 PYTEST_TESTS_FAILED = 1

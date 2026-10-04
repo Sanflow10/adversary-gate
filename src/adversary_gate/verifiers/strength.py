@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import difflib
 import io
+import keyword
 import shutil
 import tempfile
 import tokenize
@@ -52,9 +53,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
-from sandbox.runner import DEFAULT_PROCESSES, run_test
-from verifiers.testpaths import is_test_path as _is_test_path
+from adversary_gate.core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
+from adversary_gate.sandbox.runner import DEFAULT_PROCESSES, run_test
+from adversary_gate.verifiers.testpaths import is_test_path as _is_test_path
 
 #: Directories never worth copying or mutating.
 _IGNORE = shutil.ignore_patterns(
@@ -73,7 +74,29 @@ _OPERATOR_MUTATIONS: Dict[str, str] = {
     ">=": ">",
     "+": "-",
     "-": "+",
+    # AG-023: arithmetic beyond +/-. Until 2.3.0 a patch that turned
+    # ``a + b`` into ``a * b`` reported "no mutable operator" and measured
+    # nothing at all.
+    "*": "/",
+    "/": "*",
+    "//": "*",
+    "%": "*",
+    "**": "*",
+    "+=": "-=",
+    "-=": "+=",
+    "*=": "/=",
+    "/=": "*=",
 }
+
+#: Tokens that are also *syntax* when they are not a binary operator:
+#: ``*args``, ``**kwargs``, ``import *``, the keyword-only ``*`` and the
+#: positional-only ``/`` in a signature. Swapping those either does not parse
+#: or -- ``def f(a, *, b)`` -> ``def f(a, /, b)`` -- parses into an equivalent
+#: program whose survival would be counted against the tests.
+_BINARY_ONLY = frozenset({"*", "/", "**"})
+
+#: What can sit to the left of a *binary* operator: an operand's last token.
+_OPERAND_END = frozenset({")", "]", "}"})
 
 #: Keyword substitutions, including the deletion of ``not`` (replaced by the
 #: empty string, which leaves valid -- if double-spaced -- Python).
@@ -81,6 +104,8 @@ _KEYWORD_MUTATIONS: Dict[str, str] = {
     "and": "or",
     "or": "and",
     "not": "",
+    "True": "False",
+    "False": "True",
 }
 
 #: Position -> replacement, as ``(start, end)`` row/col pairs from tokenize.
@@ -403,6 +428,20 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
 # ----------------------------------------------------------------------
 # what to break
 # ----------------------------------------------------------------------
+_TRIVIA = frozenset({tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT})
+
+
+def _is_operand_end(token: Optional[tokenize.TokenInfo]) -> bool:
+    """Whether ``token`` can end the left operand of a binary operator."""
+    if token is None:
+        return False
+    if token.type in (tokenize.NUMBER, tokenize.STRING):
+        return True
+    if token.type == tokenize.NAME:
+        return not keyword.iskeyword(token.string) or token.string in ("True", "False", "None")
+    return token.type == tokenize.OP and token.string in _OPERAND_END
+
+
 def _mutants_in(source: str, limit: int) -> List[Mutation]:
     """Ordered, deterministic mutation sites in one module."""
     try:
@@ -411,12 +450,17 @@ def _mutants_in(source: str, limit: int) -> List[Mutation]:
         return []
 
     found: List[Mutation] = []
+    previous: Optional[tokenize.TokenInfo] = None
     for token in tokens:
         replacement: Optional[str] = None
         if token.type == tokenize.OP:
             replacement = _OPERATOR_MUTATIONS.get(token.string)
+            if replacement is not None and token.string in _BINARY_ONLY and not _is_operand_end(previous):
+                replacement = None
         elif token.type == tokenize.NAME:
             replacement = _KEYWORD_MUTATIONS.get(token.string)
+        if token.type not in _TRIVIA:
+            previous = token
         if replacement is None:
             continue
         found.append((token.start, token.end, replacement))

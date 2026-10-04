@@ -23,10 +23,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from cli import EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
-from core.gate import Gate
-from core.types import CriticClaim, Decision, FailureClass, Outcome
-from verifiers.coverage import covered_diff_ratio
+from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
+from adversary_gate.core.gate import Gate
+from adversary_gate.core.types import CriticClaim, Decision, FailureClass, Outcome
+from adversary_gate.verifiers.coverage import covered_diff_ratio
 
 BASE_CALC = "def sub(a, b):\n    return a - b\n"
 BUGGY_CALC = "def sub(a, b):\n    return a + b\n"

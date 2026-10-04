@@ -524,7 +524,7 @@ runs:
         # fire. Exiting 0 was the only case that ever worked.
         # `cmd || var=$?` is a handled failure, so -e does not stop for it.
         EXIT_CODE=0
-        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" "$AG_GATE_PYTHON" "${{ github.action_path }}/src/cli.py" "${ARGS[@]}") || EXIT_CODE=$?
+        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" "$AG_GATE_PYTHON" -m adversary_gate "${ARGS[@]}") || EXIT_CODE=$?
         echo "$JSON_OUT"
 
         field() { # $1=key, $2=fallback; `or` because a run with no claim reports null

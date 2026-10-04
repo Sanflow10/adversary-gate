@@ -27,16 +27,16 @@ from unittest.mock import patch
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 sys.path.insert(0, SRC)
 
-from cli import EXIT_BLOCK, EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
-from core.circuit_breaker import CircuitBreaker
-from core.contestation import Contestation
-from core.evidence_log import EvidenceLog
-from core.exitmap import classify_exit, describe
-from core.gate import Gate, GateConfig
-from core.metrics import compute_metrics, compare_models, format_report
-from core.path_policy import PathPolicy
-from core.quarantine import QuarantineStore
-from core.types import (
+from adversary_gate.cli import EXIT_BLOCK, EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
+from adversary_gate.core.circuit_breaker import CircuitBreaker
+from adversary_gate.core.contestation import Contestation
+from adversary_gate.core.evidence_log import EvidenceLog
+from adversary_gate.core.exitmap import classify_exit, describe
+from adversary_gate.core.gate import Gate, GateConfig
+from adversary_gate.core.metrics import compute_metrics, compare_models, format_report
+from adversary_gate.core.path_policy import PathPolicy
+from adversary_gate.core.quarantine import QuarantineStore
+from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
     BugKind,
@@ -48,10 +48,10 @@ from core.types import (
     GateVerdict,
     Outcome,
 )
-from sandbox.runner import SandboxResult, build_target
-from verifiers.coverage import UnparseableDiff, covered_diff_ratio, validate_diff
-from verifiers.stability import policy_for
-from verifiers.strength import (
+from adversary_gate.sandbox.runner import SandboxResult, build_target
+from adversary_gate.verifiers.coverage import UnparseableDiff, covered_diff_ratio, validate_diff
+from adversary_gate.verifiers.stability import policy_for
+from adversary_gate.verifiers.strength import (
     _is_test_path,
     calculate_mutation_score,
     changed_foreign_source_files,
@@ -78,7 +78,7 @@ def verdict_for(gate: Gate, classification: FailureClass) -> GateVerdict:
 
 
 def verdict_with(gate: Gate, classification: FailureClass) -> GateVerdict:
-    from core.types import outcome_of
+    from adversary_gate.core.types import outcome_of
 
     return GateVerdict(
         CriticClaim("t.py", "t1"),
@@ -101,7 +101,7 @@ class TestExitCodeMapping(unittest.TestCase):
             )
 
     def test_only_exit_one_is_a_failure_signal(self):
-        from core.exitmap import UNRUNNABLE_CODES
+        from adversary_gate.core.exitmap import UNRUNNABLE_CODES
 
         # 1 is the sole code that means "the test ran and did not like it".
         self.assertNotIn(1, UNRUNNABLE_CODES)
@@ -231,12 +231,12 @@ class TestFailOpenRoutesAreClosed(unittest.TestCase):
     def test_every_failure_class_has_a_declared_outcome(self):
         """A FailureClass missing from the table is a fail-open bug in waiting."""
         for classification in FailureClass:
-            from core.types import CLASSIFICATION_OUTCOME
+            from adversary_gate.core.types import CLASSIFICATION_OUTCOME
 
             self.assertIn(classification, CLASSIFICATION_OUTCOME)
 
     def test_no_error_class_maps_to_merge_licence(self):
-        from core.types import CLASSIFICATION_OUTCOME
+        from adversary_gate.core.types import CLASSIFICATION_OUTCOME
 
         for classification in (
             FailureClass.INVALID,
@@ -350,7 +350,7 @@ class TestClaimGranularity(unittest.TestCase):
                     return SandboxResult(0, "", "", False)
                 return SandboxResult(1, "", "", False)
 
-            with patch("core.gate.run_test", side_effect=fake):
+            with patch("adversary_gate.core.gate.run_test", side_effect=fake):
                 v = gate.verify_claim(
                     CriticClaim("test_two.py", "test_alpha"),
                     root / "baseline",
@@ -378,7 +378,7 @@ class TestClaimGranularity(unittest.TestCase):
                 received.append(test_id)
                 return SandboxResult(1, "", "", False)
 
-            with patch("core.gate.run_test", side_effect=fake):
+            with patch("adversary_gate.core.gate.run_test", side_effect=fake):
                 gate.verify_claim(
                     CriticClaim("test_two.py", "test_beta"), root / "baseline", root / "patch"
                 )

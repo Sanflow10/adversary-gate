@@ -59,6 +59,11 @@ class GateMetrics:
 
         0.0 -> everything that merged had executed evidence behind it.
         1.0 -> everything that merged was a guess.
+
+        On records this gate wrote it is 0.0 by construction (AG-029):
+        ``decide()`` never returns MERGE with an unverified claim. It measures
+        something only over decisions from a pipeline that *can* merge
+        unverified work -- which is why it is not the product's headline.
         """
         return (
             self.unverified_merges / self.merge_count if self.merge_count else 0.0

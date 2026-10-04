@@ -26,17 +26,17 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-import sandbox.runner as runner  # noqa: E402
-from cli import EXIT_BLOCK, EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main  # noqa: E402
-from sandbox.runner import (  # noqa: E402
+import adversary_gate.sandbox.runner as runner  # noqa: E402
+from adversary_gate.cli import EXIT_BLOCK, EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main  # noqa: E402
+from adversary_gate.sandbox.runner import (  # noqa: E402
     HARNESS_DIED,
     _argv,
     _detect_resource_death,
     _limit_resources,
     run_test,
 )
-from verifiers.discovery import NoTestContexts, discover_claims  # noqa: E402
-from verifiers.strength import measure_mutation_score  # noqa: E402
+from adversary_gate.verifiers.discovery import NoTestContexts, discover_claims  # noqa: E402
+from adversary_gate.verifiers.strength import measure_mutation_score  # noqa: E402
 
 try:
     import coverage  # noqa: F401

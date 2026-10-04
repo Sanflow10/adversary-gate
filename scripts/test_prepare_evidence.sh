@@ -12,7 +12,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 PREPARE="$HERE/prepare_evidence.sh"
-GATE="$REPO_ROOT/src/cli.py"
+GATE="$REPO_ROOT/src/adversary_gate/cli.py"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

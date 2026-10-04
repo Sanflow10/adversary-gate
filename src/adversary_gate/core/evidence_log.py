@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.types import GateVerdict, outcome_of
+from adversary_gate.core.types import GateVerdict, outcome_of
 
 
 class EvidenceLog:

@@ -16,7 +16,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
-from core.types import Outcome
+from adversary_gate.core.types import Outcome
 
 
 @dataclass

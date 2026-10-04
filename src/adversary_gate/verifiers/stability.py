@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.types import BugKind
+from adversary_gate.core.types import BugKind
 
 
 @dataclass(frozen=True)

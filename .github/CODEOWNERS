@@ -11,13 +11,13 @@
 # Anything that decides whether a patch merges is the highest-risk surface in
 # this repository: a defect here fails open, on someone else's code, in their
 # CI. These need review even when nothing else does.
-/src/core/gate.py        @Sanflow10
-/src/verifiers/          @Sanflow10
-/src/cli.py              @Sanflow10
+/src/adversary_gate/core/gate.py        @Sanflow10
+/src/adversary_gate/verifiers/          @Sanflow10
+/src/adversary_gate/cli.py              @Sanflow10
 /action.yml              @Sanflow10
 
 # The file that actually spawns the code under test.
-/src/sandbox/runner.py   @Sanflow10
+/src/adversary_gate/sandbox/runner.py   @Sanflow10
 
 # CI is the only thing currently attesting to any of the above.
 /.github/workflows/      @Sanflow10

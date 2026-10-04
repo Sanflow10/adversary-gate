@@ -27,12 +27,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
-from core.circuit_breaker import CircuitBreaker
-from core.contestation import Contestation, ContestationResult, adjudicate
-from core.exitmap import describe
-from core.evidence_log import EvidenceLog
-from core.path_policy import PathPolicy
-from core.types import (
+from adversary_gate.core.circuit_breaker import CircuitBreaker
+from adversary_gate.core.contestation import Contestation, ContestationResult, adjudicate
+from adversary_gate.core.exitmap import describe
+from adversary_gate.core.evidence_log import EvidenceLog
+from adversary_gate.core.path_policy import PathPolicy, harness_drift
+from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
     BugKind,
@@ -45,9 +45,9 @@ from core.types import (
     Outcome,
     outcome_of,
 )
-from sandbox.runner import SandboxResult, run_test
-from verifiers.coverage import DiffCoverage, covered_diff_ratio
-from verifiers.stability import StabilityPolicy, policy_for
+from adversary_gate.sandbox.runner import SandboxResult, run_test
+from adversary_gate.verifiers.coverage import DiffCoverage, covered_diff_ratio
+from adversary_gate.verifiers.stability import StabilityPolicy, policy_for
 
 
 def _bytes_differ(before: Path, after: Path) -> bool:
@@ -157,7 +157,7 @@ class Gate:
         immediately -- a run that never happened cannot be averaged in with
         runs that did.
         """
-        from core.exitmap import classify_exit
+        from adversary_gate.core.exitmap import classify_exit
 
         if not codes:
             return ExecState.NOT_APPLICABLE, True, f"{label}: not executed"
@@ -382,6 +382,24 @@ class Gate:
                     FailureClass.INVALID,
                     Outcome.UNVERIFIED,
                     "protected path violation: " + "; ".join(str(v) for v in violations),
+                )
+            )
+
+        # AG-032. The paths above are only the ones somebody reported; this
+        # compares the trees, so a harness file the diff left out -- or one
+        # whose name the denylist never listed -- still cannot configure the
+        # runner that judges the patch.
+        drift = harness_drift(baseline_dir, patch_dir)
+        if drift:
+            return finish(
+                GateVerdict(
+                    claim,
+                    FailureClass.INVALID,
+                    Outcome.UNVERIFIED,
+                    "test harness differs from the baseline: "
+                    + "; ".join(str(v) for v in drift)
+                    + ". The patch does not get to configure the runner that "
+                    "judges it; review the harness change on its own",
                 )
             )
 

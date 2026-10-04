@@ -26,8 +26,8 @@ import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
-from verifiers.coverage import validate_diff
-from verifiers.testpaths import is_test_path
+from adversary_gate.verifiers.coverage import validate_diff
+from adversary_gate.verifiers.testpaths import is_test_path
 
 #: Directories that never hold the tests under judgement.
 _SKIP_DIRS = frozenset({

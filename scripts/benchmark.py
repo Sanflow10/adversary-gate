@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CLI = REPO / "src" / "cli.py"
+CLI = REPO / "src" / "adversary_gate" / "cli.py"
 
 CALC_BEFORE = "def add(a, b):\n    return a + b\n"
 CALC_AFTER = "def add(a, b):\n    return (a + b)\n"

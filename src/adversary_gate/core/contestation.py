@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core.types import ExecState, ExecutionOutcome, GateVerdict, Outcome
+from adversary_gate.core.types import ExecState, ExecutionOutcome, GateVerdict, Outcome
 
 
 @dataclass(frozen=True)

@@ -20,10 +20,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from core.exitmap import PYTEST_OK
-from core.gate import Gate, GateConfig
-from core.metrics import compute_metrics, format_report
-from core.types import (
+from adversary_gate import __version__
+from adversary_gate.core.exitmap import PYTEST_OK
+from adversary_gate.core.gate import Gate, GateConfig
+from adversary_gate.core.metrics import compute_metrics, format_report
+from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
     BugKind,
@@ -32,10 +33,10 @@ from core.types import (
     GateVerdict,
     Outcome,
 )
-from sandbox.runner import SandboxResult, bwrap_available, run_test
-from verifiers.coverage import covered_diff_ratio, validate_diff
-from verifiers.discovery import discover_claims
-from verifiers.strength import classify_changes, measure_mutation_score
+from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
+from adversary_gate.verifiers.coverage import covered_diff_ratio, validate_diff
+from adversary_gate.verifiers.discovery import discover_claims
+from adversary_gate.verifiers.strength import classify_changes, measure_mutation_score
 
 EXIT_MERGE = 0
 EXIT_BLOCK = 1
@@ -366,6 +367,7 @@ def _summary(verdicts) -> Dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="adversary-gate")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--patch", required=True)
     parser.add_argument("--test-path")
@@ -627,7 +629,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         log = None
         if args.evidence_log:
-            from core.evidence_log import EvidenceLog
+            from adversary_gate.core.evidence_log import EvidenceLog
 
             context = {}
             if args.model:

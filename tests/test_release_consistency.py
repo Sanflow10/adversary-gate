@@ -29,6 +29,21 @@ class TestOneVersion(unittest.TestCase):
         first = (ROOT / "README.md").read_text().splitlines()[0]
         self.assertEqual(first, f"# AdversaryGate (v{self.version})")
 
+    def test_package_version(self):
+        """``adversary-gate --version`` reads this; it must not lag pyproject (AG-027)."""
+        init = (ROOT / "src" / "adversary_gate" / "__init__.py").read_text()
+        match = re.search(r'(?m)^__version__\s*=\s*"([^"]+)"', init)
+        self.assertTrue(match, "src/adversary_gate/__init__.py has no __version__")
+        self.assertEqual(match.group(1), self.version)
+
+    def test_one_top_level_package(self):
+        """The wheel installs ``adversary_gate`` and nothing else at the top level (AG-027)."""
+        top = sorted(
+            p.name for p in (ROOT / "src").iterdir()
+            if not p.name.startswith((".", "_")) and not p.name.endswith(".egg-info")
+        )
+        self.assertEqual(top, ["adversary_gate"])
+
     def test_demo_banner(self):
         demo = (ROOT / "demo" / "demo.py").read_text()
         banners = re.findall(r"AdversaryGate v([0-9][^ ]*) — demonstração ao vivo", demo)
