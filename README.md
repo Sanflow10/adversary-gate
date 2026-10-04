@@ -47,10 +47,10 @@ python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
 
 ## 🎯 The Thesis
 
-1. **Uso alto de IA ≠ Confiança alta**: Quanto mais um time depende de agentes no fluxo real de engenharia, mais aparece o custo do *"parece certo"*. Agentes geram código fluente e aparentemente correto, mas pipelines ingênuos que colapsam erros de infraestrutura aprovam patches com testes quebrados ou pulados.
-2. **Troca de Modelo como Sintoma**: Times trocam de modelo (Claude → GPT → Gemini) buscando credibilidade nos Pull Requests. Isso é **falta de verificação determinística, não falta de modelo**. O AdversaryGate executa exatamente o mesmo harness de teste sem invocar LLMs no verificador, tornando os modelos comparáveis empiricamente.
-3. **Perda e Reprocessamento**: O prejuízo financeiro das empresas é concreto: *merged regressions*, tarefas "concluídas" que não estão, rollbacks e horas de code review humano repassando o mesmo PR.
-4. **Menos Autoengano do Pipeline**: O produto não vende "IA mais inteligente". Vende **menos autoengano no pipeline**, medido numericamente pelo **`self_deception_index`**.
+1. **High AI usage ≠ high confidence.** The more a team leans on agents in its real engineering flow, the more the cost of *"looks right"* shows. Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken or never ran.
+2. **Switching models is a symptom.** Teams move between models looking for PRs they can trust. What is missing is **deterministic verification, not a better model**. AdversaryGate runs the same test harness with no LLM in the verifier, which is what makes patches from different models comparable at all.
+3. **The loss is concrete.** Merged regressions, tasks reported done that are not, rollbacks, and reviewer hours spent re-reading the same PR.
+4. **Less pipeline self-deception.** The product does not sell a smarter AI. It sells a pipeline that says *"I did not measure that"* instead of a green check. How to count that honestly is in [Provenance & metrics](#-provenance--metrics) — and the counter this README used to point at is zero by construction on the gate's own logs (AG-029), so it is no longer the pitch.
 
 ---
 
@@ -73,7 +73,7 @@ A single invariant governs the entire system:
 
 Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always outranks missing evidence: a patch whose claim could not be executed but whose collateral run broke the suite is `BLOCK`, not a shrug.
 
-**The patch does not get to write its own answer.** If the claim's test file already existed on the baseline and its bytes differ on the patch, a passing run is not `VERIFIED`: the verdict becomes `UNVERIFIED` and the decision `INCONCLUSIVE`. A test the patch *adds* is not a rewrite and is judged as before; a rewritten test that *fails* is still `REFUTED`. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`. Running the baseline's original test against the patch's code is the stronger form and is not implemented yet.
+**The patch does not get to write its own answer.** If the claim's test file already existed on the baseline and its bytes differ on the patch, a passing run is not `VERIFIED`: the verdict becomes `UNVERIFIED` and the decision `INCONCLUSIVE`. A test the patch *adds* is not a rewrite and is judged as before; a rewritten test that *fails* is still `REFUTED`. Nor does it get to configure the runner that judges it (AG-032): every test-harness file in the tree — the five config names pytest 9 reads (`pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`), plus `pyproject.toml`, `setup.cfg`, any `conftest.py`, `sitecustomize.py`, `usercustomize.py` and `*.pth`, at any depth — must be byte-for-byte the baseline's, or the claim is `UNVERIFIED`. The trees are compared directly, so a harness change the `--diff` leaves out is still caught. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`. Running the baseline's original test against the patch's code is the stronger form and is not implemented yet.
 
 ### How `diff_coverage` gets its value
 
@@ -182,7 +182,7 @@ mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
 
 ### Which files count as "source we cannot judge"
 
-`NON_SOURCE_SUFFIXES` in `src/verifiers/strength.py` — a **denylist**, not an
+`NON_SOURCE_SUFFIXES` in `src/adversary_gate/verifiers/strength.py` — a **denylist**, not an
 allowlist. Anything that is not Python, not a test, and not on the list of
 things that are plainly not code (`.md`, `.yml`, `.json`, images, archives,
 compiled artefacts) counts as source we cannot judge. That direction is
@@ -302,14 +302,14 @@ cd adversary-gate && pip install .
 
 ```bash
 # or don't install it at all
-python3 src/cli.py --help
+PYTHONPATH=src python3 -m adversary_gate --help
 ```
 
 | Route | Follows | Needs |
 |---|---|---|
 | `pip install git+https://…adversary-gate.git` | `main` | network |
 | `git clone` + `pip install .` | `main` | git |
-| `python3 src/cli.py --help` | `main` | nothing |
+| `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
 | GitHub Release wheel (below) | **2.3.0** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
@@ -603,7 +603,7 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 
 ## 🛡️ Execution boundary (read this before trusting it with untrusted code)
 
-`src/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
+`src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
 
 ### `--sandbox bwrap` — opt-in, and what it honestly buys
 
@@ -633,6 +633,15 @@ Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged us
 
 **Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
 
+### What a test cannot see, by construction
+
+Two limits that no runner setting closes, written down so nobody has to discover them:
+
+- **The code under test runs in the same process as the test runner.** A source module the tests import can reach into pytest itself — rewrite a report, patch `assert`'s helpers, swap a fixture — and nothing in the evidence would show it. AG-032 takes the *configuration* away from the patch; it cannot take the interpreter away from the code being tested.
+- **Code can detect that it is under test.** `if "pytest" in sys.modules:` (or a check on the environment, the call stack, the clock) lets a module behave in the test run and misbehave in production. Mutation testing does not help when the branch that matters is the one the tests never take.
+
+Both are deliberate deception, not accidents, and both are reasons `MERGE` means *"permission for a human to look"*, never *"ship it"*.
+
 ---
 
 ## 🤝 What this decision is, and what it is not
@@ -649,13 +658,11 @@ It is not:
 
 ---
 
-## 📈 Provenance & `self_deception_index`
+## 📈 Provenance & metrics
 
-Every execution logs `ctx_model` and `ctx_commit` into the audit trail. Running patches through the same harness allows `compare_models()` to report verification rates side by side:
+Every execution logs `ctx_model` and `ctx_commit` into the audit trail. Running patches through the same harness allows `compare_models()` to report verification rates side by side — which model's patches the gate could verify, and how often the evidence condemned them.
 
-$$\text{self\_deception\_index} = \frac{\text{unverified\_merges}}{\text{merge\_count}}$$
-
-If your product pitch is *"menos autoengano no pipeline"*, this is the dashboard tile that proves it and the metric to watch drop to zero.
+`self_deception_index` (`unverified_merges / merge_count`) is still computed, and is **always `0` on logs this gate wrote** (AG-029): `decide()` never returns `MERGE` with an unverified claim, so the numerator cannot grow. It only means something when the decision records come from a pipeline that *can* merge unverified work — another gate, or a hand-built log of what actually shipped. The metrics that would say whether `MERGE` means anything — overrides (PR merged while the gate said `BLOCK`/`INCONCLUSIVE`), reverts within N days of a `MERGE`, `INCONCLUSIVE` resolved to `MERGE` — need data from outside the gate and are not implemented. See [`docs/AUDITORIA_PRODUTO_v2.1.1.md` §4.4](docs/AUDITORIA_PRODUTO_v2.1.1.md).
 
 ---
 

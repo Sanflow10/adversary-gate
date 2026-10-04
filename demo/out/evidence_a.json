@@ -1,6 +1,6 @@
 {
-  "record_id": "5d4ae1155e89419c817a71fb6d752402",
-  "ts": "2026-09-29T09:13:58.693435+00:00",
+  "record_id": "cffe0e683a8048089d74d42906111c65",
+  "ts": "2026-10-04T12:45:19.357279+00:00",
   "kind": "decision",
   "decision": "block",
   "rounds_used": 4,
@@ -48,5 +48,16 @@
   "full_suite_exit_codes": [
     0,
     1
-  ]
+  ],
+  "execution": {
+    "python": "/tmp/claude-1000/-home-sa/7c1788d6-949d-4f26-bf8f-bec5b5e68aec/scratchpad/v2/bin/python",
+    "timeout_seconds": 30,
+    "cpu_seconds": 10,
+    "memory_bytes": 536870912,
+    "sandbox": "none",
+    "env_passed": [],
+    "env_passed_missing": [],
+    "env_set": []
+  },
+  "discovery": null
 }

@@ -40,6 +40,37 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Segurança
+
+- **AG-032 — o patch não configura mais o runner que o julga.** Um patch com
+  bug + `.pytest.ini` (`addopts = -p plugin`) + um plugin que só mente para os
+  bytes exatos do bug chegava a `MERGE`, exit 0, `suite_strength: 1.0`. Agora
+  os arquivos de harness são comparados **árvore contra árvore** com o
+  baseline, não pela lista de caminhos declarados: qualquer diferença deixa a
+  claim `UNVERIFIED`. O denylist passou a cobrir `.pytest.ini`, `pytest.toml`,
+  `.pytest.toml`, `sitecustomize.py`, `usercustomize.py` e `*.pth`.
+
+### Alterado
+
+- **AG-027 — um só pacote.** O código foi para `src/adversary_gate/`; o wheel
+  instala `adversary_gate` e mais nada no topo (antes: `cli`, `core`,
+  `sandbox`, `verifiers`, que colidiam com pacotes do projeto testado). Quem
+  importava `core.gate` passa a importar `adversary_gate.core.gate`. O console
+  script `adversary-gate` não muda; sem instalar,
+  `PYTHONPATH=src python3 -m adversary_gate`. Novo `--version`.
+- **AG-023 (operadores)** — a mutação passa a quebrar `*` `/` `//` `%` `**`,
+  `+=` `-=` `*=` `/=` e `True`/`False`. Um patch `a + b` → `a * b` deixava de
+  ser medido ("no mutable operator"); agora tem mutante. `*` e `/` em posição
+  de sintaxe (`*args`, `import *`, marcadores de assinatura) não são tocados.
+  Tamanho de amostra e intervalo de confiança continuam abertos.
+
+### Documentação
+
+- README: a tese está em inglês; o `self_deception_index` saiu do pitch,
+  porque é 0 por construção nos logs do próprio gate (AG-029); nova seção
+  *What a test cannot see, by construction* (código no mesmo processo do
+  pytest, código que detecta que está sob teste).
+
 ---
 
 ## [2.3.0] — 2026-10-04

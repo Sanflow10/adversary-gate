@@ -51,8 +51,14 @@ them produces a `MERGE` it should not:
   and does not drop privileges. It is containment for opportunistic code, not
   for code written to escape. For hostile input, run the whole gate in a
   container or VM.
-- **`self_deception_index` measures decisions, not correctness.** A gate that
-  is confidently wrong in both directions looks identical to one that is not.
+- **`self_deception_index` measures decisions, not correctness** — and on logs
+  this gate wrote it is `0` by construction (AG-029). A gate that is
+  confidently wrong in both directions looks identical to one that is not.
+- **Code under test shares the runner's process.** The patch can no longer
+  configure pytest (AG-032), but a source module the tests import can still
+  tamper with pytest in-process, or behave differently when it detects a test
+  run. That is out of reach of any test-based gate; see *What a test cannot
+  see* in the README.
 - **Only pytest and `--test-command` are executed.** There is no mutation
   adapter yet, so non-Python stacks cannot reach `MERGE` at all — that is a
   missing feature, not a bypass.

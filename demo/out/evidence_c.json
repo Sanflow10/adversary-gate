@@ -1,6 +1,6 @@
 {
-  "record_id": "d985711657c44a9c9a0c0c97fc607017",
-  "ts": "2026-09-29T09:14:33.368347+00:00",
+  "record_id": "b738da1bc36544b599ad3f277a3b8048",
+  "ts": "2026-10-04T12:45:24.465021+00:00",
   "kind": "decision",
   "decision": "merge",
   "rounds_used": 4,
@@ -18,6 +18,8 @@
     "ratio": 1.0,
     "changed_lines": 1,
     "covered_lines": 1,
+    "test_lines_excluded": 0,
+    "test_files_excluded": [],
     "diff_sha256": "d107e11744ec103393941c63a64650273c0e8ce9860dcdea5452f7b8b3beed7d",
     "coverage_json_sha256": "9b38d69f583559dcf1ad6e347f6255e4b21ca0240cba83506e6b72712a3d5632"
   },
@@ -46,5 +48,16 @@
     "mutants_killed": 1
   },
   "full_suite_ran": true,
-  "full_suite_exit_codes": null
+  "full_suite_exit_codes": null,
+  "execution": {
+    "python": "/tmp/claude-1000/-home-sa/7c1788d6-949d-4f26-bf8f-bec5b5e68aec/scratchpad/v2/bin/python",
+    "timeout_seconds": 30,
+    "cpu_seconds": 10,
+    "memory_bytes": 536870912,
+    "sandbox": "none",
+    "env_passed": [],
+    "env_passed_missing": [],
+    "env_set": []
+  },
+  "discovery": null
 }

@@ -1,5 +1,5 @@
-AdversaryGate v2.1.0 — demonstração ao vivo
-repositório: /tmp/opencode/ag-remote
+AdversaryGate v2.3.0 — demonstração ao vivo
+repositório: /home/sa/adversary-gate
 
   Três cenários. B e C são o mesmo patch: mesmo código, mesmos
   testes, mesma execução. A única diferença é que C trouxe evidência.
@@ -8,8 +8,8 @@ repositório: /tmp/opencode/ag-remote
   CENÁRIO A — patch quebra o teste
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-t3jmrr8z/baseline
-      --patch /tmp/ag-demo-t3jmrr8z/patch_broken
+      --baseline /tmp/ag-demo-gz8dlbet/baseline
+      --patch /tmp/ag-demo-gz8dlbet/patch_broken
       --test-path test_sum.py
       --test-id test_add
       --coverage-source untrusted
@@ -21,14 +21,14 @@ repositório: /tmp/opencode/ag-remote
     coverage    : 1.0   (source=untrusted)
     força suíte : 0.0   (medida=True)
     suíte total : ran=True
-    tempo       : 19.6s
+    tempo       : 2.9s
 
 ==========================================================================
   CENÁRIO B — patch limpo, SEM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-t3jmrr8z/baseline
-      --patch /tmp/ag-demo-t3jmrr8z/patch_clean
+      --baseline /tmp/ag-demo-gz8dlbet/baseline
+      --patch /tmp/ag-demo-gz8dlbet/patch_clean
       --test-path test_sum.py
       --test-id test_add
 
@@ -38,18 +38,18 @@ repositório: /tmp/opencode/ag-remote
     coverage    : None   (source=none)
     força suíte : 1.0   (medida=True)
     suíte total : ran=True
-    tempo       : 16.9s
+    tempo       : 2.6s
 
 ==========================================================================
   CENÁRIO C — patch limpo, COM evidência de cobertura
 ==========================================================================
   $ adversary-gate \
-      --baseline /tmp/ag-demo-t3jmrr8z/baseline
-      --patch /tmp/ag-demo-t3jmrr8z/patch_clean
+      --baseline /tmp/ag-demo-gz8dlbet/baseline
+      --patch /tmp/ag-demo-gz8dlbet/patch_clean
       --test-path test_sum.py
       --test-id test_add
-      --diff /tmp/ag-demo-t3jmrr8z/change.diff
-      --coverage-json /tmp/ag-demo-t3jmrr8z/coverage.json
+      --diff /tmp/ag-demo-gz8dlbet/change.diff
+      --coverage-json /tmp/ag-demo-gz8dlbet/coverage.json
 
     exit code   : 0
     decision    : merge
@@ -57,7 +57,7 @@ repositório: /tmp/opencode/ag-remote
     coverage    : 1.0   (source=computed)
     força suíte : 1.0   (medida=True)
     suíte total : ran=True
-    tempo       : 17.8s
+    tempo       : 2.5s
 
 ==========================================================================
   ARTEFATO DE EVIDÊNCIA — cenário C (demo/out/evidence_c.json)
