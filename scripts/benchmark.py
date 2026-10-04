@@ -26,6 +26,7 @@ import json
 import platform
 import shutil
 import statistics
+import os
 import subprocess
 import sys
 import tempfile
@@ -69,11 +70,18 @@ def once(root: Path, sandbox: str) -> tuple[float, int]:
         "--diff", str(root / "change.diff"),
         "--coverage-json", str(root / "cov.json"),
         "--evidence-log", str(root / "evidence.jsonl"),
+        # The CI smoke fixture has one operator, so one mutant: under the 80 %
+        # interval (AG-023) it cannot reach the floor. The ratio keeps this
+        # benchmark measuring the same thing as before.
+        "--strength-confidence", "0",
     ]
     if sandbox != "none":
         argv += ["--sandbox", sandbox]
     started = time.perf_counter()
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    # The CLI imports ``adversary_gate``; run from a checkout, that package is
+    # under src/. Without this the script died on import from 2.4.0 on.
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    proc = subprocess.run(argv, capture_output=True, text=True, env=env)
     return time.perf_counter() - started, proc.returncode
 
 
