@@ -8,7 +8,7 @@ version = "2.8.0"
 description = "Evidence-based verification gate for AI coding agents (fail-closed)"
 readme = "README.md"
 authors = [
-    {name = "AdversaryGate Authors"}
+    {name = "AdversaryGate Authors", email = "sanflow086@gmail.com"}
 ]
 license = "MIT"
 requires-python = ">=3.10"
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Sanflow10/adversary-gate"
+Homepage = "https://sanflow10.github.io/adversary-gate/"
 Documentation = "https://github.com/Sanflow10/adversary-gate#readme"
 Repository = "https://github.com/Sanflow10/adversary-gate.git"
 Issues = "https://github.com/Sanflow10/adversary-gate/issues"

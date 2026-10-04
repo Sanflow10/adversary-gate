@@ -82,10 +82,11 @@ have a report and how a maintainer can reach you privately. A maintainer will
 move the conversation to a private channel before anything technical is said,
 and the issue is closed once that has happened.
 
-There is deliberately no email address in this policy. An address that is not
-monitored is worse than none — it looks like a route and drops the report — and
-`pyproject.toml` does not carry one either. When a monitored address exists it
-will be added here and to the package metadata together.
+**Or email** <sanflow086@gmail.com> with `[SECURITY] adversary-gate` in the
+subject. The address is monitored, and it is the same one in the package
+metadata (`pyproject.toml`). Email is not encrypted end to end: for a
+fail-open, prefer the advisory above, or send only a first message asking for a
+private channel.
 
 Please include:
 
