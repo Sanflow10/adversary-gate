@@ -25,7 +25,9 @@ jobs:
       # AG-005/AG-006: the suite must run against an *installed* package on a
       # clean runner, not against whatever happens to be preinstalled.
       - name: Install package and test dependencies
-        run: python -m pip install .
+        # [mcp] so tests/test_integrations.py exercises the MCP server over the
+        # real stdio protocol instead of skipping it.
+        run: python -m pip install ".[mcp]"
 
       - name: Byte-compile
         run: python -m compileall -q src tests
@@ -56,6 +58,13 @@ jobs:
 
       - name: CLI entry point answers --help
         run: adversary-gate --help
+
+      - name: The wheel ships the Hermes skill and config
+        # Package data is the part a source checkout hides: these files exist in
+        # src/ whether or not the wheel carries them.
+        run: |
+          adversary-gate-mcp --print-hermes-skill | grep -q '^name: adversary-gate$'
+          adversary-gate-mcp --print-hermes-config | grep -q 'ADVERSARY_GATE_BASE_REF'
 
       - name: Installed CLI refuses an untrusted coverage claim
         # The AG-002 contract: a bare --coverage-ratio is a usage error.
@@ -455,7 +464,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
-          python -m pip install . pytest coverage
+          python -m pip install ".[mcp]" pytest coverage
 
       # Two independent ways this job can go red, and a log that says only
       # "Measure coverage of src failed" does not tell them apart: the suite

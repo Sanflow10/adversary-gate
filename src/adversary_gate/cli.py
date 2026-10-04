@@ -363,6 +363,28 @@ def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     return sorted(validate_diff(text))
 
 
+def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
+    """Ask Jev, apply only upward changes to ``args``, return the record."""
+    from adversary_gate.integrations.jev import DEFAULT_THRESHOLD, JevClient, escalation, triage_diff
+
+    threshold = DEFAULT_THRESHOLD if args.triage_threshold is None else args.triage_threshold
+    if not 0 < threshold <= 1:
+        raise ValueError("--triage-threshold must be in (0, 1]")
+    if not args.diff:
+        return {"source": "jev", "error": "no --diff to triage", "escalated": False, "applied": {}}
+    diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    triage = triage_diff(diff_text, JevClient(endpoint=args.triage_endpoint), threshold)
+    raised = escalation(
+        triage,
+        {"strength_confidence": args.strength_confidence, "coverage_floor": args.coverage_floor},
+    )
+    for name, value in raised.items():
+        setattr(args, name, value)
+    triage.escalated = bool(raised)
+    triage.applied = raised
+    return triage.to_dict()
+
+
 def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
     """What the collateral run judged the patch's code with, when it was not the patch's tests."""
     if not rewritten:
@@ -420,6 +442,23 @@ def build_parser() -> argparse.ArgumentParser:
         "and mutation, and put back from the baseline by the baseline oracle, so "
         "a patch cannot bend it to agree with a bug. test_*, *_test.py, "
         "conftest.py and anything under tests/ need no declaration.",
+    )
+    parser.add_argument(
+        "--triage",
+        choices=("none", "jev"),
+        default="none",
+        help="ask a triage model how risky the diff is before judging it. 'jev' "
+        "sends the diff (truncated to 64 KiB) to TypeSafe's API "
+        "(TYPESAFE_API_KEY). A confident 'high' only raises the floors for this "
+        "run; nothing it says can make the decision more lenient.",
+    )
+    parser.add_argument("--triage-endpoint", help="override the Jev endpoint (default: TypeSafe's)")
+    parser.add_argument(
+        "--triage-threshold",
+        type=float,
+        default=None,
+        metavar="P",
+        help="confidence a 'high' needs before it raises the floors (default 0.70)",
     )
     parser.add_argument(
         "--discover-claims",
@@ -644,6 +683,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "cpu_seconds": args.cpu_seconds,
             "mem_bytes": args.memory,
         }
+        triage_record: Optional[Dict[str, Any]] = None
+        if args.triage == "jev":
+            triage_record = _run_triage(args)
+
         execution: Dict[str, Any] = {
             "python": python,
             "timeout_seconds": args.timeout,
@@ -652,6 +695,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "sandbox": args.sandbox,
             **env_record,
             "test_support": list(args.test_support),
+            "triage": triage_record,
         }
 
         discovery: Optional[Dict[str, Any]] = None

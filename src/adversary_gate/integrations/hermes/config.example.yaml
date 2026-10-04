@@ -1,0 +1,26 @@
+# ~/.hermes/config.yaml -- add AdversaryGate as an MCP server.
+#
+#   pip install "adversary-gate[mcp]"     # in an environment the agent cannot write to
+#   adversary-gate-mcp --print-hermes-skill > ~/.hermes/skills/adversary-gate/SKILL.md
+#
+mcp_servers:
+  adversary_gate:
+    command: "adversary-gate-mcp"
+    args: []
+    timeout: 900
+    env:
+      # The baseline is the oracle. Pin it, or the agent chooses what it is judged against.
+      ADVERSARY_GATE_BASE_REF: "origin/main"
+      # The interpreter that runs the project's tests (pytest + coverage installed).
+      # Its site-packages are part of the harness: the agent must not be able to write to it.
+      ADVERSARY_GATE_PYTHON: "/opt/project-venv/bin/python"
+      # Extra gate flags, set by you, never by the agent.
+      ADVERSARY_GATE_POLICY: "--sandbox bwrap"
+      # Optional: risk triage with Jev (TypeSafe AI). Sends the diff to TypeSafe;
+      # a confident "high" only raises the floors.
+      # ADVERSARY_GATE_POLICY: "--sandbox bwrap --triage jev"
+      # TYPESAFE_API_KEY: "sk-..."
+    tools:
+      include: [verify_repo, gate_policy]
+      prompts: false
+      resources: false

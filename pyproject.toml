@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adversary-gate"
-version = "2.7.0"
+version = "2.8.0"
 description = "Evidence-based verification gate for AI coding agents (fail-closed)"
 readme = "README.md"
 authors = [
@@ -22,8 +22,14 @@ Documentation = "https://github.com/Sanflow10/adversary-gate#readme"
 Repository = "https://github.com/Sanflow10/adversary-gate.git"
 Issues = "https://github.com/Sanflow10/adversary-gate/issues"
 
+[project.optional-dependencies]
+# The MCP server for coding agents (Hermes, Claude Code, ...). coverage is what
+# lets it derive the evidence from a git working tree on its own.
+mcp = ["mcp>=1.9", "coverage>=7"]
+
 [project.scripts]
 adversary-gate = "adversary_gate.cli:main"
+adversary-gate-mcp = "adversary_gate.integrations.mcp_server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -31,3 +37,6 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["adversary_gate*"]
+
+[tool.setuptools.package-data]
+"adversary_gate.integrations" = ["hermes/*.md", "hermes/*.yaml"]
