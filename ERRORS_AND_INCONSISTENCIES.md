@@ -153,20 +153,22 @@ mesmo cenário, mesmo exit code, sem confiar no relatório de ninguém.
 Auditoria completa, com reprodução de cada item, em
 [`docs/AUDITORIA_PRODUTO_v2.1.1.md`](docs/AUDITORIA_PRODUTO_v2.1.1.md),
 executada contra `3cc103c`. Os quatro itens de maior retorno e menor esforço
-foram tratados em seguida, cada um com teste de regressão em
-`tests/test_oracle_integrity.py` (sem versão ainda — ver `[Unreleased]` no
-CHANGELOG). **O que continua aberto está dito na coluna Status, não omitido.**
+saíram na `2.2.0`, com teste de regressão em `tests/test_oracle_integrity.py`;
+AG-024, AG-025 e AG-031 saíram na `2.3.0`, com teste em
+`tests/test_execution_and_claims.py` e o job de CI *Composite action discovers
+claims on the project's Python*. **O que continua aberto está dito na coluna
+Status, não omitido.**
 
 | ID | Severidade | Achado | Status |
 |---|---|---|---|
 | **AG-021** | Alta — fail-open | Agente introduz bug e reescreve o teste da claim → `exit 0` / `merge`, `suite_strength: 1.0`. A proteção `critic_test_paths` existia na biblioteca, mas a CLI e a Action não a ligavam. | **Corrigido (mínima)** — teste da claim reescrito pelo patch deixa de ser `VERIFIED`; caminhos do `--diff` alimentam a policy. **Aberto:** oráculo do baseline (rodar o teste *original* contra o código do patch) e testes que não são o da claim. |
 | **AG-022** | Média — fail-open parcial | Linhas de teste entram no denominador da cobertura do diff: 0/10 linhas de fonte cobertas + 40 de teste → `0.8`, passa no piso. | **Corrigido** — ratio só sobre fonte; exclusão gravada no artefato. |
 | **AG-023** | Média — rigor | Mutation score com n = 1..6, sítios pegos na ordem do arquivo, sem intervalo de confiança; poucos operadores. | Aberto |
-| **AG-024** | Alta — adoção | Timeout 30 s, CPU 10 s e 512 MB fixos, sem flag; `--test-command` recebe `PATH=/usr/bin:/bin` sem `HOME`; JVM sai com exit 1 (lido como falha de teste). | Aberto |
-| **AG-025** | Alta — adoção (por leitura) | A Action força Python 3.12 e roda pytest com `sys.executable`, sem as dependências do projeto. | Aberto |
-| **AG-026** | Alta — distribuição | Tag e Release `v2.1.1` não existem (wheel → `404`); o PyPI entrega `2.1.0`, que contém o AG-018. | **Parcial** — o workflow de Release agora move a tag `vN`, envia ao PyPI por token quando o segredo existe e avisa quando não existe. A `2.1.1` não será publicada: o conteúdo dela foi para a `2.2.0`, já com versão e CHANGELOG cortados. **Aberto até alguém rodar o Release** e fornecer o token (ou registrar o Trusted Publisher, AG-008). |
+| **AG-024** | Alta — adoção | Timeout 30 s, CPU 10 s e 512 MB fixos, sem flag; `--test-command` recebe `PATH=/usr/bin:/bin` sem `HOME`; JVM sai com exit 1 (lido como falha de teste). | **Corrigido (2.3.0)** — `--timeout`, `--cpu-seconds`, `--memory` (aceitam `none`), `--pass-env`, `--env`; `HOME` privado por execução; morte por limite de memória (exit 1 + `MemoryError`, `Could not reserve enough space`, `Fatal process out of memory`…) vira exit 3 → `INCONCLUSIVE`; tudo registrado em `execution`. **Aberto:** a detecção é por texto na saída — uma ferramenta que morra sem imprimir nenhum desses marcadores continua lida como falha de teste. |
+| **AG-025** | Alta — adoção (por leitura) | A Action força Python 3.12 e roda pytest com `sys.executable`, sem as dependências do projeto. | **Corrigido (2.3.0)** — `--python`; a Action instala o gate num venv privado (`update-environment: false`), roda os testes no Python do projeto e o coverage.py nesse mesmo interpretador; os mutantes passaram a receber o mesmo interpretador, ambiente e sandbox. Verificado por job de CI com Python 3.11 e uma dependência que só existe nele. |
+| **AG-026** | Alta — distribuição | Tag e Release `v2.1.1` não existem (wheel → `404`); o PyPI entrega `2.1.0`, que contém o AG-018. | **Parcial** — o workflow de Release agora move a tag `vN`, envia ao PyPI por token quando o segredo existe e avisa quando não existe. A `2.1.1` não será publicada: o conteúdo dela foi para a `2.2.0`, já com versão e CHANGELOG cortados. A GitHub Release `v2.2.0` (e a `v2`) foi publicada pelo workflow. **Aberto:** o PyPI segue em `2.1.0` até o token ou o Trusted Publisher funcionar (AG-008). |
 | **AG-027** | Média — empacotamento | O wheel instala `cli`, `core`, `sandbox` e `verifiers` como pacotes top-level; sem `--version`. | Aberto |
 | **AG-028** | Baixa | `SECURITY.md` manda usar o e-mail do `pyproject.toml`, que não tem e-mail. | **Corrigido** — link direto para o advisory + fallback por issue sem detalhe técnico. **Aberto:** não há e-mail monitorado; e *Private vulnerability reporting* precisa estar habilitado em Settings → Code security (não verificável daqui). |
 | **AG-029** | Conceitual | `self_deception_index` é 0 por construção quando calculado só sobre decisões do gate. | Aberto |
 | **AG-030** | Conceitual | `FAIL→PASS` (correção provada) e `PASS→PASS` (não regressão) recebem o mesmo rótulo. | Aberto |
-| **AG-031** | Alta — adoção | Uma claim por execução e `test-path` obrigatório e fixo no YAML da Action. | Aberto |
+| **AG-031** | Alta — adoção | Uma claim por execução e `test-path` obrigatório e fixo no YAML da Action. | **Corrigido (2.3.0)** — várias claims (`--test-id` e `--claim` repetíveis, `--claim-json` com N) e `--discover-claims`: os testes que executaram uma linha de fonte alterada, lidos dos contextos por teste do coverage.py; arquivos de teste reescritos pelo patch ficam de fora e nomeados. Na Action, sem teste nomeado, a descoberta liga sozinha. **Aberto:** só pytest — com `--test-command` não há node id para descobrir. |

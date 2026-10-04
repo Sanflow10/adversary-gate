@@ -11,11 +11,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1` e `v2.1.0`**. A `2.1.1` chegou a ter
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0` e `v2.2.0`**, mais a
+flutuante `v2`, que o Release move para a 2.x mais nova. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
-`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.2.0` é
+`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.3.0` é
 publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
-partir do commit que a contém — se `v2.2.0` não aparece em *Releases*, o
+partir do commit que a contém — se `v2.3.0` não aparece em *Releases*, o
 workflow ainda não rodou, e esta seção ainda é uma promessa.
 
 O AG-008 continua **aberto**: o `pypi-publish.yml` falha no upload porque o
@@ -39,8 +40,84 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [2.3.0] — 2026-10-04
+
+Fecha AG-024, AG-025 e AG-031: **como** os testes rodam, **em qual** Python, e
+**quais** testes. Até aqui um run verificava um único teste, escolhido à mão,
+no interpretador do gate, sob limites gravados no código — e a Action trocava o
+Python do job inteiro para conseguir um.
+
+```bash
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.3.0/adversary_gate-2.3.0-py3-none-any.whl
+```
+
+### Adicionado
+
+- **AG-031 — várias claims por run, e descoberta automática.** `--test-id`
+  repete, `--claim PATH::ID` repete, e `--claim-json` aceita qualquer número de
+  claims (antes: exatamente uma). A decisão é sobre todas: um `REFUTED`
+  bloqueia, um `UNVERIFIED` deixa `INCONCLUSIVE`. `--discover-claims` verifica
+  os testes que **executaram uma linha de código-fonte alterada**, lidos dos
+  contextos por teste do coverage.py (`dynamic_context = test_function` +
+  `coverage json --show-contexts`) — não adivinhados. Só linhas de código
+  contam (um teste sempre executa as próprias linhas); um arquivo de teste que
+  o patch **reescreveu** nunca é escolhido, porque o veredito dele seria o
+  patch se corrigindo (AG-021), e aparece nomeado em `discovery`. Relatório sem
+  contextos é erro de uso (exit 3), não "nenhum teste". `--max-claims`
+  (padrão 10) limita o custo e o artefato diz quantas foram cortadas.
+- **AG-024 — limites e ambiente configuráveis.** `--timeout`, `--cpu-seconds`
+  e `--memory` (`512M`, `4G`…, ou `none` — a JVM e o Node não sobem sob limite
+  de espaço de endereçamento); `--pass-env NOME` e `--env NOME=VALOR`. Valem
+  para todas as execuções — claims, mutantes e suíte completa — e o artefato
+  registra tudo em `execution`, com os **nomes** das variáveis e nunca os
+  valores.
+- **AG-025 — `--python`.** O interpretador que roda o pytest: o do projeto,
+  onde as dependências estão. Validado antes de qualquer execução (um caminho
+  errado é exit 3) e registrado no artefato. Com `--sandbox bwrap`, o venv e a
+  instalação dele são montados somente leitura.
+- **Action:** entradas `python`, `claims`, `discover-claims` (`auto` por
+  padrão: liga quando nenhum teste é nomeado), `max-claims`, `timeout`,
+  `cpu-seconds`, `memory`, `pass-env`, `env`; saídas `claims-total` e
+  `python`. `test-path` deixou de ser obrigatório.
+
+### Corrigido
+
+- **AG-024 — morte por limite deixou de ser evidência contra o patch.**
+  Executado: sob 512 MiB, alocar 4 GiB num teste gera `MemoryError`, o pytest
+  sai com 1, e o mapa de saída lia isso como teste falhando — `BLOCK` por algo
+  que o patch não fez. Exit 1 com `MemoryError`, `Fatal process out of memory`,
+  `Could not reserve enough space` e afins agora é morte do harness (exit 3 →
+  `UNVERIFIED` → `INCONCLUSIVE`). O erro vai no sentido seguro: uma falha real
+  que imprima um desses textos vira `INCONCLUSIVE`, nunca `MERGE`.
+- **AG-025 — a Action não troca mais o Python do job.** Ela fazia
+  `setup-python 3.12` no `PATH`: os testes rodavam num interpretador sem as
+  dependências do projeto, e todo passo depois dela herdava esse Python. Agora
+  o gate vive num venv privado (`update-environment: false`), os testes rodam
+  no primeiro `python`/`python3` do `PATH` que importa pytest — o do
+  `setup-python` do próprio usuário — ou no indicado em `python:`, e o
+  coverage.py roda nesse mesmo interpretador (instalado ao lado dele, em
+  diretório próprio, quando falta — nunca dentro do ambiente do projeto).
+- **Os mutantes ignoravam `--sandbox bwrap`.** A medição de força rodava cada
+  mutante sem o sandbox pedido, sempre no Python do gate e sem o ambiente do
+  chamador. Agora recebe as mesmas opções das claims.
+- **Ícone da Action.** `shield-check` não está no conjunto do Feather que o
+  branding de Actions aceita; virou `shield`.
+
 ### Alterado
 
+- Cada execução recebe um `HOME` privado, criado para ela e apagado depois
+  (a menos que `--env HOME=…` diga outro). Ferramentas que insistem em gravar
+  no home (npm, cargo, caches do pip) não escrevem no repositório nem no home
+  real. Os pacotes do *user site* continuam visíveis via `PYTHONUSERBASE`.
+- A saída JSON ganhou `claims_total`, `claims` (um registro por claim),
+  `execution` e, quando há descoberta, `discovery`. Os campos de topo
+  (`outcome`, `classification`, `reason`, `evidence`) descrevem o veredito que
+  **explica** a decisão — o primeiro `REFUTED`, senão o primeiro
+  `UNVERIFIED` — e com uma claim só são os mesmos de antes. O mesmo vale para a
+  saída `outcome` da Action.
+- A mesma claim nomeada duas vezes roda uma vez só.
 - **Publicar no PyPI uma release que já existe.** O `pypi-publish.yml` ganhou
   *Run workflow* com a tag como entrada. A `2.2.0` saiu como GitHub Release, mas
   a tag foi criada pelo token do próprio workflow Release, e eventos desse
@@ -51,6 +128,20 @@ quando esta seção vira uma com versão e data.
   Publishing quando não existe.
 - O aviso do Release quando falta o token deixou de mandar "rodar este workflow
   de novo", o que falharia. Agora aponta para o *Publish to PyPI*.
+
+### Comportamento que muda
+
+- **Um teste morto pelo limite de memória era `BLOCK` e agora é
+  `INCONCLUSIVE`.** Se o limite padrão não cabe na sua suíte, aumente-o com
+  `--memory` (Action: `memory`) em vez de ler o bloqueio como regressão.
+- **Passos depois da Action veem o Python que *você* configurou**, não mais o
+  3.12 dela. Um workflow que, sem perceber, dependia desse 3.12 (ou do
+  `coverage` que ela instalava) precisa do próprio `setup-python`.
+- **Sem nenhum teste nomeado, a Action agora descobre os testes** em vez de
+  falhar com exit 3. Se a descoberta não encontra nenhum teste que execute uma
+  linha alterada, a decisão é `INCONCLUSIVE` — nunca `MERGE` por falta de
+  claims.
+- `--claim-json` com mais de uma claim deixou de ser erro de uso.
 
 ---
 

@@ -1,4 +1,4 @@
-# AdversaryGate (v2.2.0)
+# AdversaryGate (v2.3.0)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -311,7 +311,7 @@ python3 src/cli.py --help
 | `git clone` + `pip install .` | `main` | git |
 | `python3 src/cli.py --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **2.2.0** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **2.3.0** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -320,19 +320,19 @@ python3 src/cli.py --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- only once 2.2.0 is there; 2.1.0 still has AG-018, AG-021 and AG-022
-pip install adversary-gate==2.2.0
+# PyPI -- only once 2.3.0 is there; 2.1.0 still has AG-018, AG-021 and AG-022
+pip install adversary-gate==2.3.0
 ```
 
 ```bash
-# GitHub Release -- 2.2.0: every fix in this document.
+# GitHub Release -- 2.3.0: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.2.0/adversary_gate-2.2.0-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.3.0/adversary_gate-2.3.0-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v2.2.0` has not been published yet. (There is no `v2.1.1`: that
+Release for `v2.3.0` has not been published yet. (There is no `v2.1.1`: that
 version was written up and never released; its fixes are in `2.2.0`.) Releases
 are published from
 **Actions → Release → Run workflow**. That workflow:
@@ -351,7 +351,7 @@ are published from
    warning in the run, that PyPI was **not** updated.
 
 To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v2.2.0`). It builds from that tag's
+→ Run workflow** and give it the tag (`v2.3.0`). It builds from that tag's
 tree, refuses a tag whose `pyproject.toml` names another version, and
 authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
 Publishing when it does not.
@@ -416,6 +416,56 @@ git diff --no-ext-diff baseline...patch > changes.diff
 coverage json -o coverage.json          # after: coverage run -m pytest
 ```
 
+#### Which tests? Name several, or let coverage say
+
+One run verifies any number of claims, and the decision is over all of them
+(one `REFUTED` blocks; one `UNVERIFIED` makes it `INCONCLUSIVE`):
+
+```bash
+adversary-gate ... --test-path tests/test_auth.py --test-id test_expiry --test-id test_refresh
+adversary-gate ... --claim tests/test_auth.py::test_expiry --claim tests/test_api.py::TestLogin::test_ok
+```
+
+Or name none, and let the gate verify **the tests that executed a changed
+source line** — read from coverage.py's per-test contexts, not guessed:
+
+```bash
+printf '[run]\ndynamic_context = test_function\n' > contexts.coveragerc
+coverage run --rcfile=contexts.coveragerc -m pytest
+coverage json --show-contexts -o coverage.json
+adversary-gate --baseline before --patch after \
+      --diff changes.diff --coverage-json coverage.json --discover-claims
+```
+
+A test file the patch **rewrote** is never picked: its verdict would be the
+patch grading itself (AG-021). It is named under `discovery` in the output
+instead, next to anything that could not be resolved to a node id, and the cap
+(`--max-claims`, default 10) with how many it cut. A report recorded without
+contexts is a usage error (exit 3), not "no tests".
+
+#### Your project's interpreter, its limits, its environment
+
+```bash
+adversary-gate ... --python .venv/bin/python \
+      --timeout 120 --cpu-seconds 60 --memory 2G \
+      --pass-env PATH --env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+```
+
+| Flag | Default | |
+| --- | --- | --- |
+| `--python` | the gate's own | the interpreter pytest runs on — the one your dependencies are in |
+| `--timeout` | `30` | wall-clock seconds per run; `none` removes it |
+| `--cpu-seconds` | `10` | CPU seconds per run; `none` removes it |
+| `--memory` | `512M` | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
+| `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
+| `--env NAME=VALUE` | — | set one |
+
+The same choices apply to every run — claims, mutants and the collateral suite —
+and the output records them under `execution`, with the **names** of the
+variables and never their values. A run the memory limit killed (`MemoryError`,
+`Fatal process out of memory`, `Could not reserve enough space`…) is reported as
+the harness dying, not as a failing test: it says nothing about the patch.
+
 #### Not a pytest suite, or running a patch you have not seen?
 
 ```bash
@@ -466,17 +516,34 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Your Python, your dependencies -- the tests run here.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest coverage
+
       - name: Run AdversaryGate
-        uses: Sanflow10/adversary-gate@main
+        uses: Sanflow10/adversary-gate@v2
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}
-          test-path: 'tests/test_token_expiry.py'
-          test-id: 'test_token_expiry'
           evidence-log: 'evidence.jsonl'
 ```
 
-> **Which ref?** `v2.2.0` carries every fix, and the Release workflow that
-> publishes it also creates the floating `v2` tag, which then follows every 2.x
+No test is named: the Action records coverage per test and verifies the tests
+that executed the lines the pull request changed. Name them yourself with
+`claims` (one `path::test` per line) or `test-path` + `test-id` (one id per
+line); either one turns discovery off unless `discover-claims: 'true'`.
+
+**It runs your tests on your Python.** The gate itself lives in a private venv
+on its own 3.12, and your job's `python` is the same before and after the step.
+The tests run on the first `python`/`python3` on `PATH` that can import pytest —
+the one your `setup-python` step put there — or on the interpreter you name with
+`python:`. When there is none, they run on the gate's own and the run says so.
+`timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
+above.
+
+> **Which ref?** `v2.3.0` carries every fix, and the Release workflow that
+> publishes it also moves the floating `v2` tag, which follows every 2.x
 > release. `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
 > at the audited version with the bugs. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -495,9 +562,11 @@ What that does, and where each piece comes from:
 
 If the ref is not in your local history the Action **stops with exit 4 and
 tells you `fetch-depth: 0`** rather than measuring against a baseline it
-invented. `coverage-command` defaults to `coverage run -m pytest` + `coverage json`;
-override it to point at your own suite, or pass `coverage-json` to supply the
-artefact yourself.
+invented. `coverage-command` defaults to `coverage run -m pytest` + `coverage json`
+(with per-test contexts when claims are discovered), and `coverage` in it is
+coverage.py on *your* interpreter — installed beside it, not into it, when it
+is missing. Override it to point at your own suite, or pass `coverage-json` to
+supply the artefact yourself.
 
 **Everything it derived is one `git diff` you could have run by hand.** When
 you would rather assemble it yourself — a monorepo, a generated diff, coverage
@@ -627,12 +696,13 @@ Disabling plugin autoload takes a single start from `2,47 s` to `0,53 s` on
 this box — that step is measured; a ~5–6 s total on a clean machine is
 **arithmetic, not a measurement**, and is labelled as such.
 
-There is a real limitation here worth stating: the runner hands the child a
-minimal environment by design, so `PYTEST_DISABLE_PLUGIN_AUTOLOAD` **cannot
-reach it**. On a machine with a heavy plugin set the gate inherits the full
-cost eight times over with no way to opt out. That is an honest constraint of
-"isolation means the child sees only what I pass it", not a bug — but it is why
-the environment has to be printed next to the number.
+The runner hands the child a minimal environment by design, so a variable in
+your shell does **not** reach it. Since 2.3.0 you pass it on purpose:
+`--env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` (Action: `env:`) takes the plugin cost
+out of all eight runs, and the artefact records that you did. Until then, on a
+machine with a heavy plugin set, the gate paid the full cost eight times over
+with no way to opt out — which is why the environment has to be printed next to
+the number.
 
 **This is not a CI performance gate.** Timing on a shared runner is noisy
 enough that any threshold is either too loose to test anything or tight enough
