@@ -349,11 +349,7 @@ runs:
         # running coverage.py, whatever else is on PATH.
         export PATH="$AG_TOOLS_BIN:$PATH"
         if [ -z "$AG_COVERAGE_CMD" ]; then
-          while IFS= read -r line; do
-          line="$(trim "$line")"
-          if [ -n "$line" ]; then ARGS+=(--test-support "$line"); fi
-        done <<< "$AG_TEST_SUPPORT"
-        if [ "$AG_DISCOVER" = "true" ]; then
+          if [ "$AG_DISCOVER" = "true" ]; then
             AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --show-contexts -o "$COVERAGE_JSON"'
           else
             AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
@@ -479,6 +475,10 @@ runs:
           line="$(trim "$line")"
           if [ -n "$line" ]; then ARGS+=(--claim "$line"); fi
         done <<< "$AG_CLAIMS"
+        while IFS= read -r line; do
+          line="$(trim "$line")"
+          if [ -n "$line" ]; then ARGS+=(--test-support "$line"); fi
+        done <<< "$AG_TEST_SUPPORT"
         if [ "$AG_DISCOVER" = "true" ]; then
           ARGS+=(--discover-claims --max-claims "$AG_MAX_CLAIMS")
         fi

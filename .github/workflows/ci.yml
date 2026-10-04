@@ -363,6 +363,10 @@ jobs:
           base-sha: ${{ env.AG_BASE_SHA }}
           full-suite-path: 'gate_fixture'
           evidence-log: 'evidence-discover.jsonl'
+          # Matches nothing in the fixture: here only to prove the input reaches
+          # the CLI (an earlier wiring of it broke the prep step instead).
+          test-support: |
+            gate_fixture/testing_utils.py
 
       - name: The changed line's tests were found and ran on the project's Python
         env:
@@ -390,6 +394,7 @@ jobs:
               "gate_fixture/test_more.py::TestMore::test_add_negative",
           ], added
           assert decision["execution"]["memory_bytes"] == 512 * 1024 ** 2
+          assert decision["execution"]["test_support"] == ["gate_fixture/testing_utils.py"], decision["execution"]
           PY
 
   static-analysis:
