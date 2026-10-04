@@ -13,10 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.exitmap import PYTEST_OK
 from core.gate import Gate, GateConfig
@@ -27,10 +29,12 @@ from core.types import (
     BugKind,
     CriticClaim,
     Decision,
+    GateVerdict,
     Outcome,
 )
 from sandbox.runner import SandboxResult, bwrap_available, run_test
 from verifiers.coverage import covered_diff_ratio, validate_diff
+from verifiers.discovery import discover_claims
 from verifiers.strength import classify_changes, measure_mutation_score
 
 EXIT_MERGE = 0
@@ -54,38 +58,190 @@ class _Parser(argparse.ArgumentParser):
         sys.exit(EXIT_USAGE)
 
 
-def _claim_from_args(args: argparse.Namespace) -> CriticClaim:
+def _claim(args: argparse.Namespace, test_path: str, test_id: str) -> CriticClaim:
+    return CriticClaim(
+        test_path, test_id, BugKind(args.bug_kind), args.criterion_id, args.rationale
+    )
+
+
+def _claims_from_args(args: argparse.Namespace) -> List[CriticClaim]:
+    """Every claim the caller named, in the order given (AG-031).
+
+    A run used to verify exactly one claim, so a workflow had to name one fixed
+    test for every pull request. Now there are four ways in, and they add up:
+    ``--claim-json`` with any number of claims, ``--claim PATH::ID`` repeated,
+    ``--test-path`` with ``--test-id`` repeated, and ``--discover-claims``,
+    which is resolved later because it needs the diff and the coverage report.
+    """
     if args.claim_json:
         source = Path(args.claim_json)
         raw = source.read_text(encoding="utf-8") if source.is_file() else args.claim_json
         data = json.loads(raw)
         if (
-            set(data) != {"claims"}
+            not isinstance(data, dict)
+            or set(data) != {"claims"}
             or not isinstance(data["claims"], list)
-            or len(data["claims"]) != 1
+            or not data["claims"]
         ):
-            raise ValueError("claim JSON must contain exactly one claim")
-        data = data["claims"][0]
-        return CriticClaim(
-            data["test_path"],
-            data["test_id"],
-            BugKind(data.get("bug_kind", "deterministic")),
-            data.get("cited_criterion_id"),
-            data.get("rationale", ""),
-        )
-    if not args.test_path:
-        raise ValueError("--test-path is required unless --claim-json is used")
-    if not args.test_id and not args.test_command:
+            raise ValueError('claim JSON must be {"claims": [...]} with at least one claim')
+        claims: List[CriticClaim] = [
+            CriticClaim(
+                item["test_path"],
+                item["test_id"],
+                BugKind(item.get("bug_kind", "deterministic")),
+                item.get("cited_criterion_id"),
+                item.get("rationale", ""),
+            )
+            for item in data["claims"]
+        ]
+    else:
+        claims = []
+    for raw in args.claim:
+        test_path, separator, test_id = raw.partition("::")
+        if not separator or not test_path or not test_id:
+            raise ValueError(f"--claim must be PATH::TEST_ID, got {raw!r}")
+        claims.append(_claim(args, test_path, test_id))
+
+    if args.test_path:
+        # A suite that is one arbitrary command has no node IDs to name, but the
+        # claim still needs a non-empty identity for the circuit breaker and the
+        # evidence trail. Say what it is rather than inventing a test name.
+        ids = list(args.test_id) or (["(test-command)"] if args.test_command else [])
+        if not ids:
+            raise ValueError(
+                "--test-id is required unless --test-command or --claim-json is used"
+            )
+        claims.extend(_claim(args, args.test_path, test_id) for test_id in ids)
+    elif args.test_id:
+        raise ValueError("--test-id needs --test-path (or name the test with --claim PATH::ID)")
+
+    if not claims and not args.discover_claims:
         raise ValueError(
-            "--test-id is required unless --test-command or --claim-json is used"
+            "--test-path is required unless --claim, --claim-json or --discover-claims is used"
         )
-    # A suite that is one arbitrary command has no node IDs to name, but the
-    # claim still needs a non-empty identity for the circuit breaker and the
-    # evidence trail. Say what it is rather than inventing a test name.
-    test_id = args.test_id or "(test-command)"
-    return CriticClaim(
-        args.test_path, test_id, BugKind(args.bug_kind), args.criterion_id, args.rationale
-    )
+    # The same test named twice is verified once: a second run is cost, not
+    # evidence, and it would count twice in the summary.
+    unique: Dict[Tuple[str, str], CriticClaim] = {}
+    for claim in claims:
+        unique.setdefault((claim.test_path, claim.test_id), claim)
+    return list(unique.values())
+
+
+#: An environment variable name the shell would accept.
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _limit(text: str) -> Optional[int]:
+    """``--timeout`` / ``--cpu-seconds``: a positive integer, or ``none``."""
+    if text.strip().lower() == "none":
+        return None
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a positive integer or 'none', got {text!r}")
+    if value <= 0:
+        raise argparse.ArgumentTypeError(
+            f"{value} is not a limit; use a positive number, or 'none' to remove it"
+        )
+    return value
+
+
+def _size(text: str) -> Optional[int]:
+    """``--memory``: bytes, with an optional K/M/G suffix (powers of 1024), or ``none``."""
+    raw = text.strip().upper()
+    if raw == "NONE":
+        return None
+    match = re.fullmatch(r"(\d+)\s*([KMG]?)I?B?", raw)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"expected a size like 512M or 4G, or 'none', got {text!r}"
+        )
+    value = int(match.group(1)) * {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}[match.group(2)]
+    if value <= 0:
+        raise argparse.ArgumentTypeError("a memory limit of zero is a typo; use 'none' to remove it")
+    return value
+
+
+def _run_environment(args: argparse.Namespace) -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """What the test process may see beyond the minimal default (AG-024).
+
+    ``--pass-env NAME`` copies a variable from the gate's own environment;
+    ``--env NAME=VALUE`` sets one. The artefact records the names and never the
+    values, because a value is exactly where a token would be.
+    """
+    env: Dict[str, str] = {}
+    missing: List[str] = []
+    for name in args.pass_env:
+        if not _ENV_NAME.match(name):
+            raise ValueError(f"--pass-env takes a variable name, got {name!r}")
+        if name in os.environ:
+            env[name] = os.environ[name]
+        else:
+            missing.append(name)
+    set_names: List[str] = []
+    for raw in args.env:
+        name, separator, value = raw.partition("=")
+        if not separator or not _ENV_NAME.match(name):
+            raise ValueError(f"--env must be NAME=VALUE, got {raw!r}")
+        env[name] = value
+        set_names.append(name)
+    record = {
+        "env_passed": sorted(set(args.pass_env) - set(missing)),
+        "env_passed_missing": sorted(missing),
+        "env_set": sorted(set(set_names)),
+    }
+    return env, record
+
+
+def _resolve_python(value: Optional[str]) -> str:
+    """The interpreter that runs pytest: the project's, when ``--python`` names it (AG-025).
+
+    Checked before anything runs, so a wrong path is a usage error and not a
+    run that dies inside ``Popen`` and reads as an unexplained crash.
+    """
+    if not value:
+        return sys.executable
+    found = shutil.which(value) or value
+    path = Path(found)
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError(f"--python {value!r} is not an executable interpreter")
+    # Absolute, but not resolved: a venv's ``bin/python`` is a symlink to the
+    # base interpreter, and following it would drop the venv -- and with it
+    # every dependency the project installed there.
+    return os.path.abspath(found)
+
+
+def _decisive(verdicts: Sequence[GateVerdict]) -> Optional[GateVerdict]:
+    """The verdict that explains the decision: the first REFUTED, else UNVERIFIED, else any."""
+    for wanted in (Outcome.REFUTED, Outcome.UNVERIFIED):
+        for verdict in verdicts:
+            if verdict.outcome is wanted:
+                return verdict
+    return verdicts[0] if verdicts else None
+
+
+def _run_record(verdict: GateVerdict) -> Dict[str, Any]:
+    run = verdict.outcome_run
+    return {
+        "baseline": run.baseline.value,
+        "patch": run.patch.value,
+        "baseline_exit_codes": list(run.baseline_exit_codes),
+        "patch_exit_codes": list(run.patch_exit_codes),
+    }
+
+
+def _verdict_record(verdict: GateVerdict) -> Dict[str, Any]:
+    record: Dict[str, Any] = {
+        "test_path": verdict.claim.test_path,
+        "test_id": verdict.claim.test_id,
+        "classification": verdict.classification.value,
+        "outcome": verdict.outcome.value,
+        "reason": verdict.reason,
+        "duration_seconds": round(verdict.duration_seconds, 6),
+    }
+    if verdict.outcome_run is not None:
+        record["evidence"] = _run_record(verdict)
+    return record
 
 
 def _resolve_coverage(args: argparse.Namespace):
@@ -213,8 +369,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--patch", required=True)
     parser.add_argument("--test-path")
-    parser.add_argument("--test-id")
-    parser.add_argument("--claim-json")
+    parser.add_argument(
+        "--test-id",
+        action="append",
+        default=[],
+        help="test inside --test-path; repeat it to verify several tests in one run",
+    )
+    parser.add_argument(
+        "--claim",
+        action="append",
+        default=[],
+        metavar="PATH::TEST_ID",
+        help="a test to verify, by pytest node id; repeatable",
+    )
+    parser.add_argument("--claim-json", help='{"claims": [...]}, one or more claims')
+    parser.add_argument(
+        "--discover-claims",
+        action="store_true",
+        help="verify the tests that executed the changed source lines, read from "
+        "the coverage report's per-test contexts (needs --diff and "
+        "--coverage-json written with --show-contexts). Test files the patch "
+        "rewrote are left out.",
+    )
+    parser.add_argument(
+        "--max-claims",
+        type=int,
+        default=10,
+        metavar="N",
+        help="cap on discovered claims; each claim costs several test runs (default 10)",
+    )
     parser.add_argument(
         "--bug-kind", default="deterministic", choices=[x.value for x in BugKind]
     )
@@ -295,6 +478,49 @@ def build_parser() -> argparse.ArgumentParser:
         "network really is gone, so ADVERSARY_NETWORK_ISOLATED=1 is no longer "
         "a wish.",
     )
+    parser.add_argument(
+        "--python",
+        metavar="PATH",
+        help="interpreter that runs pytest -- the project's, where its dependencies "
+        "are installed. Defaults to the interpreter running the gate.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=_limit,
+        default=30,
+        metavar="SECONDS|none",
+        help="wall-clock limit for each test run, mutants and full suite included (default 30)",
+    )
+    parser.add_argument(
+        "--cpu-seconds",
+        type=_limit,
+        default=10,
+        metavar="SECONDS|none",
+        help="CPU-time limit for each test run (default 10)",
+    )
+    parser.add_argument(
+        "--memory",
+        type=_size,
+        default=512 * 1024**2,
+        metavar="SIZE|none",
+        help="address-space limit for each test run, e.g. 512M or 4G (default 512M). "
+        "The JVM and Node cannot start under one: use 'none' for them.",
+    )
+    parser.add_argument(
+        "--pass-env",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="copy a variable from this environment into the test runs (e.g. PATH, "
+        "HOME); repeatable. The default environment is minimal on purpose.",
+    )
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="set a variable in the test runs; repeatable. Only names are recorded.",
+    )
     parser.add_argument("--rounds-used", type=int, default=4)
     parser.add_argument(
         "--require-network-isolation",
@@ -324,7 +550,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 raise ValueError("--criterion must have a non-empty ID and text")
             criteria.append(AcceptanceCriterion(identifier, text))
 
-        claim = _claim_from_args(args)
+        claims = _claims_from_args(args)
+        if args.max_claims < 1:
+            raise ValueError("--max-claims must be at least 1")
+        if args.discover_claims and args.test_command:
+            # A command suite has no node ids, so there is nothing a coverage
+            # context could be resolved to.
+            raise ValueError("--discover-claims needs pytest node ids; it cannot be used with --test-command")
+        if args.discover_claims and not (args.diff and args.coverage_json):
+            raise ValueError("--discover-claims needs --diff and --coverage-json (written with --show-contexts)")
 
         # Resolved before anything executes: an unresolvable coverage question
         # is a usage error (exit 3), not something to discover after paying
@@ -338,6 +572,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # missing or contradictory ``--diff`` into a usage error (exit 3), and
         # reading the file first let ``FileNotFoundError`` escape as exit 2.
         diff_paths = _diff_paths(args)
+
+        # How every test run executes -- the claims, the mutants and the full
+        # suite alike (AG-024, AG-025). One set of choices, recorded once, so
+        # the artefact says what the numbers were measured under.
+        python = _resolve_python(args.python)
+        run_env, env_record = _run_environment(args)
+        limits = {
+            "timeout_seconds": args.timeout,
+            "cpu_seconds": args.cpu_seconds,
+            "mem_bytes": args.memory,
+        }
+        execution: Dict[str, Any] = {
+            "python": python,
+            "timeout_seconds": args.timeout,
+            "cpu_seconds": args.cpu_seconds,
+            "memory_bytes": args.memory,
+            "sandbox": args.sandbox,
+            **env_record,
+        }
+
+        discovery: Optional[Dict[str, Any]] = None
+        if args.discover_claims:
+            found, discovery = discover_claims(
+                Path(args.diff).read_text(encoding="utf-8", errors="replace"),
+                json.loads(Path(args.coverage_json).read_text(encoding="utf-8")),
+                Path(args.baseline),
+                Path(args.patch),
+                max_claims=args.max_claims,
+            )
+            named = {(c.test_path, c.test_id) for c in claims}
+            added = [node for node in found if node not in named]
+            claims.extend(_claim(args, path, test_id) for path, test_id in added)
+            discovery["claims_added"] = [f"{path}::{test_id}" for path, test_id in added]
 
         if args.require_network_isolation and os.environ.get(
             "ADVERSARY_NETWORK_ISOLATED"
@@ -380,22 +647,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             config=config,
             evidence_log=log,
         )
-        verdict = gate.verify_claim(
-            claim,
-            Path(args.baseline),
-            Path(args.patch),
-            # ``--changed-path`` used to be the *only* input to the path
-            # policy, and the Action never passes it -- so the protection for
-            # conftest.py, pytest config and the like existed and was never
-            # asked about a real patch (AG-021). The diff is the authoritative
-            # statement of what changed; it is unioned, not substituted.
-            changed_paths=sorted({*args.changed_path, *(diff_paths or [])}),
-            require_network_isolation=args.require_network_isolation,
-            # How each side is executed: an arbitrary command when the
-            # repository is not pytest, and/or wrapped in bwrap when the patch
-            # is not trusted. Both used to be impossible without forking.
-            run_kwargs={"command": args.test_command, "sandbox": args.sandbox},
-        )
+        # The interpreter, the environment and the sandbox reach every run
+        # through the same mapping; ``command`` only the claims and the full
+        # suite, because mutants are judged by pytest on the claims' files.
+        run_options = {"sandbox": args.sandbox, "python": python, "env": run_env}
+        verdicts: List[GateVerdict] = [
+            gate.verify_claim(
+                claim,
+                Path(args.baseline),
+                Path(args.patch),
+                # ``--changed-path`` used to be the *only* input to the path
+                # policy, and the Action never passes it -- so the protection for
+                # conftest.py, pytest config and the like existed and was never
+                # asked about a real patch (AG-021). The diff is the authoritative
+                # statement of what changed; it is unioned, not substituted.
+                changed_paths=sorted({*args.changed_path, *(diff_paths or [])}),
+                require_network_isolation=args.require_network_isolation,
+                # How each side is executed: an arbitrary command when the
+                # repository is not pytest, and/or wrapped in bwrap when the patch
+                # is not trusted. Both used to be impossible without forking.
+                run_kwargs={"command": args.test_command, **run_options},
+                **limits,
+            )
+            for claim in claims
+        ]
+        all_verified = bool(verdicts) and all(v.outcome is Outcome.VERIFIED for v in verdicts)
 
         # ------------------------------------------------------------------
         # Patch-level measurements. Both used to be parameters that defaulted
@@ -414,7 +690,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # become false when somebody turns mutation off.
         changed_paths = diff_paths
 
-        if args.mutation_max <= 0:
+        # Each claim's test file judges the mutants; a mutant dies when any of
+        # them fails. One file keeps the single-claim invocation unchanged.
+        test_files = sorted({claim.test_path for claim in claims})
+
+        if args.mutation_max <= 0 or not claims:
             # ``--mutation-max 0`` is the documented escape hatch for the
             # strength *measurement*, the same way ``--coverage-floor 0`` is
             # for coverage -- so ``suite_strength`` stays ``None`` and no
@@ -425,15 +705,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             # a patch touching only ``calculator.cpp`` reach MERGE.
             mutation_detail = {
                 "measured": False,
-                "reason": "disabled (--mutation-max 0); what changed below is "
-                "still measured, the mutation score is not",
+                "reason": (
+                    "disabled (--mutation-max 0); what changed below is "
+                    "still measured, the mutation score is not"
+                    if args.mutation_max <= 0
+                    else "no claim to measure the mutants against"
+                ),
                 **classify_changes(Path(args.baseline), Path(args.patch), changed_paths),
                 "mutants": [],
                 "survivors": [],
                 "mutants_counted": 0,
                 "stillborn": 0,
             }
-            if verdict.outcome is Outcome.VERIFIED and (
+            if all_verified and (
                 mutation_detail["foreign_changed_files"]
                 or mutation_detail["deleted_files"]
             ):
@@ -446,10 +730,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             strength_obj, mutation_detail = measure_mutation_score(
                 Path(args.baseline),
                 Path(args.patch),
-                claim.test_path,
+                test_files[0],
                 test_id="",
                 max_mutants=args.mutation_max,
                 changed_paths=changed_paths,
+                targets=test_files if len(test_files) > 1 else None,
+                run_kwargs=run_options,
+                **limits,
             )
             if strength_obj.is_measured:
                 # A measured score covers exactly the Python files it mutated
@@ -457,7 +744,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # decided just below.
                 strength = strength_obj.mutation_score
 
-            if verdict.outcome is Outcome.VERIFIED:
+            if all_verified:
                 if (
                     mutation_detail.get("foreign_changed_files")
                     or mutation_detail.get("deleted_files")
@@ -474,11 +761,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     # authorised the decision and rode underneath it instead.
                     strength_unverified = True
                 elif not strength_obj.is_measured and mutation_detail.get("changed_files"):
-                    # There was code to judge, the claim itself executed and came
-                    # back VERIFIED, and we still could not produce a score. That
-                    # is *unknown*, not strong, so it must not reach MERGE. When
-                    # the claim did not verify, its own outcome already decides and
-                    # strength would only add noise to the reason.
+                    # There was code to judge, every claim executed and came
+                    # back VERIFIED, and we still could not produce a score.
+                    # That is *unknown*, not strong, so it must not reach
+                    # MERGE. When a claim did not verify, its own outcome
+                    # already decides and strength would only add noise.
                     strength_unverified = True
 
         full_codes: Optional[Sequence[int]] = None
@@ -496,15 +783,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "",
                     "",
                     command=full_command,
-                    sandbox=args.sandbox,
                     require_network_isolation=args.require_network_isolation,
+                    **run_options,
+                    **limits,
                 )
             return run_test(
                 directory,
                 args.full_suite_path,
                 "",
-                sandbox=args.sandbox,
                 require_network_isolation=args.require_network_isolation,
+                **run_options,
+                **limits,
             )
 
         if full_suite_ran:
@@ -521,7 +810,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         mutation_seconds = time.monotonic() - started
 
         decision = gate.decide(
-            [verdict],
+            verdicts,
             args.rounds_used,
             coverage_ratio,
             suite_strength=strength,
@@ -535,7 +824,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 args.rounds_used,
                 coverage_ratio,
                 {
-                    **_summary([verdict]),
+                    **_summary(verdicts),
                     # Where the coverage number came from, next to the number:
                     # a ratio with no provenance is exactly the artefact AG-002
                     # was about.
@@ -549,15 +838,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     "mutation": mutation_detail,
                     "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
+                    "execution": execution,
+                    "discovery": discovery,
                 },
             )
 
-        payload = {
-            "classification": verdict.classification.value,
-            "outcome": verdict.outcome.value,
+        # The top-level fields describe the verdict that explains the decision
+        # (the first REFUTED, else the first UNVERIFIED), so a reader of one
+        # claim's output sees the same keys as before; ``claims`` has them all.
+        decisive = _decisive(verdicts)
+        payload: Dict[str, Any] = {
+            "classification": decisive.classification.value if decisive else None,
+            "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
-            "reason": verdict.reason,
-            "duration_seconds": round(verdict.duration_seconds, 6),
+            "reason": decisive.reason if decisive else (
+                "no claim to verify: discovery found no test that executed a "
+                "changed source line, and none was named"
+            ),
+            "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
+            "claims_total": len(verdicts),
+            "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,
             "suite_strength_unverified": strength_unverified,
@@ -568,16 +868,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "diff_coverage": coverage_detail,
             "full_suite_ran": full_suite_ran,
             "measurement_seconds": round(mutation_seconds, 6),
+            "execution": execution,
         }
+        if discovery is not None:
+            payload["discovery"] = discovery
         if full_codes is not None:
             payload["full_suite_exit_codes"] = list(full_codes)
-        if verdict.outcome_run is not None:
-            payload["evidence"] = {
-                "baseline": verdict.outcome_run.baseline.value,
-                "patch": verdict.outcome_run.patch.value,
-                "baseline_exit_codes": list(verdict.outcome_run.baseline_exit_codes),
-                "patch_exit_codes": list(verdict.outcome_run.patch_exit_codes),
-            }
+        if decisive is not None and decisive.outcome_run is not None:
+            payload["evidence"] = _run_record(decisive)
         print(json.dumps(payload, indent=2, default=str))
 
         if args.report and log is not None:

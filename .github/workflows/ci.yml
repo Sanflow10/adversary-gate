@@ -309,6 +309,89 @@ jobs:
                 "| strength:", decision["suite_strength"])
           PY
 
+  action-discover:
+    # AG-025 and AG-031 on a real runner. The project sets up its own Python
+    # (3.11, not the gate's 3.12) and installs a dependency only there; the
+    # claims are not named at all. MERGE therefore needs three things at once:
+    # the tests ran on the project's interpreter (or the import fails), the
+    # coverage was recorded per test, and the gate found the tests that ran
+    # the changed line. Afterwards the job's own Python must still be 3.11 --
+    # the Action used to replace it for every later step.
+    name: Composite action discovers claims on the project's Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The project's own Python, with a dependency only it has
+        id: project-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the project's dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/agdep/agdep"
+          printf 'def double(x):\n    return 2 * x\n' > "$RUNNER_TEMP/agdep/agdep/__init__.py"
+          printf '[project]\nname = "agdep"\nversion = "0.1"\n[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n' > "$RUNNER_TEMP/agdep/pyproject.toml"
+          python -m pip install pytest coverage "$RUNNER_TEMP/agdep"
+
+      - name: Commit a fixture, then patch it
+        run: |
+          set -euo pipefail
+          git config user.email "adversary-gate@example.com"
+          git config user.name "adversary-gate"
+          mkdir -p gate_fixture
+          touch gate_fixture/__init__.py
+          printf 'import agdep\n\n\ndef add(a, b):\n    return a + b\n\n\ndef twice(a):\n    return agdep.double(a)\n' > gate_fixture/calc.py
+          printf 'from gate_fixture.calc import add, twice\n\n\ndef test_add():\n    assert add(2, 2) == 4\n\n\ndef test_twice():\n    assert twice(3) == 6\n' > gate_fixture/test_calc.py
+          printf 'from gate_fixture.calc import add\n\n\nclass TestMore:\n    def test_add_negative(self):\n        assert add(-1, -2) == -3\n' > gate_fixture/test_more.py
+          git add gate_fixture
+          git commit -qm "fixture: baseline side"
+          echo "AG_BASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          sed -i 's/return a + b/return (a + b)/' gate_fixture/calc.py
+          git commit -qam "fixture: patch side"
+
+      - name: Run AdversaryGate with no claim named
+        id: gate
+        continue-on-error: true
+        uses: ./
+        with:
+          base-sha: ${{ env.AG_BASE_SHA }}
+          full-suite-path: 'gate_fixture'
+          evidence-log: 'evidence-discover.jsonl'
+
+      - name: The changed line's tests were found and ran on the project's Python
+        env:
+          DECISION: ${{ steps.gate.outputs.decision }}
+          CLAIMS_TOTAL: ${{ steps.gate.outputs.claims-total }}
+          GATE_PYTHON: ${{ steps.gate.outputs.python }}
+          PROJECT_PYTHON: ${{ steps.project-python.outputs.python-path }}
+        run: |
+          echo "::notice::probe decision=$DECISION claims=$CLAIMS_TOTAL python=$GATE_PYTHON evidence=$(tail -c 400 evidence-discover.jsonl 2>&1 || echo '<absent>')"
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$DECISION" = "merge" ] || fail "decision is '$DECISION', expected 'merge'"
+          [ "$CLAIMS_TOTAL" = "2" ] || fail "claims-total is '$CLAIMS_TOTAL', expected 2 (test_add and TestMore::test_add_negative)"
+          [ "$(readlink -f "$GATE_PYTHON")" = "$(readlink -f "$PROJECT_PYTHON")" ] || fail "tests ran on $GATE_PYTHON, not the project's $PROJECT_PYTHON"
+          python -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version' \
+            || fail "the Action changed this job's python to $(python --version 2>&1)"
+          python3 - <<'PY'
+          import json
+
+          records = [json.loads(line) for line in open("evidence-discover.jsonl")]
+          decision = [r for r in records if r.get("kind") == "decision"][-1]
+          added = decision["discovery"]["claims_added"]
+          print("::notice::discovered", added)
+          assert added == [
+              "gate_fixture/test_calc.py::test_add",
+              "gate_fixture/test_more.py::TestMore::test_add_negative",
+          ], added
+          assert decision["execution"]["memory_bytes"] == 512 * 1024 ** 2
+          PY
+
   static-analysis:
     # Belt and braces for a gate that runs other people's code: the tool that
     # decides whether a patch is safe should not itself be shipping an obvious
