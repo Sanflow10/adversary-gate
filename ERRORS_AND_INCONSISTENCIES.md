@@ -161,7 +161,7 @@ Status, não omitido.**
 
 | ID | Severidade | Achado | Status |
 |---|---|---|---|
-| **AG-021** | Alta — fail-open | Agente introduz bug e reescreve o teste da claim → `exit 0` / `merge`, `suite_strength: 1.0`. A proteção `critic_test_paths` existia na biblioteca, mas a CLI e a Action não a ligavam. | **Corrigido (mínima)** — teste da claim reescrito pelo patch deixa de ser `VERIFIED`; caminhos do `--diff` alimentam a policy. **Aberto:** oráculo do baseline (rodar o teste *original* contra o código do patch) e testes que não são o da claim. |
+| **AG-021** | Alta — fail-open | Agente introduz bug e reescreve o teste da claim → `exit 0` / `merge`, `suite_strength: 1.0`. A proteção `critic_test_paths` existia na biblioteca, mas a CLI e a Action não a ligavam. | **Corrigido** — mínima na 2.2.0 (teste reescrito deixa de ser `VERIFIED`); **oráculo do baseline na 2.5.0** (o teste *original* roda contra o código do patch → o ataque vira `BLOCK`). Ver §12. |
 | **AG-022** | Média — fail-open parcial | Linhas de teste entram no denominador da cobertura do diff: 0/10 linhas de fonte cobertas + 40 de teste → `0.8`, passa no piso. | **Corrigido** — ratio só sobre fonte; exclusão gravada no artefato. |
 | **AG-023** | Média — rigor | Mutation score com n = 1..6, sítios pegos na ordem do arquivo, sem intervalo de confiança; poucos operadores. | **Parcial** — operadores `*` `/` `//` `%` `**`, `+=` `-=` `*=` `/=` e `True`/`False`, só em posição de operador binário (`*args`, `**kw`, `import *`, `*` e `/` de assinatura ficam de fora). **Aberto:** n pequeno, ordem do arquivo, sem intervalo de confiança. |
 | **AG-024** | Alta — adoção | Timeout 30 s, CPU 10 s e 512 MB fixos, sem flag; `--test-command` recebe `PATH=/usr/bin:/bin` sem `HOME`; JVM sai com exit 1 (lido como falha de teste). | **Corrigido (2.3.0)** — `--timeout`, `--cpu-seconds`, `--memory` (aceitam `none`), `--pass-env`, `--env`; `HOME` privado por execução; morte por limite de memória (exit 1 + `MemoryError`, `Could not reserve enough space`, `Fatal process out of memory`…) vira exit 3 → `INCONCLUSIVE`; tudo registrado em `execution`. **Aberto:** a detecção é por texto na saída — uma ferramenta que morra sem imprimir nenhum desses marcadores continua lida como falha de teste. |
@@ -189,3 +189,31 @@ registrado no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`,
 sem environment); *Publish to PyPI* com a tag `v2.4.0` subiu wheel e sdist por
 OIDC, com atestados de proveniência. `pip install adversary-gate==2.4.0`
 verificado num ambiente limpo. A `2.2.0` e a `2.3.0` não foram enviadas.
+
+## 12. Oráculo do baseline — o aberto do AG-021
+
+O AG-021 parou o patch de se autoaprovar, mas só até `INCONCLUSIVE`: o ataque
+(bug + teste reescrito) não era bloqueado, e todo patch honesto que mexia no
+arquivo de teste — refatoração, assert novo, teste novo num arquivo existente,
+o formato mais comum de um agente — também caía em `INCONCLUSIVE`.
+
+**Implementado (2.5.0).** Quando o arquivo de teste da claim existia no
+baseline e mudou no patch, o gate copia a árvore do patch, devolve a cópia do
+**baseline** do arquivo de teste e roda a claim ali (`"oracle": "baseline"`):
+o ataque do AG-021 passa a `REFUTED` → `BLOCK` (exit 1), e a refatoração
+honesta passa a `VERIFIED`. Teste novo num arquivo existente: julgado como
+teste adicionado, mas só depois de **todos** os testes que o baseline tinha
+naquele arquivo passarem no código do patch (`"oracle": "baseline-file"`); se
+o patch entortou um deles, `REFUTED`. A descoberta por coverage não exclui
+mais arquivos reescritos (`rewritten_test_files_judged_by_baseline`). Testes:
+`tests/test_baseline_oracle.py`, `tests/test_oracle_integrity.py`.
+
+Helpers contam como resposta: o transplante devolve **todo** arquivo de teste
+do baseline (`test_*`, `*_test.py`, qualquer coisa sob `tests/`), e o oráculo
+é acionado se o patch mudou qualquer um deles — mesmo com o arquivo da claim
+intacto. Um `tests/helpers.py` entortado para concordar com o bug dá `REFUTED`.
+
+**Continua aberto:** helpers fora de caminhos de teste (ex.: `testing_utils.py`
+na raiz) vêm do patch; a checagem colateral da suíte inteira ainda roda os
+testes do patch, não os do baseline; claims não-Python (`--test-command` com
+`test-id`) caem na regra antiga (`UNVERIFIED`).
