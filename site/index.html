@@ -190,7 +190,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
     <a class="brand" href="#main" aria-label="AdversaryGate, top of page">
       <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 29 16 16 29 3 16Z" fill="none" stroke="currentColor" stroke-width="3"/></svg>
       AdversaryGate
-      <span class="ver" data-version>v2.9.0</span>
+      <span class="ver" data-version>v2.10.0</span>
     </a>
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
@@ -334,7 +334,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt pytest coverage
 
-      - uses: Sanflow10/adversary-gate@v2.9.0
+      - uses: Sanflow10/adversary-gate@v2.10.0
         with:
           base-sha: ${{ github.event.pull_request.base.sha }}</code></pre>
           <p class="note"><code>fetch-depth: 0</code> is required: the base commit has to be in the checkout's history. To name the tests yourself, add <code>claims</code> with one <code>path::test</code> per line.</p>
@@ -344,7 +344,7 @@ jobs:
             <h3>Command line</h3>
             <button class="copy" type="button" data-copy="cli" aria-label="Copy the commands">Copy</button>
           </div>
-          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.9.0"
+          <pre><code id="cli">pip install "git+https://github.com/Sanflow10/adversary-gate@v2.10.0"
 
 adversary-gate \
   --baseline ./before --patch ./after \
@@ -370,7 +370,7 @@ adversary-gate \
             <h3>MCP server for coding agents</h3>
             <button class="copy" type="button" data-copy="mcp" aria-label="Copy the MCP setup">Copy</button>
           </div>
-          <pre><code id="mcp">pip install "adversary-gate[mcp]==2.9.0"
+          <pre><code id="mcp">pip install "adversary-gate[mcp]==2.10.0"
 # or run it without installing: uvx adversary-gate-mcp
 
 # Hermes Agent: ~/.hermes/config.yaml

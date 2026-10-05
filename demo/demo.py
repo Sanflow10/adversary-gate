@@ -236,7 +236,7 @@ def main() -> int:
 
     build_fixtures(root)
 
-    emit(f"{B}AdversaryGate v2.9.0 — demonstração ao vivo{R}", B)
+    emit(f"{B}AdversaryGate v2.10.0 — demonstração ao vivo{R}", B)
     emit(f"repositório: {REPO.name}", GREY)
     emit()
     emit(f"  Três cenários. B e C são {B}o mesmo patch{R}: mesmo código, mesmos")
@@ -279,7 +279,7 @@ def main() -> int:
 
     if opts.json:
         Path(opts.json).write_text(json.dumps(
-            {"title": "AdversaryGate v2.9.0 — demonstração ao vivo",
+            {"title": "AdversaryGate v2.10.0 — demonstração ao vivo",
              "lines": [{"t": t, "s": s} for t, s in lines],
              "ok": ok}, ensure_ascii=False, indent=1))
         print(f"\nframes -> {opts.json}", file=sys.stderr)
