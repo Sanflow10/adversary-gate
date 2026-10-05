@@ -254,7 +254,7 @@ Testes: `tests/test_rigor_and_labels.py`.
 
 ## 14. AG-033 a AG-035 — achados usando o gate como agente (dogfooding, 05/out)
 
-O servidor MCP 2.10.0 foi ligado ao Claude Code e chamado como um agente
+O servidor MCP 2.10.0 foi ligado a um agente de código e chamado como ele
 chamaria, em cenários com resposta declarada antes de rodar e em correções
 **reais** do `more-itertools` (oito commits de correção; cada um revertido só
 no código, com os testes mantidos, que é reintroduzir um bug real). Resultado

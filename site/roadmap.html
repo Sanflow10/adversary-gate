@@ -223,15 +223,28 @@ pre code { background: none; padding: 0; font-size: inherit; }
 
 <main id="main">
   <div class="wrap page-hero">
-    <p class="eyebrow">Releases 2.4 to 2.10 · October 2026</p>
+    <p class="eyebrow">Releases 2.4 to 2.11 · October 2026</p>
     <h1>What changed, and what comes next</h1>
-    <p class="lead">Seven releases in three days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
+    <p class="lead">Eight releases in three days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
   </div>
 
   <section aria-labelledby="changes-title">
     <div class="wrap">
       <h2 id="changes-title">What changed</h2>
       <ol class="releases" reversed>
+        <li>
+          <span class="v">2.11.0<small>Oct 5, 2026</small></span>
+          <div>
+            <h3>Run as an agent would run it, on real bugs</h3>
+            <ul>
+              <li>The MCP server was called on eight real more-itertools fixes, both ways. Reintroduced bugs blocked: 4 of 8 before, 7 of 8 now (the eighth no test in that project detects). No wrong MERGE in 16 runs.</li>
+              <li>A test the patch adds now runs against the old code: failing there and passing on the patch proves the fix. 6 of 8 real fixes proven, up from 0. A test that only imports something new proves nothing.</li>
+              <li>The whole-suite and whole-file checks get their own time and memory limits; under the per-test ones they died on any suite of real size.</li>
+              <li>Tests defined on a mixin resolve to the classes that run them; a git worktree's <code>.git</code> file is no longer foreign code; the reason always explains the decision.</li>
+              <li>Evidence collection reads only the changed lines from coverage data instead of writing a full report: 411 s to 278 s on one real call. Calls still take minutes on medium suites; that is the next thing.</li>
+            </ul>
+          </div>
+        </li>
         <li>
           <span class="v">2.10.0<small>Oct 5, 2026</small></span>
           <div>
