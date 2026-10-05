@@ -347,6 +347,34 @@ class TestOverTheMcpProtocol(unittest.TestCase):
         self.assertEqual(structured["decision"], "merge", structured.get("reason"))
 
 
+@unittest.skipUnless(HAS_MCP, "needs the MCP SDK")
+class TestToolMetadata(unittest.TestCase):
+    """What a client reads before calling: both tools registered, with honest hints.
+
+    gate_policy runs nothing and changes nothing; verify_repo runs the
+    repository's tests (and an operator's --triage may send the diff out), so
+    it may not claim to be read-only or closed-world.
+    """
+
+    def test_both_tools_carry_titles_hints_and_when_to_call(self):
+        tools = {t.name: t for t in asyncio.run(mcp_server.build_server().list_tools())}
+        self.assertEqual(set(tools), {"verify_repo", "gate_policy"})
+
+        def hints(tool):
+            return tool.annotations.model_dump(by_alias=True, exclude_none=True)
+
+        self.assertEqual(
+            {k: hints(tools["gate_policy"])[k] for k in ("readOnlyHint", "destructiveHint", "openWorldHint")},
+            {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+        )
+        self.assertEqual(
+            {k: hints(tools["verify_repo"])[k] for k in ("readOnlyHint", "openWorldHint")},
+            {"readOnlyHint": False, "openWorldHint": True},
+        )
+        for tool in tools.values():
+            self.assertIn("When to call", tool.description)
+
+
 class TestHermesFiles(unittest.TestCase):
     def test_the_skill_and_config_ship_and_print(self):
         for flag, needle in (("--print-hermes-skill", "name: adversary-gate"),

@@ -24,8 +24,9 @@ Issues = "https://github.com/Sanflow10/adversary-gate/issues"
 
 [project.optional-dependencies]
 # The MCP server for coding agents (Hermes, Claude Code, ...). coverage is what
-# lets it derive the evidence from a git working tree on its own.
-mcp = ["mcp>=1.9", "coverage>=7"]
+# lets it derive the evidence from a git working tree on its own. 1.14 is the
+# oldest SDK measured to register both tools (1.9.4, 1.12 and 1.13 fail in tool()).
+mcp = ["mcp>=1.14", "coverage>=7"]
 
 [project.scripts]
 adversary-gate = "adversary_gate.cli:main"

@@ -29,6 +29,7 @@ and stdout here is the MCP channel.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import shlex
@@ -107,12 +108,37 @@ def verify_repo(
     pytest_args: Optional[List[str]] = None,
     timeout_seconds: int = 900,
 ) -> Dict[str, Any]:
-    """Judge the working tree of ``repo`` against a baseline, by execution.
+    """Judge the working tree of a git repository against a baseline, by running its tests.
 
-    claims: pytest node ids (``path::test``) to verify; empty -> discovered from
-    the tests that executed a changed line. pytest_args: test paths or node ids
-    the coverage run collects (default: the whole suite); options are refused.
-    base_ref: used only when the operator did not pin ADVERSARY_GATE_BASE_REF.
+    When to call: after changing code in ``repo`` and before reporting the task
+    as done. Call ``gate_policy`` first if you need to know the floors or
+    whether the baseline is pinned. Python/pytest only; changes in other
+    languages come back inconclusive.
+
+    What it does: takes the baseline from ``git archive``, diffs it against the
+    working tree (uncommitted and untracked files included), runs the suite
+    under coverage.py, then runs the gate: the claims on the baseline and on the
+    patch, the baseline's copy of any test the patch rewrote, and mutation
+    testing on the changed lines. Nothing is committed or reverted.
+
+    Side effects: the repository's tests execute -- its code runs, so they may
+    do whatever they do when you run pytest yourself. The coverage run uses the
+    repository as working directory; the gate's own files go to a temporary
+    directory that is removed afterwards. It can take minutes. A run longer
+    than ``timeout_seconds`` returns inconclusive, never a pass.
+
+    Arguments: ``repo`` is a path inside the git repository. ``claims`` are
+    pytest node ids (``path::test``) to verify; empty -> discovered from the
+    tests that executed a changed line. ``pytest_args`` are test paths or node
+    ids the coverage run collects (default: the whole suite); options such as
+    ``-k`` are refused. ``base_ref`` is used only when the operator did not pin
+    ADVERSARY_GATE_BASE_REF.
+
+    Returns ``decision`` (merge / block / inconclusive), ``mergeable``,
+    ``fix_proven``, ``reason``, per-claim results with the oracle used,
+    ``diff_coverage``, ``suite_strength`` and the full artefact. merge permits
+    a human review, not a release; block means fix the code, not the tests;
+    inconclusive means something was not measured -- say what.
     """
     try:
         policy = policy_args()
@@ -146,7 +172,21 @@ def verify_repo(
 
 
 def gate_policy() -> Dict[str, Any]:
-    """What this server enforces. Read-only: the agent cannot change it."""
+    """Show the verification policy this server enforces: floors, baseline, interpreter, and what the caller may set.
+
+    When to call: before ``verify_repo``, to learn whether the baseline is
+    pinned by the operator or chosen by you, which interpreter runs the tests,
+    and which floors a merge has to clear -- or after an inconclusive or block
+    answer, to explain it.
+
+    Read-only and fast: it runs no tests and changes nothing. The policy comes
+    from the server's environment (ADVERSARY_GATE_POLICY, _BASE_REF, _PYTHON),
+    set by whoever configured the server; no tool can change it.
+
+    Returns ``version``, ``operator_flags``, ``defaults``, ``baseline``,
+    ``python`` and ``agent_controls`` (the arguments of ``verify_repo`` you
+    decide). An invalid operator policy returns ``error`` instead.
+    """
     try:
         policy = policy_args()
     except ValueError as exc:
@@ -177,9 +217,33 @@ def build_server():
         server = Server("adversary-gate", instructions=instructions, version=__version__)
     except TypeError:  # pragma: no cover - mcp 1.x FastMCP has no version argument
         server = Server("adversary-gate", instructions=instructions)
-    server.tool()(verify_repo)
-    server.tool()(gate_policy)
+    _register(server, verify_repo, title="Verify a repository change",
+              read_only=False, idempotent=False, open_world=True)
+    _register(server, gate_policy, title="Show the gate policy",
+              read_only=True, idempotent=True, open_world=False)
     return server
+
+
+def _register(server, fn, *, title: str, read_only: bool, idempotent: bool,
+              open_world: bool) -> None:
+    """Behaviour hints for MCP clients. verify_repo is open-world: the
+    repository's tests run, and an operator policy may add ``--triage``, which
+    sends the diff to a service. Neither tool deletes anything of its own."""
+    try:
+        from mcp.types import ToolAnnotations
+        # camelCase validates on mcp 1.x and 2.x alike.
+        annotations = ToolAnnotations.model_validate({
+            "title": title, "readOnlyHint": read_only, "destructiveHint": False,
+            "idempotentHint": idempotent, "openWorldHint": open_world,
+        })
+    except Exception:  # pragma: no cover - SDKs without ToolAnnotations
+        annotations = None
+    # Pass only what this SDK's tool() accepts. Never retry on an error: a
+    # registration that fails must fail loudly, not leave the tool out.
+    accepted = inspect.signature(server.tool).parameters
+    kwargs = {k: v for k, v in (("title", title), ("annotations", annotations))
+              if k in accepted and v is not None}
+    server.tool(**kwargs)(fn)
 
 
 def _packaged(name: str) -> str:

@@ -38,6 +38,29 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Adicionado
+
+- **Título e dicas de comportamento nas ferramentas MCP** (`annotations`):
+  `gate_policy` é somente leitura, idempotente e não sai da máquina;
+  `verify_repo` não é somente leitura e é *open-world* — os testes do
+  repositório rodam, e um `--triage` do operador manda o diff para fora.
+- **Descrições das ferramentas reescritas** para quem chama: quando chamar,
+  o que acontece, efeitos colaterais (os testes do repositório executam; a
+  rodada de cobertura usa o repositório como diretório de trabalho), timeout
+  vira inconclusive, e o que volta. `tests/test_integrations.py`
+  (`TestToolMetadata`) trava as dicas.
+
+### Corrigido
+
+- **Piso do extra `[mcp]`: `mcp>=1.9` → `mcp>=1.14`.** Medido em 1.9.4, 1.12 e 1.13:
+  o `tool()` do SDK falha ao registrar `verify_repo`
+  (`issubclass() arg 1 must be a class`) e o servidor não sobe; 1.14, 1.30 e
+  2.3 registram as duas ferramentas. Quem tinha um SDK antigo fixado recebia um
+  servidor quebrado.
+- O registro das ferramentas passa ao SDK só os argumentos que o `tool()`
+  dele aceita, e nunca tenta de novo após um erro: um registro que falha
+  estoura, em vez de deixar a ferramenta de fora em silêncio.
+
 ---
 
 ## [2.9.0] — 2026-10-05
