@@ -462,14 +462,21 @@ adversary-gate ... --python .venv/bin/python \
 | Flag | Default | |
 | --- | --- | --- |
 | `--python` | the gate's own | the interpreter pytest runs on — the one your dependencies are in |
-| `--timeout` | `30` | wall-clock seconds per run; `none` removes it |
-| `--cpu-seconds` | `10` | CPU seconds per run; `none` removes it |
+| `--timeout` | `30` | wall-clock seconds per claim or mutant run; `none` removes it |
+| `--cpu-seconds` | `10` | CPU seconds per claim or mutant run; `none` removes it |
+| `--full-suite-timeout` | `900` | wall-clock seconds for the collateral full-suite run |
+| `--full-suite-cpu-seconds` | none | CPU seconds for the collateral full-suite run |
+| `--full-suite-memory` | `4G` | address space for the collateral full-suite run |
 | `--memory` | `512M` | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
 | `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
 | `--env NAME=VALUE` | — | set one |
 
 The same choices apply to every run — claims, mutants and the collateral suite —
-and the output records them under `execution`, with the **names** of the
+except time and memory: the whole suite gets its own limits, because ones sized
+for a single test killed every suite of real size on both sides (out of time, or
+pytest dying with `MemoryError` under 512M of address space): never a MERGE (two failing
+sides are unverifiable), but the regression the suite would have caught came
+back INCONCLUSIVE instead of BLOCK (AG-033). The output records them under `execution`, with the **names** of the
 variables and never their values. A run the memory limit killed (`MemoryError`,
 `Fatal process out of memory`, `Could not reserve enough space`…) is reported as
 the harness dying, not as a failing test: it says nothing about the patch.

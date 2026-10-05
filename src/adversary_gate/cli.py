@@ -228,6 +228,47 @@ def _decisive(verdicts: Sequence[GateVerdict]) -> Optional[GateVerdict]:
     return verdicts[0] if verdicts else None
 
 
+def _reason(decision, verdicts, decisive, full_codes, args) -> str:
+    """One sentence that agrees with the decision (AG-034).
+
+    The claim-level reason explains a decision only when a claim made it. A
+    BLOCK from the collateral run, or an INCONCLUSIVE because that run was
+    killed, used to carry the reason of a claim that passed -- or "no claim to
+    verify" -- next to a verdict it did not explain.
+    """
+    claim_refuted = any(v.outcome is Outcome.REFUTED for v in verdicts)
+    if full_codes is not None and not claim_refuted:
+        base_code, patch_code = full_codes
+        if decision is Decision.BLOCK and base_code == 0 and patch_code != 0:
+            return (
+                f"the full suite passes on the baseline and fails on the patch "
+                f"(exit {patch_code}): a test outside the claims regressed"
+                + ("" if verdicts else
+                   "; no claim covered the change (a deletion leaves no line to trace)")
+            )
+        if base_code < 0 and patch_code < 0:
+            return (
+                f"the full suite was killed on both sides (signals {-base_code}, "
+                f"{-patch_code}), most likely by --full-suite-timeout "
+                f"({args.full_suite_timeout}) or --full-suite-cpu-seconds "
+                f"({args.full_suite_cpu_seconds}); the collateral check did not "
+                "run. Raise the limit."
+            )
+        if base_code == patch_code and base_code in (2, 3, 4):
+            return (
+                f"the full suite could not run on either side (exit {base_code}: "
+                "the test runner itself failed -- a MemoryError under "
+                f"--full-suite-memory ({args.full_suite_memory} bytes) is the "
+                "measured cause on large suites); the collateral check did not run"
+            )
+    if decisive is not None:
+        return decisive.reason
+    return (
+        "no claim to verify: discovery found no test that executed a "
+        "changed source line, and none was named"
+    )
+
+
 def _run_record(verdict: GateVerdict) -> Dict[str, Any]:
     run = verdict.outcome_run
     return {
@@ -539,6 +580,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="where the collateral full-suite run happens ('' disables it)",
     )
     parser.add_argument(
+        "--full-suite-timeout",
+        type=_limit,
+        default=900,
+        metavar="SECONDS|none",
+        help="wall-clock limit for the collateral full-suite run (default 900). "
+        "--timeout and --cpu-seconds are sized for one test; a whole suite "
+        "under them was killed on both sides and the check was lost (AG-033).",
+    )
+    parser.add_argument(
+        "--full-suite-cpu-seconds",
+        type=_limit,
+        default=None,
+        metavar="SECONDS|none",
+        help="CPU-time limit for the collateral full-suite run (default: none; "
+        "the wall-clock limit bounds it)",
+    )
+    parser.add_argument(
+        "--full-suite-memory",
+        type=_size,
+        default=4 * 1024**3,
+        metavar="SIZE|none",
+        help="address-space limit for the collateral full-suite run (default 4G). "
+        "Measured: more-itertools' suite dies with MemoryError under 2G of "
+        "address space and completes under 4G (AG-033).",
+    )
+    parser.add_argument(
         "--test-command",
         metavar="CMD",
         help="shell command to run instead of pytest, in each of --baseline and "
@@ -692,6 +759,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "timeout_seconds": args.timeout,
             "cpu_seconds": args.cpu_seconds,
             "memory_bytes": args.memory,
+            "full_suite_timeout_seconds": args.full_suite_timeout,
+            "full_suite_cpu_seconds": args.full_suite_cpu_seconds,
+            "full_suite_memory_bytes": args.full_suite_memory,
             "sandbox": args.sandbox,
             **env_record,
             "test_support": list(args.test_support),
@@ -888,6 +958,16 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
         oracle_full_code: Optional[int] = None
 
+        # The suite runs under its own limits (AG-033): the per-test ones killed
+        # it on both sides (time) or made pytest die with MemoryError (address
+        # space) on any suite of real size.
+        full_limits = {
+            **limits,
+            "timeout_seconds": args.full_suite_timeout,
+            "cpu_seconds": args.full_suite_cpu_seconds,
+            "mem_bytes": args.full_suite_memory,
+        }
+
         def _full_run(directory: Path) -> SandboxResult:
             if full_command:
                 return run_test(
@@ -897,7 +977,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     command=full_command,
                     require_network_isolation=args.require_network_isolation,
                     **run_options,
-                    **limits,
+                    **full_limits,
                 )
             return run_test(
                 directory,
@@ -905,7 +985,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 "",
                 require_network_isolation=args.require_network_isolation,
                 **run_options,
-                **limits,
+                **full_limits,
             )
 
         if full_suite_ran:
@@ -978,10 +1058,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "classification": decisive.classification.value if decisive else None,
             "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
-            "reason": decisive.reason if decisive else (
-                "no claim to verify: discovery found no test that executed a "
-                "changed source line, and none was named"
-            ),
+            "reason": _reason(decision, verdicts, decisive, full_codes, args),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": len(verdicts),
             "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),

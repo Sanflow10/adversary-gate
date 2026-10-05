@@ -273,6 +273,11 @@ NON_SOURCE_DIRS = frozenset({
 })
 
 
+#: Files a VCS writes in place of its directory: ``git worktree add`` and
+#: submodules leave ``.git`` as a one-line ``gitdir:`` pointer.
+VCS_POINTER_FILES = frozenset({".git"})
+
+
 def _is_non_source(rel: str) -> bool:
     """True for things that are plainly not code under test."""
     path = Path(rel)
@@ -299,6 +304,11 @@ def _is_scan_noise(rel: str) -> bool:
     the reason this exclusion cannot reopen AG-013.
     """
     path = Path(rel)
+    # A ``.git`` *file* is the pointer a git worktree or submodule keeps where
+    # the directory would be (AG-035). It is the same bookkeeping; only the
+    # check on parent directories used to see it.
+    if path.name in VCS_POINTER_FILES:
+        return True
     return any(
         # ``<name>.egg-info`` is never a fixed name, so it needs a suffix test
         # rather than an entry in the set -- setuptools names it after the

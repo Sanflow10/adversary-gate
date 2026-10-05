@@ -1206,6 +1206,77 @@ class TestFullSuiteUsesBothSides(unittest.TestCase):
         )
 
 
+class TestFullSuiteHasItsOwnLimits(unittest.TestCase):
+    """AG-033: the collateral run lived under the per-test limits.
+
+    ``--timeout 30`` / ``--cpu-seconds 10`` are sized for one test. The whole
+    suite ran under them too, so any suite longer than that was killed on both
+    sides (exit -9, -9): never a false MERGE -- both sides failing is
+    "unverifiable" -- but the check that catches a patch deleting the guard a
+    test relied on was gone for every repository of real size. Measured on
+    more-itertools (a 50 s suite): three reverted guard-removal fixes came back
+    INCONCLUSIVE instead of BLOCK. Here a 1 s per-test limit and a suite with a
+    1.5 s test stand in for the same thing at small scale.
+    """
+
+    def _tree(self, root: Path) -> None:
+        calc_base = "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    if a is None:\n        raise ValueError('a')\n    return a - b\n"
+        tests = (
+            "import time\n\nimport pytest\n\nfrom calc import add, sub\n\n\n"
+            "def test_add():\n    assert add(2, 2) == 4\n\n\n"
+            "def test_sub_rejects_none():\n    with pytest.raises(ValueError):\n        sub(None, 1)\n\n\n"
+            "def test_slow():\n    time.sleep(1.5)\n"
+        )
+        for side in ("baseline", "patch"):
+            (root / side).mkdir(parents=True)
+            (root / side / "test_calc.py").write_text(tests)
+        (root / "baseline" / "calc.py").write_text(calc_base)
+        # The guard is deleted: nothing the claim runs notices, the suite does.
+        (root / "patch" / "calc.py").write_text(calc_base.replace("    if a is None:\n        raise ValueError('a')\n", ""))
+
+    def _run(self, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            out = Path(directory) / "out.json"
+            with patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "test_calc.py::test_add", "--max-rounds", "1", "--rounds-used", "1",
+                    "--timeout", "1", *TestCliExitCodes.UNTRUSTED_COVERAGE, *extra,
+                ])
+            return code, json.loads(out.read_text())
+
+    def test_the_suite_outlives_the_per_test_limit_and_blocks(self):
+        code, out = self._run()
+        self.assertEqual(code, EXIT_BLOCK, out.get("reason"))
+        self.assertEqual(out["full_suite_exit_codes"], [0, 1])
+        self.assertEqual(out["execution"]["full_suite_timeout_seconds"], 900)
+
+    def test_the_reason_names_the_collateral_regression(self):
+        """AG-034: the claim passed, so its own reason ("nothing regressed") contradicted the BLOCK."""
+        _, out = self._run()
+        self.assertIn("full suite", out["reason"])
+        self.assertIn("fails on the patch", out["reason"])
+
+    def test_the_suite_has_its_own_memory_limit(self):
+        """512M of address space killed more-itertools' pytest with MemoryError (exit 3, both sides)."""
+        _, out = self._run()
+        self.assertEqual(out["execution"]["full_suite_memory_bytes"], 4 * 1024**3)
+        self.assertEqual(out["execution"]["memory_bytes"], 512 * 1024**2)
+
+    def test_a_runner_that_died_on_both_sides_is_named(self):
+        code, out = self._run("--full-suite-command", "exit 3")
+        self.assertEqual(code, EXIT_INCONCLUSIVE)
+        self.assertIn("could not run on either side", out["reason"])
+        self.assertIn("--full-suite-memory", out["reason"])
+
+    def test_a_suite_killed_by_its_own_limit_is_named_not_merged(self):
+        code, out = self._run("--full-suite-timeout", "1")
+        self.assertEqual(code, EXIT_INCONCLUSIVE)
+        self.assertIn("--full-suite-timeout", out["reason"])
+
+
 class TestDeletionsAreChanges(unittest.TestCase):
     """AG-001: a deleted source file must count as a change.
 
@@ -1606,6 +1677,27 @@ class TestAg012ResidualPaths(unittest.TestCase):
                 changed_foreign_source_files(root / "baseline", root / "patch"),
                 [],
                 "VCS metadata and tool caches are not patch content",
+            )
+
+    def test_a_worktree_or_submodule_git_file_is_not_foreign(self):
+        """AG-035: in a git worktree or submodule ``.git`` is a *file*.
+
+        The exclusion only looked at a path's parent directories, so
+        ``.git/HEAD`` was skipped but a top-level ``.git`` file -- the
+        ``gitdir: ...`` pointer every ``git worktree add`` writes -- was
+        "source we cannot judge", and every verify_repo call on a worktree
+        (measured: more-itertools, all seven runs) carried it as foreign.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, extra="README.md")
+            (root / "patch" / ".git").write_text("gitdir: /elsewhere/.git/worktrees/wt\n")
+            (root / "patch" / "vendor").mkdir()
+            (root / "patch" / "vendor" / ".git").write_text("gitdir: ../.git/modules/vendor\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                [],
+                "a .git pointer file is VCS bookkeeping, like the .git directory",
             )
 
     def test_the_actions_own_build_output_is_not_foreign(self):

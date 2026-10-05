@@ -38,6 +38,19 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Corrigido
+
+- **AG-033** — a suíte colateral rodava sob os limites de um teste
+  (`--timeout 30`, `--cpu-seconds 10`) e morria dos dois lados em qualquer
+  suíte de tamanho real; patches que só removem código voltavam `INCONCLUSIVE`
+  em vez de `BLOCK`; e sob 512M de memória o pytest de uma suíte real morre
+  com `MemoryError`. Novos `--full-suite-timeout` (900),
+  `--full-suite-cpu-seconds` (nenhum) e `--full-suite-memory` (4G).
+- **AG-034** — o `reason` explica a decisão quando ela veio da suíte colateral
+  (regressão fora das claims, ou suíte morta pelo limite).
+- **AG-035** — o arquivo `.git` de uma worktree ou submódulo não conta mais como
+  código estrangeiro alterado.
+
 ---
 
 ## [2.10.0] — 2026-10-05

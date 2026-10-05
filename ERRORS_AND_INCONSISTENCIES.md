@@ -251,3 +251,35 @@ do projeto. `classify` dava `discarded` para `FAIL→PASS` e
   `claims_fixed`, `fix_proven`; `GateMetrics.fixed` / `no_regression`.
 
 Testes: `tests/test_rigor_and_labels.py`.
+
+## 14. AG-033 a AG-035 — achados usando o gate como agente (dogfooding, 05/out)
+
+O servidor MCP 2.10.0 foi ligado ao Claude Code e chamado como um agente
+chamaria, em cenários com resposta declarada antes de rodar e em correções
+**reais** do `more-itertools` (oito commits de correção; cada um revertido só
+no código, com os testes mantidos, que é reintroduzir um bug real). Resultado
+das sete reversões medidas: 3 `BLOCK`, 4 `INCONCLUSIVE`, **nenhum `MERGE`**. Os
+quatro `INCONCLUSIVE` levaram aos achados abaixo.
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-033** | Alta — perda de detecção | Reverter `958990e` (só **apaga** `if n < 0: raise ValueError`) → `INCONCLUSIVE`, "no claim to verify", `full_suite_exit_codes: [-9, -9]`. A suíte do projeto leva 50 s; a rodada colateral corria sob `--timeout 30` / `--cpu-seconds 10`, que são limites de **um teste**, e morria dos dois lados. Nunca virou `MERGE` (dois lados falhando são "não atribuível"), mas a única checagem que pega um patch que só remove código — sem linha nova, a descoberta não acha teste — estava desligada para qualquer suíte de tamanho real. No mesmo cenário em escala pequena (suíte que cabe no limite) o gate dá `BLOCK`. Corrigido só o tempo, a mesma reversão ainda voltou `INCONCLUSIVE`, agora com `[3, 3]`: sob 512M de espaço de endereçamento o pytest morre com `MemoryError` (medido: 1G e 2G também quebram no meio da suíte, 4G completa os 767 testes). | **Corrigido** — `--full-suite-timeout` (padrão 900), `--full-suite-cpu-seconds` (padrão nenhum) e `--full-suite-memory` (padrão 4G), separados dos limites por teste. Registrados em `execution`. Teste: `TestFullSuiteHasItsOwnLimits` (suíte com um teste de 1,5 s sob `--timeout 1`: antes `INCONCLUSIVE`, agora `BLOCK`). |
+| **AG-034** | Média — explicação | O `reason` vinha sempre da claim decisiva ou era "no claim to verify". Um `BLOCK` dado pela suíte colateral saía com "no claim to verify" (cenário A8) ou com o motivo de uma claim que **passou** ("nothing it checks regressed"); uma suíte morta pelo limite não era mencionada. | **Corrigido** — `_reason()` em `cli.py`: `BLOCK` colateral diz que a suíte passa no baseline e falha no patch (e, sem claims, que uma deleção não deixa linha para rastrear); suíte morta dos dois lados (sinal) ou com o runner caído (exit 2/3/4) diz qual limite subir. Mesmos testes. |
+| **AG-035** | Média — falso `INCONCLUSIVE` | Toda chamada sobre uma *git worktree* trazia `foreign_changed_files: [".git"]`: numa worktree (e num submódulo) `.git` é um **arquivo** `gitdir: ...`, e a exclusão de VCS só olhava os diretórios pais de cada caminho. | **Corrigido** — `VCS_POINTER_FILES` em `verifiers/strength.py`. A exceção continua valendo só para a varredura: um diff que nomeia algo sob `.git/` segue cobrado (`test_the_scan_exemption_does_not_extend_to_the_diff`). Teste: `test_a_worktree_or_submodule_git_file_is_not_foreign`. |
+
+**Depois das três correções**, as mesmas oito reversões reais: **7 `BLOCK`, 1
+`INCONCLUSIVE`, nenhum `MERGE`** (antes: 4 e 4). O `INCONCLUSIVE` que ficou é o
+certo: revertido o código de `d71c4ad`, a suíte inteira do projeto (704 testes)
+**passa** — os testes do próprio commit não detectam o bug que ele corrige, e
+nenhum gate por testes poderia bloquear.
+
+**Medido também, ainda aberto (próximas mudanças):**
+
+* **Custo.** 230–615 s por chamada no `more-itertools`, contra 50 s da suíte
+  sozinha. Cada claim roda 3× no baseline e 3× no patch, **um processo pytest
+  por execução**, e cada processo recoleta o arquivo de testes. Num repositório
+  de 4 arquivos, uma chamada abriu 12 interpretadores.
+* **Correção com teste novo nunca é `fix_proven`.** O teste que o patch
+  adiciona é `discarded` (documentado, README §AG-030): não é executado contra o
+  código do baseline, então o fluxo comum — corrigir e acrescentar o teste de
+  regressão — não chega a `fixed`.
