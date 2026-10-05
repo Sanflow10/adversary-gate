@@ -34,7 +34,10 @@ Mutant lifecycle, because not every outcome says something about the suite:
 
 Scope note: mutants are generated only from non-test ``.py`` files that
 *differ between baseline and patch*, and they are executed against the
-claim's ``test_path``. So ``suite_strength`` answers a precise question --
+claims' node ids -- not their whole files (AG-039). A claim judged by the
+baseline oracle whose node the patch renamed or deleted is not collected in
+the mutant tree (a copy of the patch): its runs exit 4 and count as
+stillborn, which can only leave the score unmeasured, never inflate it. So ``suite_strength`` answers a precise question --
 "could this claim's test detect deliberate damage in the code this patch
 changed?" -- and not the broader "is the repository well tested?". The
 broader question needs the whole suite and is answered by ``full_suite``,
@@ -755,7 +758,19 @@ def measure_mutation_score(
                 "never judged"
             )
         return finish(result, note)
+    codes = [m.get("exit_code") for m in detail["mutants"] if m.get("result") == "stillborn"]  # type: ignore[union-attr]
+    if codes and all(isinstance(c, int) and c < 0 for c in codes):
+        # Killed by a limit, not a statement about the mutants (AG-039: the
+        # old message blamed the test target for what --cpu-seconds did).
+        return finish(
+            result,
+            f"every mutant run was killed by a limit (exit codes {sorted(set(codes))}): "
+            "--timeout, --cpu-seconds or --memory stopped the tests before they "
+            "could pass or fail, so nothing was measured",
+        )
     return finish(
         result,
-        "every mutant was stillborn; the test target never executed the mutated code",
+        "every mutant was stillborn (exit codes "
+        f"{sorted(set(c for c in codes if c is not None))}): the tests could not be "
+        "collected or run against the mutated code",
     )

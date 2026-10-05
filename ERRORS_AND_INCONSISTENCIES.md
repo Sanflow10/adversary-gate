@@ -336,3 +336,24 @@ de `def2dab` diz *"every mutant was stillborn; the test target never executed
 the mutated code"*. No `more-itertools` nenhum mutante é executado pelos testes,
 então a força nunca é medida e `MERGE` é inalcançável nesse projeto. Antes a
 cobertura de diff abaixo do piso escondia isso.
+
+### AG-039 — os mutantes rodavam os arquivos de teste inteiros
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-039** | Alta — força inflável / nunca medida | Cada mutante rodava os **arquivos** das claims (`test_id=""`) sob os limites de um teste. (a) No `more-itertools` (arquivo de 25 s) todo mutante morria em `-9` → "stillborn" → força nunca medida → `MERGE` inalcançável no projeto inteiro. (b) Com um teste fora das claims falhando de qualquer jeito no mesmo arquivo, **todo mutante contava como morto**: claim que só testa `add`, 5/5 mortos, força 1,0. Com a suíte colateral ligada isso não passava (falha dos dois lados → não atribuível), mas com `--full-suite-path ''` a força inflada valia. | **Corrigido** — os mutantes rodam os **node ids** das claims: menos testes por mutante só podem baixar a força, nunca inflar. Mantidos os limites por teste nos mutantes (um mutante com laço infinito custaria 900 s cada sob os da suíte). O `reason` de "stillborn" separa morto por limite de não coletável. Testes: `TestMutantsRunTheClaimsNotTheirFiles`. Varridos os outros pontos que rodam mais de um teste: suíte colateral (AG-033) e arquivo inteiro (AG-036) já com limites próprios; claim sem `test_id`, declarada pelo usuário, segue sob os limites por teste por escolha dele. |
+
+**As 16 execuções reais com a força medida pela primeira vez:** reversões —
+7 `BLOCK` e `d71c4ad` `INCONCLUSIVE` (força 1/2); correções — **7 de 8 com
+`fix_proven: true`**, nenhuma `MERGE`: 4 por cobertura de diff (0,39–0,71), 2
+por força com poucos mutantes (3/3 → limite inferior 0,65; 2/2 → 0,55), 1 sem
+operador mutável nas linhas alteradas, e `d71c4ad` `BLOCK` (AG-038). **Nenhum
+`MERGE` em 32 execuções reais nesta rodada de testes.**
+
+**Leitura honesta:** o gate não deixou passar nenhum bug reintroduzido, mas
+também **não deu `MERGE` para nenhuma correção legítima e pequena**: uma
+correção de 3–5 linhas raramente gera os 5 mutantes que o piso de Wilson a 80 %
+exige (AG-023), e mensagens de erro novas raramente são executadas por teste.
+O comportamento é o documentado; o efeito prático é que, em projetos reais,
+correções pequenas sempre voltam para revisão humana. Os pisos são decisão do
+mantenedor e não foram alterados.

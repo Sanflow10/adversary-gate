@@ -45,6 +45,13 @@ quando esta seção vira uma com versão e data.
   patch e do arquivo, não de qual teste perguntou. `def2dab` real (três testes
   novos num arquivo): 782 → 477 s, mesma decisão.
 
+### Corrigido
+
+- **AG-039** — mutantes rodam os node ids das claims, não seus arquivos de
+  teste inteiros: a força não pode mais ser inflada por um teste fora das
+  claims que falha de qualquer jeito, e arquivos grandes não deixam todo
+  mutante "natimorto". O `reason` separa mutante morto por limite.
+
 ---
 
 ## [2.11.0] — 2026-10-05

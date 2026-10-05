@@ -948,7 +948,16 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 max_mutants=args.mutation_max,
                 confidence=args.strength_confidence,
                 changed_paths=changed_paths,
-                targets=test_files if len(test_files) > 1 else None,
+                # The claims' node ids, never their whole files (AG-039): a
+                # whole file ran every test in it on every mutant, so one test
+                # outside the claims failing anyway counted every mutant as
+                # killed, and a 25 s file under the per-test limits made every
+                # mutant stillborn. Fewer tests per mutant can only lower the
+                # score -- the fail-closed direction.
+                targets=sorted({
+                    f"{claim.test_path}::{claim.test_id}" if claim.test_id else claim.test_path
+                    for claim in claims
+                }),
                 run_kwargs=run_options,
                 **limits,
             )

@@ -103,7 +103,7 @@ A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)*
 
 ### How `suite_strength` is measured
 
-It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claim's tests against them. It is not derived from coverage or from parsing pytest output.
+It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. It is not derived from coverage or from parsing pytest output.
 
 - Mutants are limited to lines the patch actually wrote; mutating untouched lines would let tests covering unrelated code inflate the score.
 - **Added, modified and deleted** source files all count as changes. A deleted file has nothing left to mutate, so it is reported separately as `mutation.deleted_files` and cannot contribute a score: whenever `deleted_files` is non-empty the patch lands on `INCONCLUSIVE`, never `MERGE`. That includes a *mixed* patch where the surviving file measured `1.0` — that score covered only what was left after the deletion, so `suite_strength_unverified` goes `true` rather than let one file's number authorise the change as a whole.

@@ -79,12 +79,12 @@ def _tree(root: Path, n_changed: int) -> None:
     (root / "cov.json").write_text(json.dumps({"files": {"calc.py": {"executed_lines": executed}}}))
 
 
-def _cli(root: Path, *extra: str):
+def _cli(root: Path, *extra: str, test_id: str = "test_ops"):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         code = main([
             "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
-            "--test-path", "test_calc.py", "--test-id", "test_ops",
+            "--test-path", "test_calc.py", "--test-id", test_id,
             "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
             "--full-suite-path", "",
             *extra,
@@ -229,6 +229,48 @@ class TestFixedIsNotNoRegression(unittest.TestCase):
         ]
         metrics = compute_metrics(records)
         self.assertEqual((metrics.fixed, metrics.no_regression), (1, 2))
+
+
+class TestMutantsRunTheClaimsNotTheirFiles(unittest.TestCase):
+    """AG-039: each mutant ran the claims' *whole test files* (``test_id=""``)
+    under the per-test limits. On more-itertools that file takes 25 s: every
+    mutant killed at -9, "stillborn", strength never measured, MERGE out of
+    reach for the whole project. Running the claims' node ids instead is also
+    the fail-closed direction: fewer tests per mutant can only lower the
+    score, while a whole file lets a test outside the claims inflate it.
+    """
+
+    def _run(self, extra_tests: str, *extra: str, test_id: str = "test_ops"):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            for side in ("baseline", "patch"):
+                path = root / side / "test_calc.py"
+                path.write_text(path.read_text() + extra_tests)
+            return _cli(root, *extra, test_id=test_id)
+
+    def test_a_failing_test_outside_the_claims_cannot_kill_the_mutants(self):
+        """Its file fails on every mutant, mutated or not: file-level counted 12/12 killed."""
+        _, payload = self._run(
+            "\n\ndef test_add_only():\n    assert add(2, 3) == 5\n\n\n"
+            "def test_unrelated():\n    assert False\n",
+            test_id="test_add_only",
+        )
+        mutation = payload["mutation"]
+        self.assertTrue(mutation["measured"], mutation.get("reason"))
+        self.assertLess(mutation["mutants_killed"], mutation["mutants_counted"], mutation)
+
+    def test_a_limit_that_kills_every_mutant_is_named(self):
+        _, payload = self._run("\n\nimport time\n\n\ndef test_slow():\n    time.sleep(1.5)\n",
+                               "--timeout", "1", test_id="test_slow")
+        self.assertIn("killed by a limit", payload["mutation"]["reason"])
+
+    def test_a_slow_test_outside_the_claims_does_not_make_mutants_stillborn(self):
+        _, payload = self._run("\n\nimport time\n\n\ndef test_slow():\n    time.sleep(1.5)\n",
+                               "--timeout", "1")
+        mutation = payload["mutation"]
+        self.assertEqual(mutation["stillborn"], 0, mutation)
+        self.assertTrue(mutation["measured"], mutation.get("reason"))
 
 
 class TestAnAddedTestCanProveTheFix(unittest.TestCase):
