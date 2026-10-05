@@ -51,6 +51,24 @@ quando esta seção vira uma com versão e data.
 - **AG-035** — o arquivo `.git` de uma worktree ou submódulo não conta mais como
   código estrangeiro alterado.
 
+### Adicionado
+
+- **Teste adicionado pode provar a correção (FAIL_TO_PASS).** Um teste que o
+  patch acrescenta roda contra o código do baseline; falhando lá (exit 1, em
+  todas as execuções) e passando no patch, vira `fixed` e `fix_proven: true`.
+  Medido: 6 de 8 correções reais do `more-itertools` (antes 0).
+
+### Corrigido (cont.)
+
+- **AG-036** — a rodada do arquivo de teste inteiro (teste novo num arquivo
+  existente) usa os limites da suíte colateral.
+- **AG-037** — teste definido numa mixin vira os nós das classes que o
+  executam.
+- **AG-038** — `BLOCK` pelo oráculo do baseline diz que mudança de
+  comportamento intencional precisa de revisão humana do teste alterado.
+- O `reason` de um `INCONCLUSIVE` com todas as claims verificadas nomeia o
+  piso que faltou.
+
 ### Desempenho
 
 - **`verify_repo` (MCP) não gera mais `coverage json --show-contexts`.** Ele

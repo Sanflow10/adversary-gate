@@ -322,6 +322,30 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual(claims, [("test_new.py", "test_new")])
         self.assertEqual(detail["rewritten_test_files_judged_by_baseline"], [])
 
+    def test_a_mixin_test_becomes_the_classes_that_run_it(self):
+        """AG-037: coverage names a test by the class that *defines* it.
+
+        more-itertools defines ``test_truthiness`` on ``PeekableMixinTests``,
+        a plain class, and runs it through ``SeekableTest(PeekableMixinTests,
+        TestCase)`` and ``PeekableTests(...)``. The context said
+        ``PeekableMixinTests.test_truthiness``, pytest collects no such node,
+        and both sides came back "usage error" -> INCONCLUSIVE.
+        """
+        (self.root / "patch" / "test_mix.py").write_text(
+            "import unittest\n\nfrom calc import sub\n\n\n"
+            "class SubMixin:\n    def test_sub_mixed(self):\n        assert sub(3, 1) == 2\n\n\n"
+            "class TestPlain(SubMixin, unittest.TestCase):\n    pass\n\n\n"
+            "class OtherSubTests(SubMixin, unittest.TestCase):\n    pass\n\n\n"
+            "class TestOverrides(SubMixin, unittest.TestCase):\n"
+            "    def test_sub_mixed(self):\n        assert True\n"
+        )
+        claims, detail = self._discover({"2": ["test_mix.SubMixin.test_sub_mixed"]})
+        self.assertEqual(claims, [
+            ("test_mix.py", "OtherSubTests::test_sub_mixed"),
+            ("test_mix.py", "TestPlain::test_sub_mixed"),
+        ])
+        self.assertEqual(detail["unresolved_contexts"], {})
+
     def test_no_contexts_is_a_usage_error_not_an_empty_answer(self):
         report = {"files": {"calc.py": {"executed_lines": [1, 2]}}}
         with self.assertRaises(NoTestContexts):

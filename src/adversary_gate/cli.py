@@ -228,7 +228,8 @@ def _decisive(verdicts: Sequence[GateVerdict]) -> Optional[GateVerdict]:
     return verdicts[0] if verdicts else None
 
 
-def _reason(decision, verdicts, decisive, full_codes, args) -> str:
+def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=None,
+            strength_judged=None, strength_unverified=False, mutation=None) -> str:
     """One sentence that agrees with the decision (AG-034).
 
     The claim-level reason explains a decision only when a claim made it. A
@@ -260,6 +261,35 @@ def _reason(decision, verdicts, decisive, full_codes, args) -> str:
                 "the test runner itself failed -- a MemoryError under "
                 f"--full-suite-memory ({args.full_suite_memory} bytes) is the "
                 "measured cause on large suites); the collateral check did not run"
+            )
+    if (
+        decision is Decision.INCONCLUSIVE
+        and verdicts
+        and all(v.outcome is Outcome.VERIFIED for v in verdicts)
+    ):
+        # Every claim held, so no claim's reason explains this decision: a
+        # floor does. Name it (AG-034, the path it first missed).
+        proven = (
+            "every claim held"
+            + (" and the fix is proven" if any(v.classification.value == "fixed" for v in verdicts) else "")
+        )
+        if coverage_ratio is None and args.coverage_floor > 0:
+            return f"{proven}, but no diff coverage was measured; the {args.coverage_floor:.2f} floor needs it"
+        if coverage_ratio is not None and coverage_ratio < args.coverage_floor:
+            return (
+                f"{proven}, but diff coverage is {coverage_ratio:.2f}, below the "
+                f"{args.coverage_floor:.2f} floor: changed lines no test executes"
+            )
+        if strength_unverified:
+            why = (mutation or {}).get("reason") or "the changed code could not be mutated and measured"
+            return f"{proven}, but suite strength is unverified: {why}"
+        if strength_judged is not None and strength_judged < args.suite_strength_floor:
+            killed = (mutation or {}).get("mutants_killed")
+            counted = (mutation or {}).get("mutants_counted")
+            tally = f" ({killed}/{counted} mutants killed)" if counted else ""
+            return (
+                f"{proven}, but suite strength's lower bound is {strength_judged:.2f}, "
+                f"below the {args.suite_strength_floor:.2f} floor{tally}"
             )
     if decisive is not None:
         return decisive.reason
@@ -843,6 +873,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # repository is not pytest, and/or wrapped in bwrap when the patch
                 # is not trusted. Both used to be impossible without forking.
                 run_kwargs={"command": args.test_command, **run_options},
+                # A whole test file is a suite, not a test (AG-036).
+                file_limits={
+                    "timeout_seconds": args.full_suite_timeout,
+                    "cpu_seconds": args.full_suite_cpu_seconds,
+                    "mem_bytes": args.full_suite_memory,
+                },
                 **limits,
             )
             for claim in claims
@@ -1058,7 +1094,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "classification": decisive.classification.value if decisive else None,
             "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
-            "reason": _reason(decision, verdicts, decisive, full_codes, args),
+            "reason": _reason(
+                decision, verdicts, decisive, full_codes, args,
+                coverage_ratio=coverage_ratio, strength_judged=strength_judged,
+                strength_unverified=strength_unverified, mutation=mutation_detail,
+            ),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": len(verdicts),
             "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),

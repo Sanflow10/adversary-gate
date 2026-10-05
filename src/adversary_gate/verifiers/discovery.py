@@ -23,6 +23,7 @@ Three rules keep the list honest:
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
@@ -94,6 +95,80 @@ def _node_id(context: str, test_files: Iterable[str]) -> Tuple[Optional[Tuple[st
     if not path or not test_id:
         return None, "not a test node"
     return (path, test_id), ""
+
+
+def _collected(patch_dir: Path, path: str, test_id: str) -> Tuple[List[Tuple[str, str]], str]:
+    """The node ids pytest actually runs for ``path::Class::method`` (AG-037).
+
+    coverage.py names a test by the class that *defines* the method. When that
+    class is a mixin -- not ``Test*``, not a ``TestCase`` -- pytest never
+    collects it, and the node ids are the classes in the same file that
+    inherit it (directly or through each other) and do not override the
+    method. A class pytest collects, or a test outside any class, is returned
+    as it is. An unparseable file is left to the run to judge.
+    """
+    parts = test_id.split("::")
+    if len(parts) != 2:
+        return [(path, test_id)], ""
+    cls, method = parts
+    try:
+        tree = ast.parse((patch_dir / path).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return [(path, test_id)], ""
+    classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+    if cls not in classes:
+        return [(path, test_id)], ""
+
+    def bases(node: ast.ClassDef) -> List[str]:
+        out = []
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                out.append(base.id)
+            elif isinstance(base, ast.Attribute):
+                out.append(base.attr)
+        return out
+
+    def collectable(name: str, seen=()) -> bool:
+        if name.startswith("Test") or name.endswith("TestCase"):
+            return True
+        node = classes.get(name)
+        if node is None or name in seen:
+            return False
+        return any(collectable(b, (*seen, name)) for b in bases(node))
+
+    if collectable(cls):
+        return [(path, test_id)], ""
+
+    def inherits(name: str, seen=()) -> bool:
+        node = classes.get(name)
+        if node is None or name in seen:
+            return False
+        return any(b == cls or inherits(b, (*seen, name)) for b in bases(node))
+
+    def defines(node: ast.ClassDef) -> bool:
+        return any(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == method
+            for item in node.body
+        )
+
+    def runs_the_mixins(name: str, seen=()) -> bool:
+        # The mixin's method is what runs unless a class on the way to it
+        # defines its own.
+        node = classes.get(name)
+        if node is None or name in seen or defines(node):
+            return False
+        return any(
+            b == cls or (inherits(b) and runs_the_mixins(b, (*seen, name)))
+            for b in bases(node)
+        )
+
+    concrete = sorted(
+        (path, f"{name}::{method}") for name in classes
+        if name != cls and collectable(name) and runs_the_mixins(name)
+    )
+    if not concrete:
+        return [], f"{cls} is not a collected test class and no test class in {path} inherits {method} from it"
+    return concrete, ""
 
 
 def _has_test_context(entry: object) -> bool:
@@ -170,8 +245,11 @@ def discover_claims(
         node, why = _node_id(context, test_files)
         if node is None:
             unresolved[context] = why
-        else:
-            nodes.add(node)
+            continue
+        concrete, why = _collected(Path(patch_dir), *node)
+        if not concrete:
+            unresolved[context] = why
+        nodes.update(concrete)
 
     rewritten = sorted({path for path, _ in nodes if _rewritten(Path(baseline_dir), Path(patch_dir), path)})
     kept = sorted(nodes)

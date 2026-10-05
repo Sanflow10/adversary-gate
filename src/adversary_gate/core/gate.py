@@ -34,7 +34,7 @@ from typing import Iterable, List, Optional, Sequence
 
 from adversary_gate.core.circuit_breaker import CircuitBreaker
 from adversary_gate.core.contestation import Contestation, ContestationResult, adjudicate
-from adversary_gate.core.exitmap import describe
+from adversary_gate.core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED, describe
 from adversary_gate.core.evidence_log import EvidenceLog
 from adversary_gate.core.path_policy import PathPolicy, harness_drift
 from adversary_gate.core.types import (
@@ -466,7 +466,12 @@ class Gate:
         mem_bytes: Optional[int] = 512 * 1024 * 1024,
         require_network_isolation: bool = False,
         run_kwargs: Optional[dict] = None,
+        file_limits: Optional[dict] = None,
     ) -> GateVerdict:
+        """``file_limits`` (``timeout_seconds``/``cpu_seconds``/``mem_bytes``)
+        bound runs of a *whole test file* -- the check that every test the
+        baseline shipped in a file still passes. Absent, they are the per-test
+        limits, which killed real files on both sides (AG-036)."""
         started = time.monotonic()
         extra = run_kwargs or {}
 
@@ -551,6 +556,7 @@ class Gate:
         )
         if not rewritten:
             verdict, details = self._judge(claim, baseline_dir, patch_dir, baseline_applicable, policy, limits)
+            verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits)
             return finish(self._explain(verdict, details))
 
         # The baseline oracle. Whatever the patch did to the test file, the
@@ -575,6 +581,16 @@ class Gate:
                     f"judged by the baseline's version of {claim.test_path} and its test "
                     f"files (the patch rewrote {', '.join(changed)}): {verdict.reason}"
                 )
+                if verdict.outcome is Outcome.REFUTED:
+                    # AG-038: a fix that changes behaviour on purpose, and edits
+                    # the old test to match, is blocked here exactly like a bug
+                    # hidden behind a bent assertion (more-itertools d71c4ad).
+                    # From execution alone the two are the same patch.
+                    verdict.reason += (
+                        ". If this behaviour change is intended, the edit to the "
+                        "baseline's test is the thing to review: a human approves it, "
+                        "the gate cannot tell it from a test bent to hide a bug"
+                    )
                 return finish(self._explain(verdict, details))
 
             # The claim is a test the patch added to a file that already
@@ -582,10 +598,13 @@ class Gate:
             # it is judged like any added test -- but every test the baseline
             # shipped in that file must still hold on the patch's code, or the
             # rewrite is where a weakened assertion hides.
-            kept = self._baseline_file_holds(claim, baseline_dir, tree, policy, limits)
+            kept = self._baseline_file_holds(
+                claim, baseline_dir, tree, policy, {**limits, **(file_limits or {})}
+            )
         if kept is not None:
             return finish(kept)
         verdict, details = self._judge(claim, baseline_dir, patch_dir, False, policy, limits)
+        verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits)
         verdict.oracle = "baseline-file"
         verdict.reason = (
             f"{claim.test_id} is new in {claim.test_path}; every test the baseline "
@@ -650,6 +669,68 @@ class Gate:
             patch_output=patch_output,
         )
         return self.classify(claim, run_outcome), (baseline_detail, patch_detail)
+
+    def _fail_to_pass(self, verdict: GateVerdict, claim, baseline_dir: Path, patch_dir: Path,
+                      policy, limits) -> GateVerdict:
+        """A test the patch added, run against the baseline's *code* (SWE-bench's FAIL_TO_PASS).
+
+        Only a ``discarded`` verdict is examined: a test with no baseline copy
+        that passes on the patch. The baseline tree gets the patch's test files
+        laid over it and the claim runs there. Every run failing with exit 1
+        upgrades it to ``fixed``: the patch makes pass a test that fails on the
+        code it replaced. Passing there too, or not running at all (exit 2: it
+        imports something the patch added), leaves it ``discarded`` and says
+        which -- a collection error is not a failing assertion, so a test that
+        only imports a new name cannot prove a fix. The decision never changes:
+        ``discarded`` and ``fixed`` are both VERIFIED; only ``fix_proven`` does.
+        """
+        if verdict.classification is not FailureClass.CLAIM_DISCARDED:
+            return verdict
+        with tempfile.TemporaryDirectory(prefix="adversary-f2p-") as scratch:
+            tree = Path(scratch) / "tree"
+            shutil.copytree(baseline_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
+            for rel, source in _baseline_test_files(patch_dir):
+                target = tree / rel
+                if target.is_symlink() or target.is_dir():
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            codes, output = self._runs(tree, claim.test_path, claim.test_id, policy, limits)
+        if codes and all(code == PYTEST_TESTS_FAILED for code in codes):
+            run = verdict.outcome_run
+            fixed = GateVerdict(
+                claim,
+                FailureClass.FIXED,
+                Outcome.VERIFIED,
+                "the test the patch added fails on the baseline's code "
+                f"({len(codes)}/{len(codes)} runs) and passes on the patch: the patch "
+                "fixes what this test checks",
+                ExecutionOutcome(
+                    ExecState.FAIL,
+                    run.patch if run is not None else ExecState.PASS,
+                    baseline_failures=len(codes),
+                    patch_failures=run.patch_failures if run is not None else 0,
+                    run_count=policy.runs,
+                    baseline_exit_codes=tuple(codes),
+                    patch_exit_codes=run.patch_exit_codes if run is not None else (),
+                    baseline_output=output,
+                    patch_output=run.patch_output if run is not None else "",
+                ),
+            )
+            fixed.oracle = verdict.oracle
+            return fixed
+        if codes and all(code == PYTEST_OK for code in codes):
+            verdict.reason = (
+                f"{verdict.reason}; it also passes on the baseline's code, so it does not "
+                "tell the two apart (not evidence of a fix)"
+            )
+        else:
+            verdict.reason = (
+                f"{verdict.reason}; it could not run against the baseline's code "
+                f"(exit codes {list(codes)}: typically it imports something the patch "
+                "added), so it is not evidence of a fix"
+            )
+        return verdict
 
     @staticmethod
     def _explain(verdict: GateVerdict, details: tuple) -> GateVerdict:

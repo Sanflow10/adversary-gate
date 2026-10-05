@@ -74,6 +74,12 @@ class TestRewrittenTestIsJudgedByTheBaseline(unittest.TestCase):
             verdict = _verify(root, "test_sub")
             self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
             self.assertIs(Gate([]).decide([verdict], 4, 1.0), Decision.BLOCK)
+            # Measured on more-itertools d71c4ad: a real fix that changes
+            # behaviour on purpose and updates the old tests is blocked the
+            # same way. The gate cannot tell the two apart; the reason must
+            # say so, and say who decides (AG-038).
+            self.assertIn("intended", verdict.reason)
+            self.assertIn("human", verdict.reason)
 
     def test_an_untouched_test_file_is_not_transplanted(self):
         with tempfile.TemporaryDirectory() as directory:

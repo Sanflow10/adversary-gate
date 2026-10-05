@@ -231,5 +231,72 @@ class TestFixedIsNotNoRegression(unittest.TestCase):
         self.assertEqual((metrics.fixed, metrics.no_regression), (1, 2))
 
 
+class TestAnAddedTestCanProveTheFix(unittest.TestCase):
+    """The common fix -- change the code, add the regression test -- never
+    reached ``fixed``: an added test has no baseline copy, so it was
+    ``discarded`` and ``fix_proven`` stayed false (measured on every real
+    more-itertools fix replayed through the MCP server). SWE-bench's
+    FAIL_TO_PASS answers it by running the new test against the old code.
+
+    Here the added test runs on the baseline's code with the patch's test
+    files laid over it. A *failing* test (exit 1, every run) proves the fix;
+    one that passes there too does not tell the two apart; one that cannot
+    even be collected there -- it imports what the patch added -- proves
+    nothing, which is stricter than SWE-bench on purpose: otherwise a test
+    that only imports a new name would "prove" a fix.
+    """
+
+    BUGGY = CALC.replace("return a % b", "return a * b")
+
+    def _verify(self, baseline_calc: str, test_file: str, test_text: str, test_id: str,
+                patch_calc: str = CALC):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc in (("baseline", baseline_calc), ("patch", patch_calc)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(calc)
+                (root / side / "test_calc.py").write_text(TESTS.replace("    assert mod(7, 3) == 1\n", ""))
+            target = root / "patch" / test_file
+            target.write_text(
+                target.read_text() + "\n\n" + test_text if target.exists() else test_text
+            )
+            return Gate([]).verify_claim(
+                CriticClaim(test_file, test_id), root / "baseline", root / "patch"
+            )
+
+    def test_a_new_test_file_that_fails_on_the_old_code_proves_the_fix(self):
+        verdict = self._verify(
+            self.BUGGY, "test_mod.py",
+            "from calc import mod\n\n\ndef test_mod():\n    assert mod(7, 3) == 1\n", "test_mod",
+        )
+        self.assertIs(verdict.classification, FailureClass.FIXED, verdict.reason)
+        self.assertIs(verdict.outcome, Outcome.VERIFIED)
+        self.assertIn("baseline's code", verdict.reason)
+
+    def test_a_test_added_to_an_existing_file_proves_it_too(self):
+        verdict = self._verify(
+            self.BUGGY, "test_calc.py", "def test_mod():\n    assert mod(7, 3) == 1\n", "test_mod",
+        )
+        self.assertIs(verdict.classification, FailureClass.FIXED, verdict.reason)
+        self.assertEqual(verdict.oracle, "baseline-file")
+
+    def test_a_new_test_that_passes_on_the_old_code_proves_nothing(self):
+        verdict = self._verify(
+            self.BUGGY, "test_add.py",
+            "from calc import add\n\n\ndef test_add_again():\n    assert add(1, 1) == 2\n", "test_add_again",
+        )
+        self.assertIs(verdict.classification, FailureClass.CLAIM_DISCARDED)
+        self.assertIn("also passes on the baseline's code", verdict.reason)
+
+    def test_a_new_test_that_cannot_run_on_the_old_code_proves_nothing(self):
+        verdict = self._verify(
+            CALC, "test_pow.py",
+            "from calc import pow_\n\n\ndef test_pow():\n    assert pow_(2, 3) == 8\n", "test_pow",
+            patch_calc=CALC + "\n\ndef pow_(a, b):\n    return a ** b\n",
+        )
+        self.assertIs(verdict.classification, FailureClass.CLAIM_DISCARDED)
+        self.assertIn("could not run against the baseline's code", verdict.reason)
+
+
 if __name__ == "__main__":
     unittest.main()

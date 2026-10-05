@@ -287,3 +287,40 @@ nenhum gate por testes poderia bloquear.
   adiciona é `discarded` (documentado, README §AG-030): não é executado contra o
   código do baseline, então o fluxo comum — corrigir e acrescentar o teste de
   regressão — não chega a `fixed`.
+
+## 15. Prioridade 3 (FAIL_TO_PASS) e AG-036 a AG-038 — as correções reais no sentido direto
+
+Até aqui as oito correções do `more-itertools` só tinham sido rodadas ao
+contrário (bug reintroduzido). Rodadas no sentido em que um agente as entrega
+— baseline antes da correção, patch = código corrigido + teste novo — nenhuma
+chegava a `fix_proven`, e cinco nem eram julgadas.
+
+* **FAIL_TO_PASS para teste adicionado.** Um teste que o patch adiciona era
+  `discarded`: sem cópia no baseline, nunca rodava contra o código antigo, e o
+  fluxo comum (corrigir + teste de regressão) não provava nada. Agora
+  `Gate._fail_to_pass` roda o teste sobre o **código do baseline** com os
+  arquivos de teste do patch por cima: exit 1 em todas as execuções → `fixed`.
+  Passar lá também → continua `discarded` ("não distingue os dois"). Não
+  conseguir rodar (exit 2: importa o que o patch criou) → continua `discarded`
+  — mais estrito que o SWE-bench de propósito, para um teste que só importa um
+  nome novo não "provar" correção. Só `fix_proven` muda; a decisão não.
+  Testes: `TestAnAddedTestCanProveTheFix`.
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-036** | Alta — perda de julgamento | Teste adicionado num arquivo que o baseline já tinha: antes de julgá-lo, o gate roda o **arquivo inteiro** (todo teste que o baseline tinha nele tem que passar no patch). Essa rodada usava os limites de um teste; no `more-itertools` o arquivo é quase a suíte (40 s) → `-9, -9`, "no clean reference", `INCONCLUSIVE` em 5 das 8 correções. O AG-033 um nível abaixo. | **Corrigido** — `verify_claim(file_limits=...)`; o CLI passa os limites da suíte colateral. Teste: `TestWholeFileRunsHaveSuiteLimits`. |
+| **AG-037** | Média — falso `INCONCLUSIVE` | `6b1907d`: o coverage nomeia o teste pela classe que **define** o método. `test_truthiness` é definido em `PeekableMixinTests`, uma classe comum, e roda via `SeekableTest(PeekableMixinTests, TestCase)`. O nó `PeekableMixinTests::test_truthiness` não existe para o pytest → "usage error" dos dois lados. | **Corrigido** — a descoberta lê a árvore do arquivo: uma classe que não é `Test*` nem `TestCase` vira as classes do mesmo arquivo que a herdam (direto ou por outras) e não sobrescrevem o método. Teste: `test_a_mixin_test_becomes_the_classes_that_run_it`. |
+| **AG-038** | Média — explicação | `d71c4ad` é uma correção legítima que **muda comportamento de propósito** e ajusta três testes antigos. O oráculo do baseline roda os testes antigos contra o código novo → `BLOCK`. Pela execução, isso é indistinguível de um assert entortado para esconder bug (AG-021); o gate não deve abrir a brecha. | **Explicado, não alterado** — o `reason` do `BLOCK` pelo oráculo diz que, se a mudança é intencional, quem aprova a edição do teste antigo é um humano. |
+| **AG-034 (resíduo)** | Média — explicação | Todas as claims `VERIFIED`, decisão `INCONCLUSIVE` por piso: o `reason` era o de uma claim ("nothing it checks regressed"). Medido nas seis correções provadas, todas com cobertura de diff 0,39–0,71. | **Corrigido** — `_reason` nomeia o piso: cobertura ausente ou abaixo, força não medida ou abaixo (com mutantes mortos/contados). Teste: `TestReasonForAnInconclusiveWithVerifiedClaims`. |
+
+**As 16 execuções reais depois disso:** sentido direto — **6 de 8 com
+`fix_proven: true`** (antes 0), todas `INCONCLUSIVE` por cobertura de diff
+abaixo de 0,80 (medida verdadeira: linhas novas que nenhum teste executa),
+`d71c4ad` `BLOCK` (AG-038) e `6b1907d` sem resposta por tempo. Reversões —
+**7 `BLOCK`**, `d71c4ad` `INCONCLUSIVE` (indetectável pela suíte). **Nenhum
+`MERGE`** em 16.
+
+**Aberto:** custo. Provar a correção acrescenta 3 execuções por teste novo e o
+AG-036 faz o arquivo inteiro rodar até o fim: 108–1064 s por chamada. O
+`6b1907d` passou do `timeout_seconds` padrão do `verify_repo` (900) com as
+claims a mais que o AG-037 resolveu — e voltou `INCONCLUSIVE`, nunca `MERGE`.

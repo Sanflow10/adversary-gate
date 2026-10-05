@@ -1277,6 +1277,77 @@ class TestFullSuiteHasItsOwnLimits(unittest.TestCase):
         self.assertIn("--full-suite-timeout", out["reason"])
 
 
+class TestReasonForAnInconclusiveWithVerifiedClaims(unittest.TestCase):
+    """AG-034, the path it missed: every claim VERIFIED, decision INCONCLUSIVE.
+
+    Six real more-itertools fixes replayed forward were proven (``fixed``) and
+    still INCONCLUSIVE -- correctly: diff coverage 0.39 to 0.71 against a 0.80
+    floor. The reason said "test passes on baseline and on patch: nothing it
+    checks regressed", which explains nothing about the decision.
+    """
+
+    def test_the_reason_names_the_coverage_floor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            TestCliExitCodes()._tree(root, break_patch=False)
+            (root / "patch" / "calc.py").write_text(
+                "def add(a, b):\n    return a + b\n\n\ndef unused(x):\n    return x\n"
+            )
+            (root / "change.diff").write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -2,0 +3,4 @@\n+\n+\n+def unused(x):\n+    return x\n"
+            )
+            (root / "cov.json").write_text(json.dumps({"files": {"calc.py": {"executed_lines": [1, 2]}}}))
+            out = root / "out.json"
+            with patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                code = TestCliExitCodes()._invoke(root, [
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--full-suite-path", "",
+                ])
+            payload = json.loads(out.read_text())
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertEqual(payload["claims"][0]["outcome"], "verified")
+            self.assertIn("diff coverage", payload["reason"])
+            self.assertIn("0.80", payload["reason"])
+
+
+class TestWholeFileRunsHaveSuiteLimits(unittest.TestCase):
+    """AG-036: AG-033's mistake, one level down.
+
+    A test added to a file the baseline already had is judged only after every
+    test the baseline shipped in that file passes on the patch -- a run of the
+    *whole file*, which ran under the per-test limits. On more-itertools the
+    file is most of the suite (40 s): killed on both sides (-9, -9), "no clean
+    reference", INCONCLUSIVE, in five of eight real fixes replayed forward.
+    """
+
+    def test_a_slow_test_file_still_gives_a_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tests = (
+                "import time\n\nfrom calc import add\n\n\n"
+                "def test_add():\n    assert add(2, 2) == 4\n\n\n"
+                "def test_slow():\n    time.sleep(1.5)\n"
+            )
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+                (root / side / "test_calc.py").write_text(tests)
+            with open(root / "patch" / "test_calc.py", "a") as fh:
+                fh.write("\n\ndef test_add_zero():\n    assert add(0, 0) == 0\n")
+            out = root / "out.json"
+            with patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "test_calc.py::test_add_zero", "--max-rounds", "1",
+                    "--rounds-used", "1", "--timeout", "1", "--full-suite-path", "",
+                    *TestCliExitCodes.UNTRUSTED_COVERAGE,
+                ])
+            claim = json.loads(out.read_text())["claims"][0]
+            self.assertEqual(claim["oracle"], "baseline-file")
+            self.assertNotEqual(claim["classification"], "invalid", claim["reason"])
+            self.assertEqual(claim["outcome"], "verified", claim["reason"])
+
+
 class TestDeletionsAreChanges(unittest.TestCase):
     """AG-001: a deleted source file must count as a change.
 
