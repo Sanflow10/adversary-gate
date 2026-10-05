@@ -1,0 +1,36 @@
+# The MCP server as a package of its own, so `uvx adversary-gate-mcp` works.
+#
+# MCP registries start Python servers as `uvx <package>`, and `uvx` runs the
+# executable named after the package. `adversary-gate` is the CLI and keeps the
+# MCP SDK out of its dependencies (an extra, `[mcp]`), so this distribution
+# ships no code: it pins `adversary-gate[mcp]` at the same version and names
+# the server's entry point. Its version moves with the core's, and
+# tests/test_release_consistency.py fails when they part.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adversary-gate-mcp"
+version = "2.9.0"
+description = "AdversaryGate as an MCP server: a fail-closed merge gate an agent calls before saying done"
+readme = "README.md"
+authors = [
+    {name = "AdversaryGate Authors", email = "sanflow086@gmail.com"}
+]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "adversary-gate[mcp]==2.9.0",
+]
+
+[project.urls]
+Homepage = "https://sanflow10.github.io/adversary-gate/"
+Source = "https://github.com/Sanflow10/adversary-gate"
+
+[project.scripts]
+adversary-gate-mcp = "adversary_gate.integrations.mcp_server:main"
+
+[tool.setuptools]
+packages = []

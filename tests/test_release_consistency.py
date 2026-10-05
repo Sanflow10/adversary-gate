@@ -8,6 +8,7 @@ was a checklist item. A checklist item is a promise; this is the measurement.
 
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -69,3 +70,42 @@ class TestOneVersion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMcpPackage(unittest.TestCase):
+    """``adversary-gate-mcp`` ships no code; it is a pin. A pin to another version is a different server."""
+
+    def setUp(self):
+        self.version = _pyproject_version()
+        # No tomllib: the suite also runs on 3.10.
+        text = (ROOT / "packaging" / "mcp" / "pyproject.toml").read_text()
+        self.project = {
+            "name": re.search(r'(?m)^name\s*=\s*"([^"]+)"', text).group(1),
+            "version": re.search(r'(?m)^version\s*=\s*"([^"]+)"', text).group(1),
+            "dependencies": re.findall(r'(?m)^\s+"(adversary-gate[^"]*)",$', text),
+            "scripts": dict(re.findall(r'(?m)^(adversary-gate-mcp)\s*=\s*"([^"]+)"', text)),
+        }
+        self.server = json.loads((ROOT / "server.json").read_text())
+
+    def test_same_version_as_the_core(self):
+        self.assertEqual(self.project["version"], self.version)
+
+    def test_pins_the_core_at_that_version(self):
+        self.assertEqual(self.project["dependencies"], [f"adversary-gate[mcp]=={self.version}"])
+
+    def test_entry_point_is_the_core_server(self):
+        self.assertEqual(
+            self.project["scripts"],
+            {"adversary-gate-mcp": "adversary_gate.integrations.mcp_server:main"},
+        )
+
+    def test_server_json_names_this_release(self):
+        self.assertEqual(self.server["version"], self.version)
+        (package,) = self.server["packages"]
+        self.assertEqual(package["identifier"], self.project["name"])
+        self.assertEqual(package["version"], self.version)
+
+    def test_readme_proves_ownership_for_the_registry(self):
+        """The registry reads ``mcp-name: <server name>`` from the package's PyPI description."""
+        readme = (ROOT / "packaging" / "mcp" / "README.md").read_text()
+        self.assertIn(f"mcp-name: {self.server['name']} ", readme)

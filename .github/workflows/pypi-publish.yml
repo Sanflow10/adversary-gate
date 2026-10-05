@@ -14,7 +14,11 @@ name: Publish to PyPI
 #   Trusted Publishing    -> used otherwise. Needs the publisher registered on
 #                            pypi.org (AG-008): owner Sanflow10, repository
 #                            adversary-gate, workflow pypi-publish.yml, no
-#                            environment.
+#                            environment. Registered once per PyPI project:
+#                            `adversary-gate` and `adversary-gate-mcp`.
+#
+# One tag, two distributions: the core and packaging/mcp (the MCP server as
+# its own package, for `uvx adversary-gate-mcp`). Both go up in one upload.
 
 on:
   push:
@@ -85,6 +89,20 @@ jobs:
 
       - name: Build binary wheel and source distribution
         run: python -m build
+
+      # Same version as the core, pinned to it; test_release_consistency.py
+      # holds that on main, and this re-checks it on the tag being shipped.
+      - name: Build the MCP server package
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          MCP_VERSION="$(python -c "import tomllib; print(tomllib.load(open('packaging/mcp/pyproject.toml','rb'))['project']['version'])")"
+          if [ "v$MCP_VERSION" != "$TAG" ]; then
+            echo "::error::tag $TAG but packaging/mcp carries version $MCP_VERSION"
+            exit 1
+          fi
+          python -m build packaging/mcp --outdir dist/
 
       # An empty password makes the action use Trusted Publishing.
       - name: Publish package distributions to PyPI

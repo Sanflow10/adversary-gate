@@ -1,0 +1,38 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Sanflow10/adversary-gate",
+  "title": "AdversaryGate",
+  "description": "Fail-closed merge gate an agent calls before saying done: MERGE, BLOCK or INCONCLUSIVE.",
+  "repository": {
+    "url": "https://github.com/Sanflow10/adversary-gate",
+    "source": "github"
+  },
+  "websiteUrl": "https://sanflow10.github.io/adversary-gate/",
+  "version": "2.9.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "adversary-gate-mcp",
+      "version": "2.9.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "ADVERSARY_GATE_BASE_REF",
+          "description": "Baseline git ref (e.g. origin/main). Unset, the agent may pick it, and whoever picks the baseline picks the oracle"
+        },
+        {
+          "name": "ADVERSARY_GATE_PYTHON",
+          "description": "Interpreter that runs the tests; must be one the agent cannot write to"
+        },
+        {
+          "name": "ADVERSARY_GATE_POLICY",
+          "description": "Extra gate flags set by the operator; evidence flags are refused"
+        }
+      ]
+    }
+  ]
+}

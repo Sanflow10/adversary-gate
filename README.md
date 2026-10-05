@@ -1,4 +1,4 @@
-# AdversaryGate (v2.8.0)
+# AdversaryGate (v2.9.0)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -323,7 +323,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **2.8.0** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **2.9.0** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -332,19 +332,19 @@ PYTHONPATH=src python3 -m adversary_gate --help
 they do **not** carry the same code:
 
 ```bash
-# PyPI -- 2.8.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
-pip install adversary-gate==2.8.0
+# PyPI -- 2.9.0 is there; 2.1.0 and older still have AG-018, AG-021, AG-022 and AG-032
+pip install adversary-gate==2.9.0
 ```
 
 ```bash
-# GitHub Release -- 2.8.0: every fix in this document.
+# GitHub Release -- 2.9.0: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.8.0/adversary_gate-2.8.0-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v2.9.0/adversary_gate-2.9.0-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v2.8.0` has not been published yet. (There is no `v2.1.1`: that
+Release for `v2.9.0` has not been published yet. (There is no `v2.1.1`: that
 version was written up and never released; its fixes are in `2.2.0`.) Releases
 are published from
 **Actions → Release → Run workflow**. That workflow:
@@ -363,7 +363,7 @@ are published from
    warning in the run, that PyPI was **not** updated.
 
 To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v2.8.0`). It builds from that tag's
+→ Run workflow** and give it the tag (`v2.9.0`). It builds from that tag's
 tree, refuses a tag whose `pyproject.toml` names another version, and
 authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
 Publishing when it does not.
@@ -550,7 +550,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v2.8.0` carries every fix, and the Release workflow that
+> **Which ref?** `v2.9.0` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v2` tag, which follows every 2.x
 > release. `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
 > at the audited version with the bugs. `@main` follows `main` and picks up whatever lands
@@ -617,6 +617,7 @@ Two integrations, one rule: **nothing an integration says can make the gate more
 
 ```bash
 pip install "adversary-gate[mcp]"          # in an environment the agent cannot write to
+# or, without installing anything:  uvx adversary-gate-mcp  (the same server, as its own PyPI package)
 adversary-gate-mcp                         # stdio MCP server
 adversary-gate-mcp --print-hermes-skill    # SKILL.md for ~/.hermes/skills/adversary-gate/
 adversary-gate-mcp --print-hermes-config   # the mcp_servers block for ~/.hermes/config.yaml
