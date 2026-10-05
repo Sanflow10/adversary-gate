@@ -125,6 +125,34 @@ class TestNewTestInAnExistingFile(unittest.TestCase):
             self.assertEqual(verdict.oracle, "baseline-file")
             self.assertIn("is new in test_calc.py", verdict.reason)
 
+    def test_two_new_tests_in_one_file_check_the_old_ones_once(self):
+        """Measured on more-itertools def2dab: three new tests in one file ran the
+        whole baseline file 3 x 3 times per side -- 452 s of a 782 s call -- to
+        get the same answer three times. The check depends on the file, the
+        baseline and the patch, not on which new test asked."""
+        two = self.NEW + "\n\ndef test_sub_zero():\n    assert sub(0, 0) == 0\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, patch_calc=CALC.replace("return a - b", "return (a - b)"), patch_tests=two)
+            gate = Gate([])
+            calls = []
+            real_runs = gate._runs
+
+            def counting(directory, test_path, test_id, policy, limits):
+                if test_id == "":
+                    calls.append(str(directory))
+                return real_runs(directory, test_path, test_id, policy, limits)
+
+            gate._runs = counting
+            verdicts = [
+                gate.verify_claim(CriticClaim("test_calc.py", t), root / "baseline", root / "patch")
+                for t in ("test_sub_negative", "test_sub_zero")
+            ]
+            for verdict in verdicts:
+                self.assertIs(verdict.outcome, Outcome.VERIFIED, verdict.reason)
+                self.assertEqual(verdict.oracle, "baseline-file")
+            self.assertEqual(len(calls), 2, calls)  # one baseline, one patch: not two each
+
     def test_weakening_an_old_test_in_the_same_file_is_caught(self):
         """The new test is fine; the patch also bent an old one to fit a bug. REFUTED."""
         bent = self.NEW.replace("assert add(2, 3) == 5", "assert add(2, 3) == 6")

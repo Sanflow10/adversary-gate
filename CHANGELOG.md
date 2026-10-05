@@ -38,6 +38,13 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Desempenho
+
+- A checagem de que os testes antigos de um arquivo ainda passam roda **uma vez
+  por arquivo**, não uma vez por teste novo nele: ela depende do baseline, do
+  patch e do arquivo, não de qual teste perguntou. `def2dab` real (três testes
+  novos num arquivo): 782 → 477 s, mesma decisão.
+
 ---
 
 ## [2.11.0] — 2026-10-05

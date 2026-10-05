@@ -599,7 +599,9 @@ class Gate:
             # shipped in that file must still hold on the patch's code, or the
             # rewrite is where a weakened assertion hides.
             kept = self._baseline_file_holds(
-                claim, baseline_dir, tree, policy, {**limits, **(file_limits or {})}
+                claim, baseline_dir, tree, policy, {**limits, **(file_limits or {})},
+                key=(str(Path(baseline_dir).resolve()), str(Path(patch_dir).resolve()),
+                     claim.test_path, policy.runs),
             )
         if kept is not None:
             return finish(kept)
@@ -742,7 +744,7 @@ class Gate:
         return verdict
 
     def _baseline_file_holds(
-        self, claim, baseline_dir: Path, tree: Path, policy, limits
+        self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None
     ) -> Optional[GateVerdict]:
         """``None`` when the baseline's whole test file passes on both sides.
 
@@ -750,8 +752,17 @@ class Gate:
         its own: the baseline's tests fail on the patch's code (REFUTED), or
         there is no clean reference to compare against (UNVERIFIED).
         """
-        base_codes, base_out = self._runs(baseline_dir, claim.test_path, "", policy, limits)
-        tree_codes, tree_out = self._runs(tree, claim.test_path, "", policy, limits)
+        # The answer depends on the baseline, the patch and the file -- not on
+        # which new test in it asked. Several new tests in one file used to
+        # rerun the whole file for each (more-itertools def2dab: 452 s of 782).
+        cache = self.__dict__.setdefault("_file_holds_cache", {})
+        if key is not None and key in cache:
+            base_codes, base_out, tree_codes, tree_out = cache[key]
+        else:
+            base_codes, base_out = self._runs(baseline_dir, claim.test_path, "", policy, limits)
+            tree_codes, tree_out = self._runs(tree, claim.test_path, "", policy, limits)
+            if key is not None:
+                cache[key] = (base_codes, base_out, tree_codes, tree_out)
         base_state, _, base_detail = self._resolve_side(base_codes, policy, label="baseline file")
         tree_state, tree_stable, tree_detail = self._resolve_side(
             tree_codes, policy, label="baseline file on patch"

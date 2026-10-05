@@ -324,3 +324,15 @@ abaixo de 0,80 (medida verdadeira: linhas novas que nenhum teste executa),
 AG-036 faz o arquivo inteiro rodar até o fim: 108–1064 s por chamada. O
 `6b1907d` passou do `timeout_seconds` padrão do `verify_repo` (900) com as
 claims a mais que o AG-037 resolveu — e voltou `INCONCLUSIVE`, nunca `MERGE`.
+
+**Custo, segunda medição (2.11.0, `def2dab` no sentido direto, 782 s):** 58 % era
+o arquivo de teste inteiro rodado 18 vezes — três testes novos no mesmo arquivo,
+e para cada um a mesma checagem dos testes antigos, 3× de cada lado. O resultado
+passou a ser guardado por arquivo dentro de uma chamada: 477 s. Teste:
+`test_two_new_tests_in_one_file_check_the_old_ones_once`.
+
+**Achado ao lado (aberto):** com o `reason` nomeando o piso, o `INCONCLUSIVE`
+de `def2dab` diz *"every mutant was stillborn; the test target never executed
+the mutated code"*. No `more-itertools` nenhum mutante é executado pelos testes,
+então a força nunca é medida e `MERGE` é inalcançável nesse projeto. Antes a
+cobertura de diff abaixo do piso escondia isso.
