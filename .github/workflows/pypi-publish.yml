@@ -105,7 +105,12 @@ jobs:
           python -m build packaging/mcp --outdir dist/
 
       # An empty password makes the action use Trusted Publishing.
+      # skip-existing: a run that stopped halfway (2.9.0: the core wheel went
+      # up, then the new project was refused) can be run again for the same
+      # tag. PyPI never lets a file be replaced; this skips the files already
+      # there instead of failing on them, and uploads the rest.
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
