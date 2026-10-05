@@ -139,7 +139,13 @@ def discover_claims(
         raise ValueError("max_claims must be at least 1")
 
     files: Mapping = coverage.get("files", {}) if isinstance(coverage, Mapping) else {}
-    if not any(_has_test_context(entry) for entry in files.values()):
+    meta = coverage.get("meta", {}) if isinstance(coverage, Mapping) else {}
+    # The MCP evidence path writes only the changed files; when no test ran a
+    # changed line nothing in it carries a context, so it says separately
+    # that contexts were recorded. A report from ``coverage json`` never has
+    # this key and is judged by its entries, exactly as before.
+    recorded = isinstance(meta, Mapping) and meta.get("adversary_gate_contexts_recorded") is True
+    if not recorded and not any(_has_test_context(entry) for entry in files.values()):
         raise NoTestContexts(
             "the coverage report has no per-test contexts, so it cannot say which "
             "tests ran the changed lines; record them with "

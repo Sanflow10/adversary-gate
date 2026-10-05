@@ -19,6 +19,7 @@ Nothing in the working tree is modified, staged or committed.
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import tarfile
@@ -26,9 +27,43 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from adversary_gate.verifiers.coverage import validate_diff
+
 
 class EvidenceError(RuntimeError):
     """The repository cannot answer: not a git tree, unknown ref, no coverage."""
+
+
+#: Runs under the project's interpreter, which has coverage.py but not
+#: necessarily this package: self-contained on purpose. Writes the subset of
+#: ``coverage json --show-contexts`` that the gate reads, for the files and
+#: lines the diff names, plus a marker that contexts were recorded at all --
+#: without it, a change no test executes would look like a report recorded
+#: without per-test contexts.
+_EXTRACT = r"""
+import json, os, sys
+import coverage
+data_file, wanted_file, repo, out = sys.argv[1:5]
+data = coverage.CoverageData(basename=data_file)
+data.read()
+wanted = json.load(open(wanted_file, encoding="utf-8"))
+by_rel = {os.path.relpath(f, repo).replace(os.sep, "/"): f for f in data.measured_files()}
+files = {}
+for rel, lines in wanted.items():
+    path = by_rel.get(rel)
+    if path is None:
+        continue
+    per_line = data.contexts_by_lineno(path)
+    files[rel] = {
+        "executed_lines": sorted(data.lines(path) or []),
+        "contexts": {str(n): sorted(per_line.get(n, [])) for n in lines if per_line.get(n)},
+    }
+recorded = any(c for c in data.measured_contexts())
+json.dump({"meta": {"format": 3, "show_contexts": True,
+                    "adversary_gate_contexts_recorded": recorded,
+                    "adversary_gate_extract": "changed lines only"},
+           "files": files}, open(out, "w", encoding="utf-8"))
+"""
 
 
 @dataclass
@@ -125,9 +160,18 @@ def prepare(
         )
         if "No module named coverage" in run.stderr:
             raise EvidenceError(f"coverage.py is not installed for {python}")
+        # Not ``coverage json --show-contexts``: it writes every line of every
+        # measured file with every test that ran it -- on more-itertools 193 s
+        # and 312 MB, for a report of which discovery and diff coverage read
+        # the changed lines only. Read those from the database instead.
+        wanted = workdir / "changed-lines.json"
+        wanted.write_text(json.dumps({
+            path: sorted(lines) for path, lines in validate_diff(diff_text).items()
+            if path.endswith(".py")
+        }), encoding="utf-8")
         report = subprocess.run(
-            [python, "-m", "coverage", "json", "--rcfile", str(rc), "--show-contexts",
-             "-o", str(coverage_path)],
+            [python, "-c", _EXTRACT, str(workdir / ".coverage"), str(wanted),
+             str(repo), str(coverage_path)],
             cwd=repo, env=env, capture_output=True, text=True, timeout=timeout,
         )
         if report.returncode != 0 or not coverage_path.is_file():

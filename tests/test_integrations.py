@@ -33,6 +33,7 @@ from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, main
 from adversary_gate.integrations import jev
 from adversary_gate.integrations.gitevidence import EvidenceError, prepare
 from adversary_gate.integrations import mcp_server
+from adversary_gate.verifiers.discovery import discover_claims
 
 HAS_COVERAGE = importlib.util.find_spec("coverage") is not None
 HAS_MCP = importlib.util.find_spec("mcp") is not None
@@ -256,6 +257,39 @@ class TestGitEvidence(unittest.TestCase):
             status = subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
                                     capture_output=True, text=True).stdout
             self.assertEqual(sorted(status.split()), sorted(["M", "calc.py", "??", "extra.py"]))
+
+    def test_the_report_holds_only_the_changed_lines(self):
+        """Measured on more-itertools: ``coverage json --show-contexts`` took 193 s
+        and wrote 312 MB -- every line of every file, each with every test that
+        ran it -- while discovery and diff coverage read only the changed lines.
+        Read from the coverage database instead: the changed files, their
+        executed lines, contexts for the changed lines only."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable)
+            report = json.loads(evidence.coverage.read_text())
+            self.assertEqual(sorted(report["files"]), ["calc.py"])  # test files are not in the diff
+            changed = {int(n) for n in report["files"]["calc.py"]["contexts"]}
+            diff_added = {i + 1 for i, line in enumerate(_clean_patch(CALC).splitlines())
+                          if line not in CALC.splitlines()}
+            self.assertTrue(changed and changed <= diff_added, (changed, diff_added))
+            self.assertTrue(report["files"]["calc.py"]["executed_lines"])
+
+    def test_a_change_no_test_runs_still_has_a_usable_report(self):
+        """With only changed files in the report, a change no test executes leaves
+        no context anywhere -- which used to mean "contexts were not recorded"."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "unused.py").write_text("def never():\n    return 1\n")
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable)
+            report = json.loads(evidence.coverage.read_text())
+            claims, detail = discover_claims(evidence.diff.read_text(), report,
+                                             evidence.baseline, evidence.patch)
+            self.assertEqual(claims, [])
+            self.assertEqual(detail["tests_found"], 0)
 
     def test_unknown_ref_is_an_evidence_error(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -51,6 +51,15 @@ quando esta seção vira uma com versão e data.
 - **AG-035** — o arquivo `.git` de uma worktree ou submódulo não conta mais como
   código estrangeiro alterado.
 
+### Desempenho
+
+- **`verify_repo` (MCP) não gera mais `coverage json --show-contexts`.** Ele
+  escrevia toda linha de todo arquivo medido com todo teste que a executou —
+  no `more-itertools`, 193 s e 312 MB — para um relatório do qual descoberta
+  e cobertura de diff só leem as linhas alteradas. Agora lê o banco do
+  coverage direto, só para os arquivos e linhas do diff (0,3 s). Medido em
+  duas reversões reais: 411 → 278 s e 412 → 332 s, mesmas decisões.
+
 ---
 
 ## [2.10.0] — 2026-10-05

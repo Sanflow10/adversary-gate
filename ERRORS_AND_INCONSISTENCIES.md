@@ -276,9 +276,13 @@ nenhum gate por testes poderia bloquear.
 **Medido também, ainda aberto (próximas mudanças):**
 
 * **Custo.** 230–615 s por chamada no `more-itertools`, contra 50 s da suíte
-  sozinha. Cada claim roda 3× no baseline e 3× no patch, **um processo pytest
-  por execução**, e cada processo recoleta o arquivo de testes. Num repositório
-  de 4 arquivos, uma chamada abriu 12 interpretadores.
+  sozinha. A hipótese inicial (claims repetidas, um processo por execução) foi
+  **medida e estava errada** como causa principal: numa reversão real, 40 % era
+  `coverage json` (193 s, 312 MB), 37 % a rodada sob cobertura e 21 % a suíte
+  colateral. O `coverage json` foi trocado por uma leitura das linhas alteradas
+  no banco do coverage (0,3 s): 411 → 278 s. Restam a rodada sob cobertura
+  (~3× a suíte, inerente aos contextos por teste) e, com muitas claims, as
+  repetições por processo.
 * **Correção com teste novo nunca é `fix_proven`.** O teste que o patch
   adiciona é `discarded` (documentado, README §AG-030): não é executado contra o
   código do baseline, então o fluxo comum — corrigir e acrescentar o teste de
