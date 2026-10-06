@@ -52,6 +52,18 @@ quando esta seção vira uma com versão e data.
   claims que falha de qualquer jeito, e arquivos grandes não deixam todo
   mutante "natimorto". O `reason` separa mutante morto por limite.
 
+### Adicionado
+
+- **`next_steps`** no artefato e no `verify_repo` (MCP): o que transformaria
+  um resultado em `MERGE`, em ações que um agente executa — cobrir linhas,
+  matar um mutante nomeado, adicionar um teste novo, corrigir o código, pedir
+  revisão humana de um teste do baseline alterado, subir um limite. Nunca
+  sugere editar teste do baseline, harness, piso ou política.
+- **`--census-min-mutants N` (experimental, padrão 0 = desligado):** quando a
+  mutação cobriu todos os pontos da mudança e todos morreram, julga a razão
+  exata em vez do limite de Wilson. Detalhes e a validação em 24 execuções
+  reais no ledger, seção 16.
+
 ---
 
 ## [2.11.0] — 2026-10-05

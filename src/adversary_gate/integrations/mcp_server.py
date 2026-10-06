@@ -91,6 +91,10 @@ def _summary(result: Dict[str, Any]) -> Dict[str, Any]:
         "suite_strength": payload.get("suite_strength"),
         "suite_strength_lower": payload.get("suite_strength_lower"),
         "triage": (payload.get("execution") or {}).get("triage"),
+        # What would turn this into a MERGE, in actions a coding agent can take:
+        # fix_code, cover lines, kill a named mutant, add a *new* test -- never
+        # edit a baseline test, a harness file or a floor.
+        "next_steps": payload.get("next_steps", []),
         "how_to_read": (
             "merge: every claim executed and cleared the floors -- permission for a "
             "human to look, not to ship. block: something broke; fix the code, not "
@@ -136,9 +140,13 @@ def verify_repo(
 
     Returns ``decision`` (merge / block / inconclusive), ``mergeable``,
     ``fix_proven``, ``reason``, per-claim results with the oracle used,
-    ``diff_coverage``, ``suite_strength`` and the full artefact. merge permits
-    a human review, not a release; block means fix the code, not the tests;
-    inconclusive means something was not measured -- say what.
+    ``diff_coverage``, ``suite_strength``, ``next_steps`` and the full
+    artefact. merge permits a human review, not a release; block means fix the
+    code, not the tests; inconclusive means something was not measured -- say
+    what. ``next_steps`` lists what would earn a MERGE (cover these lines, kill
+    this surviving mutant, add a new test, fix the code); do them and call
+    again. It never asks you to edit an existing test, a harness file or a
+    floor, and doing so does not help: the baseline's tests are the oracle.
     """
     try:
         policy = policy_args()
@@ -211,7 +219,9 @@ def build_server():
     instructions = (
         "Call verify_repo before reporting a code change as done. merge: a human may "
         "look; block: fix the code, not the tests; inconclusive: say what was not "
-        "measured. Policy, baseline and interpreter are the operator's (gate_policy)."
+        "measured. Follow next_steps (cover lines, kill a named mutant, add a new "
+        "test) and call again; never edit existing tests to get there. Policy, "
+        "baseline and interpreter are the operator's (gate_policy)."
     )
     try:
         server = Server("adversary-gate", instructions=instructions, version=__version__)

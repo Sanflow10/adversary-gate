@@ -357,3 +357,53 @@ exige (AG-023), e mensagens de erro novas raramente são executadas por teste.
 O comportamento é o documentado; o efeito prático é que, em projetos reais,
 correções pequenas sempre voltam para revisão humana. Os pisos são decisão do
 mantenedor e não foram alterados.
+
+## 16. Contagem completa (experimental, desligada) e `next_steps`
+
+**Motivação:** em 32 execuções reais, nenhuma correção legítima pequena chegava
+a `MERGE`. Uma correção de 3 a 5 linhas gera 2 ou 3 mutantes, e o piso de
+Wilson a 80 % (AG-023) exige 5 mortos. Mas abaixo do orçamento o gate testa
+**todos** os pontos mutáveis — uma contagem completa, não uma amostra.
+
+**`--census-min-mutants N` (padrão 0 = desligado).** Quando todo ponto mutável
+da mudança foi executado, a força é a razão exata em vez do limite inferior.
+Só vale se: nada foi cortado pelo orçamento; toda linha executável alterada tem
+um ponto (linhas sem operador ganham um mutante de instrução: apagar, `return
+None`, negar o `if`); nenhum mutante natimorto; **todos mortos**; e pelo menos
+N mutantes.
+
+**O que a validação pegou antes de qualquer commit:** na primeira versão, a
+reversão real de `d71c4ad` (bug reintroduzido) deu **`MERGE`**. Quatro
+mutantes de instrução (grosseiros, fáceis de matar) morreram, e o único
+mutante de operador que imitava o bug real (`and` → `or`) sobreviveu: 4/5 =
+0,8 ≥ 0,75. Dois erros de desenho, corrigidos e testados: (1) numa contagem
+completa um sobrevivente é um ponto cego conhecido, não ruído — exige todos
+mortos; (2) mutantes de instrução nunca entram numa amostra, só provam que a
+contagem cobre a mudança. Testes: `TestCensusIsNotASample`.
+
+**Validação final (24 execuções reais, mínimo 1, a configuração mais
+permissiva):** reversões 7 `BLOCK` + 1 `INCONCLUSIVE`, **0 `MERGE`**;
+correções 1 `MERGE` (`cca3294`), 6 `INCONCLUSIVE`, 1 `BLOCK` (AG-038); correções
+com o teste novo esvaziado (chama o código, não confere nada) 6 `INCONCLUSIVE`,
+1 `BLOCK`, 1 `MERGE` (`cca3294`). Esse último `MERGE` é de código correto (a
+correção real), com `fix_proven: false` — o teste falso não recebeu crédito; o
+`MERGE` veio dos testes que o projeto já tinha, que matam o único mutante da
+linha. Nenhum bug passou; um teste inútil passaria junto.
+
+**Uma falha do próprio experimento, registrada:** na primeira rodada das
+variantes esvaziadas o harness usava o commit **já corrigido** como baseline;
+o diff não tinha código, e as 16 execuções não testaram nada. Achado porque a
+variante de `d71c4ad`, idêntica à correção, deu resultado diferente dela.
+
+**Decisão do mantenedor:** a contagem completa fica **desligada por padrão**,
+documentada como experimental. Com mínimo 3 ela não muda nada neste conjunto;
+com mínimo 1, uma correção. "1 mutante morto de 1 não é forte" continua
+verdadeiro no padrão.
+
+**`next_steps`** (padrão, não muda decisão). Todo resultado não-`MERGE` traz o
+que o transformaria em `MERGE`, numa lista fechada de ações: `fix_code`,
+`cover` (arquivo e linhas), `kill_mutant` (arquivo, linha, mutação),
+`add_test`, `human_review_test_edit` (AG-038), `raise_limit`, `see_reason`.
+Nunca sugere editar teste do baseline, arquivo de harness, piso ou política
+(teste: `TestNextSteps`). Nas variantes esvaziadas reais ele apontou o mutante
+sobrevivente e as linhas sem teste em cada caso.

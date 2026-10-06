@@ -176,6 +176,198 @@ class TestTheFloorEndToEnd(unittest.TestCase):
             self.assertEqual(code, EXIT_USAGE)
 
 
+class TestCensusIsNotASample(unittest.TestCase):
+    """When every mutation site of the change was executed, the ratio is exact.
+
+    The Wilson interval (AG-023) bounds a *sample*. Below the budget the gate
+    mutates every site -- a census -- and treating 3/3 as a sample of 3 kept
+    every small real fix out of MERGE (more-itertools: 3/3 -> 0.65, 2/2 ->
+    0.55). A census only counts when it covers the change: every changed
+    executable line has a site, nothing was cut by the budget, nothing was
+    stillborn. Off by default (``--census-min-mutants 0``): the public claim
+    "1 of 1 is not strong" holds until the maintainer chooses otherwise.
+    """
+
+    def test_off_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            code, payload = _cli(root)
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertFalse(payload["mutation"]["census"]["exact"])
+
+    def test_a_complete_census_is_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            code, payload = _cli(root, "--census-min-mutants", "1")
+            self.assertEqual(code, EXIT_MERGE, payload)
+            census = payload["mutation"]["census"]
+            self.assertTrue(census["exact"], census)
+            self.assertEqual(payload["suite_strength_lower"], 1.0)
+
+    def test_the_minimum_keeps_wilson_below_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            code, payload = _cli(root, "--census-min-mutants", "3")
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertIn("minimum", payload["mutation"]["census"]["why_not"])
+
+    def test_lines_without_an_operator_get_a_site_and_must_be_killed(self):
+        """The AG-018 shape: one measured line must not vouch for unmeasured ones."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            patched = (root / "patch" / "calc.py").read_text().replace(
+                "def sub(a, b):\n", "def sub(a, b):\n    LOG.append(a)\n"
+            )
+            (root / "patch" / "calc.py").write_text("LOG = []\n\n\n" + patched)
+            (root / "baseline" / "calc.py").write_text("LOG = []\n\n\n" + CALC)
+            code, payload = _cli(root, "--census-min-mutants", "1")
+            self.assertNotEqual(code, EXIT_MERGE, payload["reason"])
+            kinds = {m["replaces"] for m in payload["mutation"]["mutants"]}
+            self.assertIn("pass", kinds)  # the statement was deleted as a mutant
+
+    def test_a_survivor_in_a_census_is_a_known_blind_spot(self):
+        """Measured on more-itertools d71c4ad, bug reintroduced: four coarse
+        line-level mutants killed, the one operator mutant that looked like the
+        real bug (``and`` -> ``or``) survived, 4/5 = 0.8 cleared 0.75 -> MERGE on
+        a real bug. A census is exact both ways: one survivor is a named line
+        the tests cannot see, not sampling noise."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            body = (root / "patch" / "calc.py").read_text().replace(
+                "def sub(a, b):\n    return a - b\n",
+                "def sub(a, b):\n    if a > 0 and b > 0:\n        return a - b\n    return a - b\n",
+            )
+            (root / "patch" / "calc.py").write_text(body)
+            code, payload = _cli(root, "--census-min-mutants", "1")
+            self.assertNotEqual(code, EXIT_MERGE, payload["reason"])
+            self.assertFalse(payload["mutation"]["census"]["exact"])
+            self.assertIn("survived", payload["mutation"]["census"]["why_not"])
+
+    def test_coarse_mutants_never_pad_the_sample(self):
+        """Outside a census, statement-level mutants are easy kills: they must not count.
+
+        ``add`` now has no operator (``sum``), so it only gets a coarse
+        ``return None`` site, which the test kills; ``sub`` gains a guard whose
+        operator mutants the test cannot see. With the coarse kill counted, the
+        sample would look stronger than the operator evidence it rests on.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            body = (root / "patch" / "calc.py").read_text().replace(
+                "return (a + b)", "return sum((a, b))"
+            ).replace(
+                "def sub(a, b):\n    return a - b\n",
+                "def sub(a, b):\n    if a > 0 or b > 0:\n        return a - b\n    return a - b\n",
+            )
+            (root / "patch" / "calc.py").write_text(body)
+            _, with_census = _cli(root, "--census-min-mutants", "1")
+            _, without = _cli(root)
+            kinds = {m["replaces"] for m in with_census["mutation"]["mutants"]}
+            self.assertIn("None", kinds)  # the coarse site exists...
+            self.assertFalse(with_census["mutation"]["census"]["exact"])
+            self.assertEqual(  # ...and does not enter the ratio
+                (with_census["mutation"]["mutants_counted"], with_census["mutation"]["mutants_killed"]),
+                (without["mutation"]["mutants_counted"], without["mutation"]["mutants_killed"]),
+            )
+
+    def test_a_budget_cut_is_a_sample(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            _, payload = _cli(root, "--census-min-mutants", "1", "--mutation-max", "3")
+            census = payload["mutation"]["census"]
+            self.assertFalse(census["exact"])
+            self.assertIn("budget", census["why_not"])
+
+    def test_an_assertion_free_new_test_cannot_buy_merge(self):
+        """Goodhart: the fix is real, the 'test' calls the code and checks nothing."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            (root / "baseline" / "calc.py").write_text(CALC.replace("return a + b", "return a - b"))
+            for side in ("baseline", "patch"):
+                (root / side / "test_calc.py").write_text("from calc import add\n\n\ndef test_ops():\n    add(2, 3)\n")
+            code, payload = _cli(root, "--census-min-mutants", "1")
+            self.assertNotEqual(code, EXIT_MERGE, payload["reason"])
+            self.assertFalse(payload["fix_proven"])
+
+
+ALLOWED_STEPS = {"fix_code", "cover", "kill_mutant", "add_test", "human_review_test_edit",
+                 "raise_limit", "see_reason"}
+
+
+class TestNextSteps(unittest.TestCase):
+    """An INCONCLUSIVE an agent can act on, without being told to bend the oracle.
+
+    The answer says what is missing in a form a coding agent can satisfy --
+    which lines no test runs, which mutant survived -- and never suggests the
+    things the gate exists to refuse: editing a baseline test, a harness
+    file, a floor or the policy.
+    """
+
+    def _assert_safe(self, steps, root):
+        for step in steps:
+            self.assertIn(step["action"], ALLOWED_STEPS, step)
+            target = step.get("file", "")
+            if step["action"] in ("cover", "kill_mutant"):
+                self.assertFalse(target.startswith("test_") or "/test" in target, step)
+        text = json.dumps(steps).lower()
+        for forbidden in ("conftest", "pytest.ini", "pyproject", "--coverage-floor",
+                          "--suite-strength-floor", "adversary_gate_policy"):
+            self.assertNotIn(forbidden, text)
+
+    def test_merge_has_nothing_to_do(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            _, payload = _cli(root)
+            self.assertEqual(payload["next_steps"], [])
+
+    def test_a_survivor_names_the_line_and_the_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            for side in ("baseline", "patch"):
+                (root / side / "test_calc.py").write_text(
+                    TESTS.replace("    assert mod(7, 3) == 1\n", "")
+                )
+            _, payload = _cli(root)
+            kills = [s for s in payload["next_steps"] if s["action"] == "kill_mutant"]
+            self.assertEqual([(s["file"], s["line"]) for s in kills], [("calc.py", 18)], payload["next_steps"])
+            self._assert_safe(payload["next_steps"], root)
+
+    def test_uncovered_lines_are_listed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            cov = json.loads((root / "cov.json").read_text())
+            cov["files"]["calc.py"]["executed_lines"] = [1, 2, 5, 6, 9, 10]
+            (root / "cov.json").write_text(json.dumps(cov))
+            _, payload = _cli(root)
+            cover = [s for s in payload["next_steps"] if s["action"] == "cover"]
+            self.assertEqual(cover, [{"action": "cover", "file": "calc.py", "lines": [14, 18],
+                                      "why": cover[0]["why"]}])
+            self._assert_safe(payload["next_steps"], root)
+
+    def test_a_regression_says_fix_the_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            (root / "patch" / "calc.py").write_text(
+                (root / "patch" / "calc.py").read_text().replace("(a % b)", "(a * b)")
+            )
+            _, payload = _cli(root)
+            self.assertEqual(payload["decision"], "block")
+            self.assertEqual({s["action"] for s in payload["next_steps"]}, {"fix_code"})
+            self._assert_safe(payload["next_steps"], root)
+
+
 class TestFixedIsNotNoRegression(unittest.TestCase):
     def _classify(self, base: ExecState):
         failures = 1 if base is ExecState.FAIL else 0

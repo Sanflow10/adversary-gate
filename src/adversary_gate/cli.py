@@ -43,7 +43,7 @@ from adversary_gate.verifiers.strength import (
     classify_changes,
     measure_mutation_score,
 )
-from adversary_gate.verifiers.testpaths import set_test_support
+from adversary_gate.verifiers.testpaths import is_test_path, set_test_support
 
 EXIT_MERGE = 0
 EXIT_BLOCK = 1
@@ -297,6 +297,89 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
         "no claim to verify: discovery found no test that executed a "
         "changed source line, and none was named"
     )
+
+
+#: The only things ``next_steps`` may ask for. None of them touches what the
+#: gate exists to refuse: a baseline test, a harness file, a floor, the policy.
+NEXT_STEP_ACTIONS = frozenset({
+    "fix_code", "cover", "kill_mutant", "add_test", "human_review_test_edit",
+    "raise_limit", "see_reason",
+})
+
+
+def _uncovered(args) -> Dict[str, List[int]]:
+    """Changed source lines the coverage report says no test executed."""
+    if not (args.diff and args.coverage_json):
+        return {}
+    try:
+        changed = validate_diff(Path(args.diff).read_text(encoding="utf-8", errors="replace"))
+        files = json.loads(Path(args.coverage_json).read_text(encoding="utf-8")).get("files", {})
+    except (OSError, ValueError):
+        return {}
+    out: Dict[str, List[int]] = {}
+    for path, lines in changed.items():
+        if is_test_path(path):
+            continue
+        executed = set(files.get(path, {}).get("executed_lines", []))
+        missing = sorted(set(lines) - executed)
+        if missing:
+            out[path] = missing
+    return out
+
+
+def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation) -> List[Dict[str, Any]]:
+    """What would turn this answer into a MERGE, in a form a coding agent can act on.
+
+    Empty on MERGE. Built only from :data:`NEXT_STEP_ACTIONS`: fix the code,
+    cover named lines, kill a named surviving mutant, add a *new* test, have a
+    human review a test edit the baseline oracle refused, raise a limit that
+    killed a run, or read the reason. The baseline's tests are the oracle and
+    the floors are the operator's: neither is ever an item here.
+    """
+    if decision is Decision.MERGE:
+        return []
+    steps: List[Dict[str, Any]] = []
+    for v in verdicts:
+        if v.outcome is Outcome.REFUTED:
+            if v.oracle == "baseline" and "behaviour change is intended" in v.reason:
+                steps.append({"action": "human_review_test_edit", "file": v.claim.test_path,
+                              "why": "the patch changed what a baseline test checks; only a human can accept that"})
+            else:
+                steps.append({"action": "fix_code", "test": f"{v.claim.test_path}::{v.claim.test_id}",
+                              "why": v.reason})
+        elif v.outcome is Outcome.UNVERIFIED:
+            steps.append({"action": "see_reason", "test": f"{v.claim.test_path}::{v.claim.test_id}",
+                          "why": v.reason})
+    if full_codes is not None and not any(v.outcome is Outcome.REFUTED for v in verdicts):
+        base_code, patch_code = full_codes
+        if base_code == 0 and patch_code != 0:
+            steps.append({"action": "fix_code", "why": "the full suite passes on the baseline and fails on the patch"})
+        elif (base_code < 0 and patch_code < 0) or (base_code == patch_code and base_code in (2, 3, 4)):
+            steps.append({"action": "raise_limit",
+                          "flags": ["--full-suite-timeout", "--full-suite-memory"],
+                          "why": "the collateral full suite could not run on either side"})
+    if decision is Decision.BLOCK:
+        return steps
+    if not verdicts:
+        steps.append({"action": "add_test",
+                      "why": "no test executed a changed line; add a new test that does "
+                             "(new tests only: the baseline's tests are the oracle)"})
+    uncovered = _uncovered(args)
+    if coverage_ratio is not None and coverage_ratio < args.coverage_floor and uncovered:
+        for path, lines in sorted(uncovered.items()):
+            steps.append({"action": "cover", "file": path, "lines": lines,
+                          "why": "changed lines no test executes; a new or existing test must run them"})
+    for m in (mutation or {}).get("mutants", []) or []:
+        if m.get("result") == "survived" and not is_test_path(str(m.get("file", ""))):
+            steps.append({"action": "kill_mutant", "file": m.get("file"), "line": m.get("line"),
+                          "mutation": m.get("replaces"),
+                          "why": "this change to the patched line went unnoticed by every claim"})
+    census = (mutation or {}).get("census") or {}
+    if not steps and (mutation or {}).get("measured") is False and (mutation or {}).get("reason"):
+        steps.append({"action": "see_reason", "why": (mutation or {}).get("reason")})
+    if not steps and census.get("why_not") and decision is Decision.INCONCLUSIVE:
+        steps.append({"action": "see_reason", "why": census["why_not"]})
+    return [s for s in steps if s["action"] in NEXT_STEP_ACTIONS]
 
 
 def _run_record(verdict: GateVerdict) -> Dict[str, Any]:
@@ -608,6 +691,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         metavar="DIR",
         help="where the collateral full-suite run happens ('' disables it)",
+    )
+    parser.add_argument(
+        "--census-min-mutants",
+        type=int,
+        default=0,
+        metavar="N",
+        help="when every mutation site of the change was executed (nothing cut by "
+        "--mutation-max, every changed executable line with a site, no stillborn "
+        "mutant) and there are at least N, judge the exact ratio instead of the "
+        "Wilson lower bound: an interval bounds a sample, and a census is not one. "
+        "0 (default) keeps the interval always.",
     )
     parser.add_argument(
         "--full-suite-timeout",
@@ -929,6 +1023,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 "survivors": [],
                 "mutants_counted": 0,
                 "stillborn": 0,
+                "census": {"exact": False, "why_not": "no mutation run"},
             }
             if all_verified and (
                 mutation_detail["foreign_changed_files"]
@@ -959,6 +1054,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     for claim in claims
                 }),
                 run_kwargs=run_options,
+                census_min=max(0, args.census_min_mutants),
                 **limits,
             )
             if strength_obj.is_measured:
@@ -1107,6 +1203,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 decision, verdicts, decisive, full_codes, args,
                 coverage_ratio=coverage_ratio, strength_judged=strength_judged,
                 strength_unverified=strength_unverified, mutation=mutation_detail,
+            ),
+            "next_steps": _next_steps(
+                decision, verdicts, full_codes, args,
+                coverage_ratio=coverage_ratio, mutation=mutation_detail,
             ),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": len(verdicts),

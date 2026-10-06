@@ -46,6 +46,7 @@ which :mod:`cli` measures separately.
 
 from __future__ import annotations
 
+import ast
 import difflib
 import io
 import keyword
@@ -527,6 +528,68 @@ def _mutants_in(source: str, limit: int) -> List[Mutation]:
     return found
 
 
+_COMPOUND = (ast.If, ast.While, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, ast.Try,
+             ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+#: Statements that carry no behaviour of their own to break.
+_INERT = (ast.Pass, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)
+
+
+def _statement_sites(source: str, edited: set, operator_rows: set) -> Tuple[Dict[int, List[Mutation]], List[int]]:
+    """Census support: a site for every changed statement that has no operator site.
+
+    Returns ``(sites by line, uncovered lines)``. A changed statement -- the
+    lines it spans, or a compound statement's header -- needs at least one
+    mutation site inside it for a census to cover the change. Statements the
+    operator scan already reached are left alone; for the others the change
+    itself is broken: a ``return``'s value becomes ``None``, an ``if``/``while``
+    condition is negated, a ``for`` iterates nothing, any other statement is
+    deleted (``pass``). Headers of ``def``/``class``/``with``/``try`` have no
+    such mutation: their lines come back as *uncovered*, and a census that
+    leaves a changed line uncovered is not one. Docstrings, ``pass`` and
+    imports carry nothing to break and need no site.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return {}, sorted(edited)
+    sites: Dict[int, List[Mutation]] = {}
+    uncovered: List[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.stmt) or isinstance(node, _INERT):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue  # a docstring
+        if isinstance(node, _COMPOUND):
+            body = getattr(node, "body", None) or []
+            last = (body[0].lineno - 1) if body else node.lineno
+            span = set(range(node.lineno, max(node.lineno, last) + 1))
+        else:
+            span = set(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+        if not (span & edited) or (span & operator_rows):
+            continue
+        mutation: Optional[Mutation] = None
+        if isinstance(node, (ast.If, ast.While)):
+            text = ast.get_source_segment(source, node.test)
+            if text is not None:
+                mutation = ((node.test.lineno, node.test.col_offset),
+                            (node.test.end_lineno, node.test.end_col_offset), f"not ({text})")
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            mutation = ((node.iter.lineno, node.iter.col_offset),
+                        (node.iter.end_lineno, node.iter.end_col_offset), "()")
+        elif isinstance(node, ast.Return) and node.value is not None and not (
+            isinstance(node.value, ast.Constant) and node.value.value is None
+        ):
+            mutation = ((node.value.lineno, node.value.col_offset),
+                        (node.value.end_lineno, node.value.end_col_offset), "None")
+        elif not isinstance(node, _COMPOUND) and not isinstance(node, ast.Return):
+            mutation = ((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset), "pass")
+        if mutation is None:
+            uncovered.extend(sorted(span & edited))
+        else:
+            sites.setdefault(mutation[0][0], []).append(mutation)
+    return sites, sorted(set(uncovered))
+
+
 def _spread(by_line: Mapping[Tuple[str, int], List[Mutation]], limit: int) -> List[Tuple[str, Mutation]]:
     """At most ``limit`` sites, one per changed line before any line gets two.
 
@@ -581,8 +644,16 @@ def measure_mutation_score(
     changed_paths: Optional[Iterable[str]] = None,
     targets: Optional[Sequence[str]] = None,
     run_kwargs: Optional[Mapping[str, Any]] = None,
+    census_min: int = 0,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
+
+    ``census_min`` > 0 turns on the census rule: when every mutation site of
+    the change was executed -- nothing cut by the budget, every changed
+    executable line with a site, no stillborn mutant -- and there are at least
+    ``census_min`` of them, the score is the exact ratio, not a Wilson lower
+    bound: an interval bounds a sample, and this was not one. Line-level
+    sites (``_statement_sites``) are generated only then.
 
     Returns the score plus a detail dict for the evidence artefact, because a
     strength number with no survivor list cannot be audited: the previous
@@ -619,6 +690,7 @@ def measure_mutation_score(
         "survivors": [],
         "mutants_counted": 0,
         "stillborn": 0,
+        "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
     }
     changed = list(detail["changed_files"])  # type: ignore[arg-type]
     foreign = list(detail["foreign_changed_files"])  # type: ignore[arg-type]
@@ -656,6 +728,12 @@ def measure_mutation_score(
 
     originals: Dict[str, str] = {}
     by_line: Dict[Tuple[str, int], List[Mutation]] = {}
+    uncovered_lines: List[str] = []
+    #: Statement-level sites (census only). They prove a census covers the
+    #: change; they never count toward a sample -- deleting a statement is an
+    #: easy kill, and counted it diluted the one operator mutant that looked
+    #: like the real bug (more-itertools d71c4ad: 4/5 -> MERGE on a real bug).
+    coarse: set = set()
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -670,9 +748,18 @@ def measure_mutation_score(
             continue
         # Scan generously, then keep only sites on lines this patch wrote,
         # grouped by line.
+        operator_rows = set()
         for site in _mutants_in(source, 10_000):
             if site[0][0] in edited:
                 by_line.setdefault((rel, site[0][0]), []).append(site)
+                operator_rows.add(site[0][0])
+        if census_min > 0:
+            extra, missing = _statement_sites(source, edited, operator_rows)
+            for row, sites in extra.items():
+                by_line.setdefault((rel, row), []).extend(sites)
+                coarse.update((rel, site) for site in sites)
+            uncovered_lines.extend(f"{rel}:{n}" for n in missing)
+    total_sites = sum(len(v) for v in by_line.values())
     plan = _spread(by_line, max_mutants)
 
     if not plan:
@@ -702,6 +789,7 @@ def measure_mutation_score(
                 "file": rel,
                 "line": start[0],
                 "replaces": replacement or "<deleted>",
+                "kind": "statement" if (rel, (start, end, replacement)) in coarse else "operator",
             }
             detail["mutants"].append(entry)  # type: ignore[union-attr]
             if mutant_source == original:
@@ -744,7 +832,32 @@ def measure_mutation_score(
 
         detail["survivors"] = survivors
 
-    result = calculate_mutation_score(counted, killed, confidence)
+    entries = detail["mutants"]  # type: ignore[assignment]
+    odd = [m for m in entries if m.get("result") not in ("killed", "survived")]  # type: ignore[union-attr]
+    why_not = ""
+    if census_min <= 0:
+        why_not = "off (--census-min-mutants 0)"
+    elif total_sites > len(plan):
+        why_not = f"budget cut the sample: {total_sites} sites, {len(plan)} executed"
+    elif uncovered_lines:
+        why_not = "changed lines with no mutation site: " + ", ".join(uncovered_lines[:8])
+    elif odd:
+        why_not = f"{len(odd)} mutant(s) neither killed nor survived (stillborn, no-op or harness error)"
+    elif counted < census_min:
+        why_not = f"{counted} mutant(s), below the minimum of {census_min} for a census"
+    elif killed < counted:
+        # Exact both ways: with every site enumerated, a survivor is not
+        # sampling noise but a named line the tests cannot see.
+        why_not = f"{counted - killed} mutant(s) survived: in a census a survivor is a known blind spot"
+    exact = not why_not
+    if not exact:
+        # A sample: operator mutants only -- statement deletions are easy
+        # kills and would pad it.
+        counted = sum(1 for m in entries if m.get("kind") == "operator" and m.get("result") in ("killed", "survived"))  # type: ignore[union-attr]
+        killed = sum(1 for m in entries if m.get("kind") == "operator" and m.get("result") == "killed")  # type: ignore[union-attr]
+    detail["census"] = {"exact": exact, "sites": total_sites, "minimum": census_min,
+                        **({} if exact else {"why_not": why_not})}
+    result = calculate_mutation_score(counted, killed, 0.0 if exact else confidence)
     if result.is_measured:
         note = ""
         if foreign:
