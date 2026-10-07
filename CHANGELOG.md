@@ -11,12 +11,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0` e `v2.10.0`**, mais a
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0` e `v2.11.0`**, mais a
 flutuante `v2`, que o Release move para a 2.x mais nova. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
-`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.11.0` é
+`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.12.0` é
 publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
-partir do commit que a contém — se `v2.11.0` não aparece em *Releases*, o
+partir do commit que a contém — se `v2.12.0` não aparece em *Releases*, o
 workflow ainda não rodou, e esta seção ainda é uma promessa.
 
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
@@ -38,6 +38,18 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [2.12.0] — 2026-10-07
+
+O gate operado como agente até o `MERGE`. Mutantes rodam só as claims (AG-039);
+`next_steps` diz o que transformaria cada resultado em `MERGE`; mutante que trava
+os testes conta como morto (AG-042); comentário deixou de contar como linha sem
+teste (AG-040); contagem completa experimental, desligada por padrão. Validação
+de 06/out, 40 execuções reais do `more-itertools` (padrão e
+`--census-min-mutants 1`): nenhum bug reintroduzido chegou a `MERGE`, e 7 de 8
+correções reais foram provadas (`fix_proven`). Detalhes no ledger, seções 16 e 17.
+
 ### Desempenho
 
 - A checagem de que os testes antigos de um arquivo ainda passam roda **uma vez
@@ -51,6 +63,11 @@ quando esta seção vira uma com versão e data.
   teste inteiros: a força não pode mais ser inflada por um teste fora das
   claims que falha de qualquer jeito, e arquivos grandes não deixam todo
   mutante "natimorto". O `reason` separa mutante morto por limite.
+- **AG-040** — linhas adicionadas em branco ou só de comentário (em `.py`) não
+  contam mais como linhas alteradas sem teste na cobertura de diff.
+- **AG-042** — mutante que faz os testes nunca terminarem conta como morto,
+  desde que as claims sem mutação terminem em menos de 1/3 do limite
+  (`reference_run` no artefato); senão continua natimorto.
 
 ### Adicionado
 
@@ -63,14 +80,6 @@ quando esta seção vira uma com versão e data.
   mutação cobriu todos os pontos da mudança e todos morreram, julga a razão
   exata em vez do limite de Wilson. Detalhes e a validação em 24 execuções
   reais no ledger, seção 16.
-
-### Corrigido
-
-- **AG-040** — linhas adicionadas em branco ou só de comentário (em `.py`) não
-  contam mais como linhas alteradas sem teste na cobertura de diff.
-- **AG-042** — mutante que faz os testes nunca terminarem conta como morto,
-  desde que as claims sem mutação terminem em menos de 1/3 do limite
-  (`reference_run` no artefato); senão continua natimorto.
 
 ---
 
