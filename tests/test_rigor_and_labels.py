@@ -16,8 +16,10 @@ the patch *proved* a fix.
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -91,6 +93,29 @@ def _cli(root: Path, *extra: str, test_id: str = "test_ops"):
         ])
     text = out.getvalue()
     return code, (json.loads(text) if text.strip() else None)
+
+
+@functools.lru_cache(maxsize=None)
+def _claims_run_seconds() -> float:
+    """How long one unmutated claims run takes on this machine, now.
+
+    The AG-039/AG-042 tests hinge on wall-clock limits: a hang counts as a
+    kill only if the reference run finishes under a third of ``--timeout``.
+    Fixed limits of 1-3 s failed on a loaded machine (reference 1.025 s
+    against ``--timeout 1``), so those tests scale their limits from the
+    gate's own measurement of the same kind of run, taken with a limit too
+    generous to matter.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        _tree(root, 1)
+        _, payload = _cli(root, "--timeout", "120")
+    return float(payload["mutation"]["reference_run"]["seconds"])
+
+
+def _limit_with_room(factor: float, floor: int) -> int:
+    """A ``--timeout`` the reference run fits ``factor`` times into."""
+    return max(floor, math.ceil(_claims_run_seconds() * factor))
 
 
 class TestWilsonInterval(unittest.TestCase):
@@ -205,9 +230,11 @@ class TestAHangIsAKillWhenTheTestsAreFast(unittest.TestCase):
             return _cli(root, *extra, test_id="test_count")
 
     def test_a_hanging_mutant_counts_as_killed(self):
+        # the reference must finish under a third of the limit; 3x room on top
+        limit = _limit_with_room(9, 3)
         _, payload = self._run(
             "from calc import count_up\n\n\ndef test_count():\n    assert count_up(5) == 10\n",
-            "--timeout", "3",
+            "--timeout", str(limit),
         )
         mutants = payload["mutation"]["mutants"]
         self.assertTrue(any(m["result"] == "killed" and m.get("by") == "timeout" for m in mutants), mutants)
@@ -505,8 +532,10 @@ class TestMutantsRunTheClaimsNotTheirFiles(unittest.TestCase):
         self.assertIn("killed by a limit", payload["mutation"]["reason"])
 
     def test_a_slow_test_outside_the_claims_does_not_make_mutants_stillborn(self):
-        _, payload = self._run("\n\nimport time\n\n\ndef test_slow():\n    time.sleep(1.5)\n",
-                               "--timeout", "1")
+        # the claims fit the limit 3x over; the test outside them never would
+        limit = _limit_with_room(3, 1)
+        _, payload = self._run(f"\n\nimport time\n\n\ndef test_slow():\n    time.sleep({limit + 0.5})\n",
+                               "--timeout", str(limit))
         mutation = payload["mutation"]
         self.assertEqual(mutation["stillborn"], 0, mutation)
         self.assertTrue(mutation["measured"], mutation.get("reason"))
