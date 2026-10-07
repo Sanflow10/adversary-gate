@@ -143,6 +143,7 @@ jobs:
           echo "outcome=${{ steps.gate.outputs.outcome }}"
           test "${{ steps.gate.outputs.decision }}" = "merge"
           test "${{ steps.gate.outputs.outcome }}" = "verified"
+          test "${{ steps.gate.outputs.exit-code }}" = "0"
           test -s evidence.jsonl
 
       # AG-016: a suite that is one command has no node IDs, so the Action
@@ -194,6 +195,9 @@ jobs:
           [ -n "$DECISION" ] || fail "the gate never produced a decision -- check for an exit 3 usage error"
           [ "$DECISION" = "inconclusive" ] || fail "decision is '$DECISION', expected 'inconclusive'"
           [ "$OUTCOME" = "verified" ] || fail "outcome is '$OUTCOME', expected 'verified'"
+          # the output a workflow branches on: 2 is INCONCLUSIVE, not a usage error (3)
+          EXIT_CODE='${{ steps.gate_cmd.outputs.exit-code }}'
+          [ "$EXIT_CODE" = "2" ] || fail "exit-code is '$EXIT_CODE', expected 2"
 
   prepare-evidence:
     # base-sha's plumbing lives in a script so it can be tested without a

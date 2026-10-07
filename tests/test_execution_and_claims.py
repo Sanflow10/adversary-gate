@@ -589,6 +589,15 @@ class TestActionContract(unittest.TestCase):
                      "cpu-seconds", "memory", "pass-env", "env"):
             self.assertRegex(self.text, rf"(?m)^  {re.escape(name)}:\n")
 
+    def test_exit_code_is_an_output_written_by_the_gate_step(self):
+        """A workflow that lets INCONCLUSIVE pass must tell it from a usage error.
+
+        A run that printed no verdict (exit 3/4) still reports
+        ``decision=inconclusive``; only the exit code tells them apart.
+        """
+        self.assertRegex(self.text, r"(?m)^  exit-code:\n(?:.*\n)*?    value: \$\{\{ steps\.gate\.outputs\.exit-code \}\}")
+        self.assertIn('echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"', self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,16 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Adicionado
+
+- **Saída `exit-code` na Action** (0 merge, 1 block, 2 inconclusive, 3/4 erro
+  de uso ou do harness; vazia se a Action parou antes do gate). Um workflow que
+  quer deixar `INCONCLUSIVE` passar onde a medição é impossível (C++, SQL)
+  precisava de `continue-on-error`, que deixa passar `BLOCK` junto; e
+  `decision` não serve para separar, porque uma execução sem veredito (exit
+  3/4) também lê `inconclusive`. Receita no README. Apontado por um leitor do
+  artigo no dev.to.
+
 ---
 
 ## [2.12.0] — 2026-10-07

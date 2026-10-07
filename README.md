@@ -553,6 +553,41 @@ that executed the lines the pull request changed. Name them yourself with
 `claims` (one `path::test` per line) or `test-path` + `test-id` (one id per
 line); either one turns discovery off unless `discover-claims: 'true'`.
 
+**Any non-zero exit fails the step, and that is the safe default.** `BLOCK`
+(1), `INCONCLUSIVE` (2) and a usage or harness error (3/4) all turn the check
+red. Do not add `continue-on-error` and stop there: that lets a `BLOCK` through
+along with everything else. If some pull requests are `INCONCLUSIVE` by nature
+(a change to C++ or SQL, which the gate runs but cannot measure), keep the step
+from failing and branch on the `exit-code` output instead (2.13.0 and later;
+`@main` until then):
+
+```yaml
+      - name: Run AdversaryGate
+        id: gate
+        uses: Sanflow10/adversary-gate@v2
+        continue-on-error: true
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+
+      - name: Act on the decision
+        if: always()
+        env:
+          EXIT_CODE: ${{ steps.gate.outputs.exit-code }}
+        run: |
+          case "$EXIT_CODE" in
+            0) echo "MERGE" ;;
+            2) echo "::warning::INCONCLUSIVE: the gate could not measure this change; a human decides" ;;
+            1) echo "::error::BLOCK"; exit 1 ;;
+            *) echo "::error::the gate did not finish (exit '${EXIT_CODE}')"; exit 1 ;;
+          esac
+```
+
+Branch on `exit-code`, not on `decision`: a run that printed no verdict (exit
+3/4) still reports `decision: inconclusive`, and an empty `exit-code` means the
+Action stopped before the gate ran. Let `2` pass only where you know the gate
+cannot measure the change, for example with `paths:` on a separate workflow;
+everywhere else, leave the default.
+
 **It runs your tests on your Python.** The gate itself lives in a private venv
 on its own 3.12, and your job's `python` is the same before and after the step.
 The tests run on the first `python`/`python3` on `PATH` that can import pytest —
