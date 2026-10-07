@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adversary-gate"
-version = "2.12.0"
+version = "2.13.0"
 description = "Evidence-based verification gate for AI coding agents (fail-closed)"
 readme = "README.md"
 authors = [
