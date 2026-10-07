@@ -124,6 +124,38 @@ def validate_diff(diff_text: str) -> dict[str, set[int]]:
     return files
 
 
+def _non_code_added_lines(diff_text: str) -> dict:
+    """Added lines of ``.py`` files that are blank or comment-only, by path (AG-040).
+
+    Judged from the line's own text in the diff, so only what can never be
+    executed is removed: a docstring or a continuation line still counts,
+    which can only make the ratio lower, never higher.
+    """
+    out: dict = {}
+    path: str | None = None
+    number = 0
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            path = _diff_target(line[4:])
+            continue
+        if line.startswith("--- "):
+            continue
+        if line.startswith("@@"):
+            match = re.search(r"\+(\d+)", line)
+            number = int(match.group(1)) if match else 0
+            continue
+        if path is None or not path.endswith(".py"):
+            continue
+        if line.startswith("+"):
+            text = line[1:].strip()
+            if not text or text.startswith("#"):
+                out.setdefault(path, set()).add(number)
+            number += 1
+        elif line.startswith(" "):
+            number += 1
+    return out
+
+
 def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCoverage:
     changed = validate_diff(diff_text)
     payload = (
@@ -136,11 +168,13 @@ def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCov
     total = 0
     excluded_lines = 0
     excluded_files: list[str] = []
+    non_code = _non_code_added_lines(diff_text)
     for filename, lines in changed.items():
         if is_test_path(filename):
             excluded_lines += len(lines)
             excluded_files.append(filename)
             continue
+        lines = set(lines) - non_code.get(filename, set())
         total += len(lines)
         executed = set(files.get(filename, {}).get("executed_lines", []))
         covered += len(lines & executed)

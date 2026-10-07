@@ -407,3 +407,34 @@ que o transformaria em `MERGE`, numa lista fechada de ações: `fix_code`,
 Nunca sugere editar teste do baseline, arquivo de harness, piso ou política
 (teste: `TestNextSteps`). Nas variantes esvaziadas reais ele apontou o mutante
 sobrevivente e as linhas sem teste em cada caso.
+
+## 17. O gate operado como agente até o MERGE: AG-040 a AG-042
+
+O teste final do `next_steps`: fazer o papel de um agente sobre duas correções
+reais (`6b1907d`, `def2dab`), executar só o que o gate pedir, chamar de novo.
+As duas chegaram a `MERGE` (contagem completa ligada, mínimo 1). O caminho
+expôs três defeitos do próprio gate:
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-040** | Alta — cobertura subestimada | Depois da contagem exata em `6b1907d`, o único pedido era `cover more.py:3134` — a linha `# maxlen=0 cannot store the item...`, um **comentário**. Toda linha adicionada em branco ou só de comentário contava como linha alterada que nenhum teste executa: uma correção que se explica perdia cobertura, e o `next_steps` pedia o impossível. `d992be0` (muitos comentários) media 0,39. | **Corrigido** — em arquivos `.py`, linhas adicionadas vazias ou só de comentário saem da cobertura de diff, julgadas pelo texto no diff; docstrings e linhas de continuação continuam contando (só erra para baixo). Testes: `TestCommentsAreNotUncoveredCode`; dois fixtures antigos que usavam um comentário como "linha adicionada" passaram a usar código. |
+| **AG-041** | Baixa — rótulo | Teste herdado de mixin (`PeekableTests::test_simple_peeking`) aparece como "novo no arquivo": a checagem de existência no baseline não olha herança. O veredito não muda (o arquivo antigo inteiro ainda é conferido). | **Aberto.** |
+| **AG-042** | Média — natimorto falso | `def2dab`: apagar o `raise` dentro de `for second in iterator` faz `one(count())` laçar para sempre; o mutante era morto pelo limite e contava como natimorto, o que impedia a contagem exata. É detecção (o teste nunca passa); ferramentas de mutação contam como morto. A armadilha do AG-039 (uma rodada lenta inteira lida como força perfeita) é por que não se conta às cegas. | **Corrigido** — as claims rodam uma vez sem mutação; só se essa referência terminar em menos de 1/3 do limite, um timeout de mutante conta como morto (`"by": "timeout"`). `reference_run` no artefato. Testes: `TestAHangIsAKillWhenTheTestsAreFast` (inclui a referência lenta, que mantém o natimorto). |
+
+No `6b1907d` o gate também apontou um mutante **equivalente**: `self._index =
+None` depois de `next(self)` não tem efeito com `maxlen=0` (o `__next__` já
+zera o índice). A ação honesta de um agente foi provar a equivalência e remover
+a linha morta — não inventar um teste.
+
+**Revalidação de segurança, 40 execuções reais com AG-040/042:**
+
+| Modo | Bugs reintroduzidos (8) | Correção + teste esvaziado (8) | Correções (8) |
+|---|---|---|---|
+| padrão | 7 `BLOCK`, 1 `INCONCLUSIVE`, **0 `MERGE`** | 1 `MERGE` (`d992be0`) | — |
+| contagem completa, mín. 1 | 7 `BLOCK`, 1 `INCONCLUSIVE`, **0 `MERGE`** | 2 `MERGE` (`def2dab`, `cca3294`) | 2 `MERGE` (`def2dab`, `cca3294`) |
+
+Os `MERGE` das variantes esvaziadas são todos de **código correto** (a correção
+real) com `fix_proven: false`: o teste falso não recebeu crédito, e a
+aprovação veio dos testes que o projeto já tinha, que cobrem e matam os
+mutantes das linhas alteradas. Nenhum bug passou. Mas um teste que não testa
+nada entra junto **sem aviso** — registrado como próximo item.

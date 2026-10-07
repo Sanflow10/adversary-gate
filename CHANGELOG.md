@@ -64,6 +64,14 @@ quando esta seção vira uma com versão e data.
   exata em vez do limite de Wilson. Detalhes e a validação em 24 execuções
   reais no ledger, seção 16.
 
+### Corrigido
+
+- **AG-040** — linhas adicionadas em branco ou só de comentário (em `.py`) não
+  contam mais como linhas alteradas sem teste na cobertura de diff.
+- **AG-042** — mutante que faz os testes nunca terminarem conta como morto,
+  desde que as claims sem mutação terminem em menos de 1/3 do limite
+  (`reference_run` no artefato); senão continua natimorto.
+
 ---
 
 ## [2.11.0] — 2026-10-05

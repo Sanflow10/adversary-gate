@@ -176,6 +176,53 @@ class TestTheFloorEndToEnd(unittest.TestCase):
             self.assertEqual(code, EXIT_USAGE)
 
 
+class TestAHangIsAKillWhenTheTestsAreFast(unittest.TestCase):
+    """AG-042: a mutant that makes the tests never finish was detected.
+
+    more-itertools def2dab: deleting the ``raise`` inside ``for second in
+    iterator`` makes ``one(count())`` loop forever; the run is killed at the
+    limit and was counted *stillborn*, which kept the census from being exact.
+    Mutation tools count it as killed. The AG-039 trap is why the gate did
+    not: a run killed because the *whole* run was slow says nothing about the
+    mutant. So the claims run once unmutated first; only if that finishes in
+    under a third of the limit is a mutant's timeout the mutant's doing.
+    """
+
+    BASE = "def count_up(n):\n    i = 0\n    total = 0\n    while i < n:\n        total += i\n        i = i + 1\n    return total\n"
+    PATCH = BASE.replace("i = i + 1", "i += 1")
+
+    def _run(self, test_body, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, src in (("baseline", self.BASE), ("patch", self.PATCH)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(test_body)
+            (root / "change.diff").write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -6 +6 @@\n-        i = i + 1\n+        i += 1\n"
+            )
+            (root / "cov.json").write_text(json.dumps({"files": {"calc.py": {"executed_lines": list(range(1, 8))}}}))
+            return _cli(root, *extra, test_id="test_count")
+
+    def test_a_hanging_mutant_counts_as_killed(self):
+        _, payload = self._run(
+            "from calc import count_up\n\n\ndef test_count():\n    assert count_up(5) == 10\n",
+            "--timeout", "3",
+        )
+        mutants = payload["mutation"]["mutants"]
+        self.assertTrue(any(m["result"] == "killed" and m.get("by") == "timeout" for m in mutants), mutants)
+        self.assertEqual(payload["mutation"]["stillborn"], 0)
+
+    def test_a_slow_reference_keeps_timeouts_stillborn(self):
+        _, payload = self._run(
+            "import time\n\nfrom calc import count_up\n\n\ndef test_count():\n"
+            "    time.sleep(1.2)\n    assert count_up(5) == 10\n",
+            "--timeout", "3",
+        )
+        mutants = payload["mutation"]["mutants"]
+        self.assertFalse(any(m.get("by") == "timeout" for m in mutants), mutants)
+
+
 class TestCensusIsNotASample(unittest.TestCase):
     """When every mutation site of the change was executed, the ratio is exact.
 

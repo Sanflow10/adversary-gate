@@ -53,6 +53,7 @@ import keyword
 import math
 import shutil
 import tempfile
+import time
 import tokenize
 from dataclasses import dataclass
 from pathlib import Path
@@ -691,6 +692,7 @@ def measure_mutation_score(
         "mutants_counted": 0,
         "stillborn": 0,
         "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
+        "reference_run": None,
     }
     changed = list(detail["changed_files"])  # type: ignore[arg-type]
     foreign = list(detail["foreign_changed_files"])  # type: ignore[arg-type]
@@ -779,6 +781,25 @@ def measure_mutation_score(
         work = Path(tmp) / "repo"
         shutil.copytree(patch_dir, work, ignore=_IGNORE)
 
+        # AG-042: the claims, unmutated, once. A mutant whose run is killed at
+        # the time limit made the tests hang -- detected -- but only if the
+        # unmutated run finishes with room to spare. If the reference itself
+        # is slow, a timeout says nothing about the mutant (the AG-039 trap:
+        # counted as kills, a slow run would read as a perfect score).
+        reference_fast = False
+        if timeout_seconds:
+            started = time.monotonic()
+            reference = run_test(
+                work, test_path, test_id,
+                timeout_seconds=timeout_seconds, cpu_seconds=cpu_seconds,
+                mem_bytes=mem_bytes, processes=processes, targets=targets,
+                **dict(run_kwargs or {}),
+            )
+            elapsed = time.monotonic() - started
+            reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
+            detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
+                                       "hang_counts_as_kill": reference_fast}
+
         counted = killed = 0
         survivors: List[str] = []
         for rel, (start, end, replacement) in plan:
@@ -825,6 +846,14 @@ def measure_mutation_score(
                 counted += 1
                 killed += 1
                 entry["result"] = "killed"
+            elif reference_fast and (outcome.timed_out or code < 0):
+                # The unmutated claims finish well inside the limit; this
+                # mutant made them never finish. That is a detection.
+                counted += 1
+                killed += 1
+                entry["result"] = "killed"
+                entry["by"] = "timeout"
+                entry["exit_code"] = code
             else:
                 detail["stillborn"] = int(detail["stillborn"]) + 1  # type: ignore[arg-type]
                 entry["result"] = "stillborn"

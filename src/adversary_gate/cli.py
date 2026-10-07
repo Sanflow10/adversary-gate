@@ -35,7 +35,7 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
-from adversary_gate.verifiers.coverage import covered_diff_ratio, validate_diff
+from adversary_gate.verifiers.coverage import _non_code_added_lines, covered_diff_ratio, validate_diff
 from adversary_gate.verifiers.discovery import discover_claims
 from adversary_gate.verifiers.strength import (
     DEFAULT_CONFIDENCE,
@@ -312,7 +312,9 @@ def _uncovered(args) -> Dict[str, List[int]]:
     if not (args.diff and args.coverage_json):
         return {}
     try:
-        changed = validate_diff(Path(args.diff).read_text(encoding="utf-8", errors="replace"))
+        diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+        changed = validate_diff(diff_text)
+        non_code = _non_code_added_lines(diff_text)
         files = json.loads(Path(args.coverage_json).read_text(encoding="utf-8")).get("files", {})
     except (OSError, ValueError):
         return {}
@@ -321,7 +323,7 @@ def _uncovered(args) -> Dict[str, List[int]]:
         if is_test_path(path):
             continue
         executed = set(files.get(path, {}).get("executed_lines", []))
-        missing = sorted(set(lines) - executed)
+        missing = sorted(set(lines) - executed - non_code.get(path, set()))
         if missing:
             out[path] = missing
     return out
@@ -1024,6 +1026,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 "mutants_counted": 0,
                 "stillborn": 0,
                 "census": {"exact": False, "why_not": "no mutation run"},
+                "reference_run": None,
             }
             if all_verified and (
                 mutation_detail["foreign_changed_files"]

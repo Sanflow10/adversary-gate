@@ -1348,6 +1348,39 @@ class TestWholeFileRunsHaveSuiteLimits(unittest.TestCase):
             self.assertEqual(claim["outcome"], "verified", claim["reason"])
 
 
+class TestCommentsAreNotUncoveredCode(unittest.TestCase):
+    """AG-040: a comment the patch adds is not a line a test could run.
+
+    Found by driving the gate as an agent on more-itertools 6b1907d: after the
+    census was exact, the only thing left was ``cover more.py:3134`` -- the
+    fix's comment ``# maxlen=0 cannot store the item...``. Every added blank
+    or comment-only line counted as a changed line no test executes, so a fix
+    that explains itself lost diff coverage, and next_steps asked for the
+    impossible. Lines are judged by their text in the diff; anything else --
+    docstrings, continuation lines -- still counts, which only ever errs low.
+    """
+
+    DIFF = (
+        "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,6 @@\n"
+        " def add(a, b):\n"
+        "+    # explain the change\n"
+        "+\n"
+        "+    #\n"
+        "+    total = a + b\n"
+        "     return a + b\n"
+    )
+
+    def test_blank_and_comment_lines_leave_the_ratio(self):
+        cov = {"files": {"calc.py": {"executed_lines": [1, 5, 6]}}}
+        result = covered_diff_ratio(self.DIFF, cov)
+        self.assertEqual((result.covered_lines, result.changed_lines), (1, 1), result)
+
+    def test_a_comment_in_a_non_python_file_is_not_special(self):
+        diff = self.DIFF.replace("calc.py", "calc.rb")
+        result = covered_diff_ratio(diff, {"files": {}})
+        self.assertEqual(result.changed_lines, 4)
+
+
 class TestDeletionsAreChanges(unittest.TestCase):
     """AG-001: a deleted source file must count as a change.
 
@@ -1947,13 +1980,15 @@ class TestAg012ResidualPaths(unittest.TestCase):
     # ------------------------------------------------------------------
     # A3: the diff parser assumed git's `+++ b/` prefix
     # ------------------------------------------------------------------
+    # The added line is code, not a comment: since AG-040 an added comment is
+    # not a line a test could run, and these tests are about parsing headers.
     GIT_DIFF = (
         "--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,3 @@\n"
-        " def add(a, b):\n     return a + b\n+    # note\n"
+        " def add(a, b):\n     return a + b\n+    total = a + b\n"
     )
     PLAIN_DIFF = (
         "--- calc.py\t2026-01-01\n+++ calc.py\t2026-01-01\n@@ -1,2 +1,3 @@\n"
-        " def add(a, b):\n     return a + b\n+    # note\n"
+        " def add(a, b):\n     return a + b\n+    total = a + b\n"
     )
 
     def test_plain_diff_u_is_parsed(self):
