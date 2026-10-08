@@ -38,6 +38,34 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Alterado
+
+- **Os dois lados de cada verificação rodam ao mesmo tempo.** A claim no
+  baseline e no patch, o arquivo de testes do baseline nos dois lados (AG-021)
+  e, quando o patch reescreveu testes, a suíte completa no patch e no
+  transplante. As execuções são as mesmas, na mesma quantidade e em diretórios
+  diferentes. Em cinco casos reais do more-itertools (reversão, correção e
+  correção com asserções esvaziadas), a decisão, `fix_proven` e a
+  classificação de cada claim saíram idênticas, e a parte do gate caiu
+  de 285→156 s, 319→199 s, 177→119 s e 286→171 s (a reversão 6b1907d, sem par
+  a sobrepor, ficou em ~90 s). O que a sobreposição pode mudar é o que a
+  disputa por máquina causa: um limite de tempo de relógio estourado, memória
+  para dois processos, estado que os lados dividem fora do repositório (um
+  caminho fixo em `/tmp`, uma porta, um `HOME` passado com `--pass-env`).
+  Cada um desses derruba um lado, o que termina em BLOCK ou INCONCLUSIVE,
+  nunca em MERGE; um lado que estourou o tempo não é repetido, porque uma
+  segunda chance também seria uma segunda chance para um teste que só trava
+  às vezes. `--serial-sides` volta ao modo um-depois-do-outro, e o artefato
+  registra o modo em `execution.serial_sides`. Quando a suíte completa passa
+  no baseline e estoura o tempo só no patch, `next_steps` sugere subir o
+  limite ou `--serial-sides` em vez de "corrigir o código".
+- **O transplante da suíte completa é copiado antes de a suíte do patch
+  rodar** (antes, depois). Arquivos que a suíte do patch gerava dentro do
+  repositório não entram mais na cópia que o oráculo do baseline julga.
+- **A criação de cada processo de teste é serializada** (só o `fork`; a espera
+  pelo processo continua em paralelo): `preexec_fn`, que aplica os limites, é
+  documentado como inseguro com outras threads rodando.
+
 ---
 
 ## [2.13.0] — 2026-10-07

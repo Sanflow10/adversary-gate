@@ -20,6 +20,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -383,6 +384,115 @@ class TestClaimGranularity(unittest.TestCase):
                     CriticClaim("test_two.py", "test_beta"), root / "baseline", root / "patch"
                 )
             self.assertEqual(set(received), {"test_beta"})
+
+
+class TestSidesTogether(unittest.TestCase):
+    """The baseline and patch sides of a check overlap; ``serial_sides`` stops it.
+
+    Overlapping them keeps the runs, their count and (without contention
+    pushing a limit) the verdict; the sides come back by position.
+    """
+
+    def _verify(self, serial: bool):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for sub in ("baseline", "patch"):
+                (root / sub).mkdir()
+                (root / sub / "test_two.py").write_text("def test_alpha():\n    assert 1 == 1\n")
+            spans = []
+
+            def fake(repo_dir, test_path, test_id="", *a, **k):
+                start = time.monotonic()
+                time.sleep(0.2)
+                spans.append((Path(repo_dir).name, start, time.monotonic()))
+                return SandboxResult(0 if Path(repo_dir).name == "baseline" else 1, "", "", False)
+
+            gate = make_gate(config=GateConfig(serial_sides=serial))
+            with patch("adversary_gate.core.gate.run_test", side_effect=fake):
+                v = gate.verify_claim(
+                    CriticClaim("test_two.py", "test_alpha"), root / "baseline", root / "patch"
+                )
+        return v, spans
+
+    @staticmethod
+    def _overlap(spans) -> bool:
+        base = [s for s in spans if s[0] == "baseline"]
+        patch_ = [s for s in spans if s[0] == "patch"]
+        return any(b[1] < p[2] and p[1] < b[2] for b in base for p in patch_)
+
+    def test_sides_overlap_and_verdict_is_unchanged(self):
+        together, spans = self._verify(serial=False)
+        serial, serial_spans = self._verify(serial=True)
+        self.assertTrue(self._overlap(spans))
+        self.assertFalse(self._overlap(serial_spans))
+        self.assertEqual(len(spans), len(serial_spans))
+        self.assertIs(together.outcome, Outcome.REFUTED)
+        self.assertEqual(
+            (together.outcome, together.classification, together.outcome_run.baseline_exit_codes,
+             together.outcome_run.patch_exit_codes),
+            (serial.outcome, serial.classification, serial.outcome_run.baseline_exit_codes,
+             serial.outcome_run.patch_exit_codes),
+        )
+
+    def test_baseline_file_sides_are_not_swapped(self):
+        """The whole-file check pairs the baseline with the transplant: a
+        swap would read "the patch broke a baseline test" as "no clean
+        reference" (or the reverse)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = "def test_a():\n    assert True\n"
+            for sub in ("baseline", "patch"):
+                (root / sub).mkdir()
+            (root / "baseline" / "test_calc.py").write_text(old)
+            (root / "patch" / "test_calc.py").write_text(old + "\n\ndef test_new():\n    assert True\n")
+
+            def fake(repo_dir, test_path, test_id="", *a, **k):
+                # The baseline's file passes on the baseline and fails on the patch's code.
+                return SandboxResult(0 if Path(repo_dir).name == "baseline" else 1, "", "", False)
+
+            with patch("adversary_gate.core.gate.run_test", side_effect=fake):
+                v = make_gate().verify_claim(
+                    CriticClaim("test_calc.py", "test_new"), root / "baseline", root / "patch"
+                )
+        self.assertEqual(v.oracle, "baseline-file")
+        self.assertIs(v.outcome, Outcome.REFUTED, v.reason)
+        self.assertIs(v.classification, FailureClass.REGRESSION)
+
+    def test_cli_flag_reaches_the_gate_and_the_artefact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "test_calc.py").write_text("def test_add():\n    assert 1 + 1 == 2\n")
+            seen = []
+            real_pair = Gate.pair
+
+            def spy(gate, first, second):
+                seen.append(gate.config.serial_sides)
+                return real_pair(gate, first, second)
+
+            out = root / "out.json"
+            with patch.object(Gate, "pair", spy), \
+                    patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "test_calc.py::test_add", "--max-rounds", "1",
+                    "--rounds-used", "1", "--full-suite-path", "", "--serial-sides",
+                    *TestCliExitCodes.UNTRUSTED_COVERAGE,
+                ])
+            payload = json.loads(out.read_text())
+        self.assertTrue(seen)
+        self.assertTrue(all(seen))
+        self.assertIs(payload["execution"]["serial_sides"], True)
+
+    def test_an_error_on_one_side_still_raises(self):
+        gate = make_gate()
+
+        def boom():
+            raise RuntimeError("side failed")
+
+        with self.assertRaises(RuntimeError):
+            gate.pair(lambda: 1, boom)
 
 
 class TestEvidenceArtefact(unittest.TestCase):

@@ -354,7 +354,16 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
                           "why": v.reason})
     if full_codes is not None and not any(v.outcome is Outcome.REFUTED for v in verdicts):
         base_code, patch_code = full_codes
-        if base_code == 0 and patch_code != 0:
+        if base_code == 0 and patch_code < 0:
+            # Timed out or killed on the patch side only. It may be the patch;
+            # it may be a limit the two sides running together pushed it past.
+            # The decision stays what it is -- only a rerun can tell.
+            steps.append({"action": "raise_limit",
+                          "flags": ["--full-suite-timeout", "--full-suite-memory", "--serial-sides"],
+                          "why": "the full suite passes on the baseline and timed out or was killed "
+                                 "on the patch; if the patch is not slower, rerun with a higher limit "
+                                 "or --serial-sides"})
+        elif base_code == 0 and patch_code != 0:
             steps.append({"action": "fix_code", "why": "the full suite passes on the baseline and fails on the patch"})
         elif (base_code < 0 and patch_code < 0) or (base_code == patch_code and base_code in (2, 3, 4)):
             steps.append({"action": "raise_limit",
@@ -672,6 +681,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coverage-floor", type=float, default=0.80)
     parser.add_argument("--suite-strength-floor", type=float, default=0.75)
     parser.add_argument(
+        "--serial-sides",
+        action="store_true",
+        help="run the baseline side and the patch side of each check one after "
+        "the other instead of at the same time. The runs are the same either "
+        "way; use it on a machine too small for two test processes, or when "
+        "the tests share something outside the repository (a fixed /tmp path, "
+        "a port) and collide.",
+    )
+    parser.add_argument(
         "--strength-confidence",
         type=float,
         default=DEFAULT_CONFIDENCE,
@@ -889,6 +907,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "full_suite_cpu_seconds": args.full_suite_cpu_seconds,
             "full_suite_memory_bytes": args.full_suite_memory,
             "sandbox": args.sandbox,
+            # Whether the two sides of each check overlapped: it changes how
+            # likely a wall-clock limit is to fire, so it belongs with them.
+            "serial_sides": args.serial_sides,
             **env_record,
             "test_support": list(args.test_support),
             "triage": triage_record,
@@ -941,6 +962,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         config = GateConfig(
             coverage_floor=args.coverage_floor,
             suite_strength_floor=args.suite_strength_floor,
+            serial_sides=args.serial_sides,
         )
         gate = Gate(
             criteria,
@@ -1139,7 +1161,6 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # ``full_suite_exit_codes`` can be told apart from a clean run --
             # v2.0.1 wrote ``null`` for both, which made "the suite passed" and
             # "the suite never ran" indistinguishable in the evidence.
-            patch_full = _full_run(Path(args.patch))
             # The baseline oracle, for the whole suite: when the patch changed
             # tests the baseline already had, the suite the patch must still
             # pass is the *baseline's*, run against the patch's code. The
@@ -1148,10 +1169,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             if rewritten_tests:
                 with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
                     tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
-                    oracle_full = _full_run(tree)
+                    patch_full, oracle_full = gate.pair(
+                        lambda: _full_run(Path(args.patch)), lambda: _full_run(tree)
+                    )
                 oracle_full_code = oracle_full.exit_code
                 if patch_full.exit_code == PYTEST_OK and oracle_full.exit_code != PYTEST_OK:
                     patch_full = oracle_full
+            else:
+                patch_full = _full_run(Path(args.patch))
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)

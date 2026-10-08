@@ -28,6 +28,7 @@ import re
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
@@ -167,6 +168,15 @@ def transplant_tree(baseline_dir: Path, patch_dir: Path, into: Path) -> Path:
 class GateConfig:
     coverage_floor: float = 0.80
     suite_strength_floor: float = 0.75
+    #: Run the baseline side and the patch side of one check at the same
+    #: time. Same runs, same count, different directories. What can differ is
+    #: what contention can cause -- a wall-clock timeout, memory for two
+    #: processes, state the two share outside the repository (a fixed /tmp
+    #: path, a port, a ``HOME`` passed in) -- and each of those fails a side,
+    #: which ends in BLOCK or INCONCLUSIVE, never in MERGE. A timed-out side
+    #: is not retried: a second chance is also a second chance for a test
+    #: that only hangs sometimes. ``True`` restores one-after-the-other.
+    serial_sides: bool = False
 
 
 class Gate:
@@ -617,6 +627,24 @@ class Gate:
     # ------------------------------------------------------------------
     # oracle plumbing
     # ------------------------------------------------------------------
+    def pair(self, first, second) -> tuple:
+        """``(first(), second())``, the two running at once unless ``serial_sides``.
+
+        The sides of a check never share a directory, and each run gets its
+        own process (and a private ``HOME`` unless the operator passed one).
+        Overlapping them cuts the wall clock (more-itertools def2dab: the
+        baseline file on both sides was 132 s of 455); see
+        ``GateConfig.serial_sides`` for what contention can change. Results
+        come back by position, not by which side finished first, and an
+        exception on either side is raised here, as it was when they ran in
+        turn.
+        """
+        if self.config.serial_sides:
+            return first(), second()
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="adversary-side") as pool:
+            a, b = pool.submit(first), pool.submit(second)
+            return a.result(), b.result()
+
     def _runs(self, directory: Path, test_path: str, test_id: str, policy, limits) -> tuple:
         codes: List[int] = []
         output = ""
@@ -644,13 +672,17 @@ class Gate:
         """Run the claim on both sides and classify; ``patch_dir`` may be a transplant."""
         baseline_codes: List[int] = []
         baseline_output = ""
+
+        def patch_side() -> tuple:
+            return self._runs(patch_dir, claim.test_path, claim.test_id, policy, limits)
+
         if baseline_applicable:
-            baseline_codes, baseline_output = self._runs(
-                baseline_dir, claim.test_path, claim.test_id, policy, limits
+            (baseline_codes, baseline_output), (patch_codes, patch_output) = self.pair(
+                lambda: self._runs(baseline_dir, claim.test_path, claim.test_id, policy, limits),
+                patch_side,
             )
-        patch_codes, patch_output = self._runs(
-            patch_dir, claim.test_path, claim.test_id, policy, limits
-        )
+        else:
+            patch_codes, patch_output = patch_side()
 
         baseline_state, _, baseline_detail = self._resolve_side(
             baseline_codes, policy, label="baseline"
@@ -759,8 +791,10 @@ class Gate:
         if key is not None and key in cache:
             base_codes, base_out, tree_codes, tree_out = cache[key]
         else:
-            base_codes, base_out = self._runs(baseline_dir, claim.test_path, "", policy, limits)
-            tree_codes, tree_out = self._runs(tree, claim.test_path, "", policy, limits)
+            (base_codes, base_out), (tree_codes, tree_out) = self.pair(
+                lambda: self._runs(baseline_dir, claim.test_path, "", policy, limits),
+                lambda: self._runs(tree, claim.test_path, "", policy, limits),
+            )
             if key is not None:
                 cache[key] = (base_codes, base_out, tree_codes, tree_out)
         base_state, _, base_detail = self._resolve_side(base_codes, policy, label="baseline file")

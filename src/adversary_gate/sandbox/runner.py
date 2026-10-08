@@ -25,6 +25,7 @@ import site
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Mapping, Optional, Sequence
@@ -239,6 +240,13 @@ def _limit_resources(
     return _apply
 
 
+#: ``preexec_fn`` is documented as unsafe while other threads run: the child
+#: can deadlock between fork and exec. The gate runs the baseline and patch
+#: sides from two threads, so the fork itself is serialised; waiting on the
+#: child (``communicate``) is not, which is where the time goes.
+_SPAWN_LOCK = threading.Lock()
+
+
 def run_test(
     repo_dir: Path,
     test_path: str,
@@ -327,16 +335,17 @@ def run_test(
 
     proc: Optional[subprocess.Popen[str]] = None
     try:
-        proc = subprocess.Popen(
-            argv,
-            cwd=str(root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=safe_env,
-            preexec_fn=preexec,
-            start_new_session=True,
-        )
+        with _SPAWN_LOCK:
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=safe_env,
+                preexec_fn=preexec,
+                start_new_session=True,
+            )
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
         # The pytest heuristics below look for pytest's own error strings;
         # applying them to an arbitrary caller command would rewrite that
