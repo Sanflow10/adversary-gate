@@ -223,15 +223,25 @@ pre code { background: none; padding: 0; font-size: inherit; }
 
 <main id="main">
   <div class="wrap page-hero">
-    <p class="eyebrow">Releases 2.4 to 2.13 · October 2026</p>
+    <p class="eyebrow">Releases 2.4 to 2.14 · October 2026</p>
     <h1>What changed, and what comes next</h1>
-    <p class="lead">Ten releases in four days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
+    <p class="lead">Eleven releases in five days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
   </div>
 
   <section aria-labelledby="changes-title">
     <div class="wrap">
       <h2 id="changes-title">What changed</h2>
       <ol class="releases" reversed>
+        <li>
+          <span class="v">2.14.0<small>Oct 8, 2026</small></span>
+          <div>
+            <h3>Same verdicts, less waiting</h3>
+            <ul>
+              <li>The baseline and patch sides of each check, the full suite and the mutants now run at the same time. On five real more-itertools cases the gate's own time fell from 319&nbsp;s to 127&nbsp;s, 177 to 101, 285 to 109 and 285 to 108; the decision, <code>fix_proven</code> and every mutant's killed/survived came out identical.</li>
+              <li>Running side by side can push a run past the wall clock, and a mutant that hangs counts as killed. So a mutant killed by the clock while anything else was running is rerun alone, and the rerun decides: it can only lower the score. <code>--serial-sides</code> turns all of it off.</li>
+            </ul>
+          </div>
+        </li>
         <li>
           <span class="v">2.13.0<small>Oct 7, 2026</small></span>
           <div>
