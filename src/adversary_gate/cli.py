@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -684,10 +685,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--serial-sides",
         action="store_true",
         help="run the baseline side and the patch side of each check one after "
-        "the other instead of at the same time. The runs are the same either "
-        "way; use it on a machine too small for two test processes, or when "
-        "the tests share something outside the repository (a fixed /tmp path, "
-        "a port) and collide.",
+        "the other instead of at the same time, and the full suite after the "
+        "claims and the mutants instead of alongside them. The runs are the "
+        "same either way; use it on a machine too small for several test "
+        "processes, or when the tests share something outside the repository "
+        "(a fixed /tmp path, a port) and collide.",
     )
     parser.add_argument(
         "--strength-confidence",
@@ -843,6 +845,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 def _main(argv: Optional[Sequence[str]] = None) -> int:
+    # What runs in the background (the full suite) and where: always waited
+    # for and removed before returning, an exception halfway included.
+    background: List[Any] = []
     try:
         parser = build_parser()
         args = parser.parse_args(argv)
@@ -975,6 +980,85 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # through the same mapping; ``command`` only the claims and the full
         # suite, because mutants are judged by pytest on the claims' files.
         run_options = {"sandbox": args.sandbox, "python": python, "env": run_env}
+        full_codes: Optional[Sequence[int]] = None
+        # ``--test-command`` implies the collateral run uses it too, unless
+        # ``--full-suite-command`` overrides. A repository that does not run
+        # pytest must not silently lose the collateral-regression check just
+        # because it declared how its tests execute.
+        full_command = args.full_suite_command or args.test_command
+        full_suite_ran = bool(full_command) or bool(args.full_suite_path)
+        rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
+        oracle_full_code: Optional[int] = None
+
+        # The suite runs under its own limits (AG-033): the per-test ones killed
+        # it on both sides (time) or made pytest die with MemoryError (address
+        # space) on any suite of real size.
+        full_limits = {
+            **limits,
+            "timeout_seconds": args.full_suite_timeout,
+            "cpu_seconds": args.full_suite_cpu_seconds,
+            "mem_bytes": args.full_suite_memory,
+        }
+
+        def _full_run(directory: Path) -> SandboxResult:
+            if full_command:
+                return run_test(
+                    directory,
+                    "",
+                    "",
+                    command=full_command,
+                    require_network_isolation=args.require_network_isolation,
+                    **run_options,
+                    **full_limits,
+                )
+            return run_test(
+                directory,
+                args.full_suite_path,
+                "",
+                require_network_isolation=args.require_network_isolation,
+                **run_options,
+                **full_limits,
+            )
+
+        # The full suite does not depend on anything the claims or the mutants
+        # find, so it runs alongside them (unless --serial-sides): on its own
+        # copy of the patch, taken before any claim runs, so a test that
+        # writes into its repository cannot meet another run doing the same.
+        # The copy keeps ``.git``: a suite that asks git about itself must not
+        # fail here and pass on the baseline below, which would read as a
+        # collateral regression. What the overlap can change is a wall-clock
+        # limit firing; the mutants account for that (``alongside``), the
+        # suite reports it (next_steps suggests --serial-sides).
+        suite_future: Optional[Future] = None
+
+        def _patch_suite(patch_dir: Path, oracle_tree: Optional[Path]) -> Tuple[SandboxResult, Optional[int]]:
+            if oracle_tree is None:
+                return _full_run(patch_dir), None
+            patch_run, oracle_run = gate.pair(
+                lambda: _full_run(patch_dir), lambda: _full_run(oracle_tree)
+            )
+            if patch_run.exit_code == PYTEST_OK and oracle_run.exit_code != PYTEST_OK:
+                return oracle_run, oracle_run.exit_code
+            return patch_run, oracle_run.exit_code
+
+        if full_suite_ran and not args.serial_sides:
+            suite_scratch = tempfile.TemporaryDirectory(prefix="adversary-suite-")
+            background.append(suite_scratch)
+            scratch = Path(suite_scratch.name)
+            patch_copy = scratch / "patch"
+            shutil.copytree(
+                Path(args.patch), patch_copy, symlinks=True,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+            )
+            oracle_tree = (
+                transplant_tree(Path(args.baseline), Path(args.patch), scratch / "oracle")
+                if rewritten_tests else None
+            )
+            suite_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adversary-suite")
+            background.append(suite_pool)
+            suite_future = suite_pool.submit(_patch_suite, patch_copy, oracle_tree)
+        execution["full_suite_alongside"] = suite_future is not None
+
         verdicts: List[GateVerdict] = [
             gate.verify_claim(
                 claim,
@@ -1080,6 +1164,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 }),
                 run_kwargs=run_options,
                 census_min=max(0, args.census_min_mutants),
+                alongside=suite_future,
                 **limits,
             )
             if strength_obj.is_measured:
@@ -1114,46 +1199,6 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     # already decides and strength would only add noise.
                     strength_unverified = True
 
-        full_codes: Optional[Sequence[int]] = None
-        # ``--test-command`` implies the collateral run uses it too, unless
-        # ``--full-suite-command`` overrides. A repository that does not run
-        # pytest must not silently lose the collateral-regression check just
-        # because it declared how its tests execute.
-        full_command = args.full_suite_command or args.test_command
-        full_suite_ran = bool(full_command) or bool(args.full_suite_path)
-        rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
-        oracle_full_code: Optional[int] = None
-
-        # The suite runs under its own limits (AG-033): the per-test ones killed
-        # it on both sides (time) or made pytest die with MemoryError (address
-        # space) on any suite of real size.
-        full_limits = {
-            **limits,
-            "timeout_seconds": args.full_suite_timeout,
-            "cpu_seconds": args.full_suite_cpu_seconds,
-            "mem_bytes": args.full_suite_memory,
-        }
-
-        def _full_run(directory: Path) -> SandboxResult:
-            if full_command:
-                return run_test(
-                    directory,
-                    "",
-                    "",
-                    command=full_command,
-                    require_network_isolation=args.require_network_isolation,
-                    **run_options,
-                    **full_limits,
-                )
-            return run_test(
-                directory,
-                args.full_suite_path,
-                "",
-                require_network_isolation=args.require_network_isolation,
-                **run_options,
-                **full_limits,
-            )
-
         if full_suite_ran:
             # Only pay for the baseline run when the patch side actually failed;
             # a passing patch side is not a collateral regression either way.
@@ -1166,17 +1211,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # pass is the *baseline's*, run against the patch's code. The
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
-            if rewritten_tests:
+            if suite_future is not None:
+                patch_full, oracle_full_code = suite_future.result()
+            elif rewritten_tests:
                 with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
                     tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
-                    patch_full, oracle_full = gate.pair(
-                        lambda: _full_run(Path(args.patch)), lambda: _full_run(tree)
-                    )
-                oracle_full_code = oracle_full.exit_code
-                if patch_full.exit_code == PYTEST_OK and oracle_full.exit_code != PYTEST_OK:
-                    patch_full = oracle_full
+                    patch_full, oracle_full_code = _patch_suite(Path(args.patch), tree)
             else:
-                patch_full = _full_run(Path(args.patch))
+                patch_full, oracle_full_code = _patch_suite(Path(args.patch), None)
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
@@ -1278,6 +1320,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception as exc:
         print(f"uncaught error: {exc}", file=sys.stderr)
         return EXIT_INCONCLUSIVE
+    finally:
+        # The pool before the directory its runs are using.
+        for item in reversed(background):
+            if isinstance(item, ThreadPoolExecutor):
+                item.shutdown(wait=True, cancel_futures=True)
+            else:
+                item.cleanup()
 
 
 if __name__ == "__main__":

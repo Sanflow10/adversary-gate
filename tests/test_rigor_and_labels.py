@@ -23,6 +23,8 @@ import math
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from concurrent.futures import Future
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,10 +40,12 @@ from adversary_gate.core.types import (
     FailureClass,
     Outcome,
 )
+from adversary_gate.sandbox.runner import SandboxResult
 from adversary_gate.verifiers.strength import (
     DEFAULT_MAX_MUTANTS,
     _spread,
     calculate_mutation_score,
+    measure_mutation_score,
     wilson_interval,
 )
 
@@ -248,6 +252,64 @@ class TestAHangIsAKillWhenTheTestsAreFast(unittest.TestCase):
         )
         mutants = payload["mutation"]["mutants"]
         self.assertFalse(any(m.get("by") == "timeout" for m in mutants), mutants)
+
+
+class TestAHangUnderLoadIsRerunAlone(unittest.TestCase):
+    """A timeout while the full suite runs alongside is not yet a kill.
+
+    The full suite runs at the same time as the mutants. A mutant whose run
+    hits the limit then may only have been slowed by it, and a hang counts as
+    a kill (AG-042) -- the fail-open direction. Such a run is repeated once
+    the suite is done, and the repeat decides.
+    """
+
+    BASE = TestAHangIsAKillWhenTheTestsAreFast.BASE
+    PATCH = TestAHangIsAKillWhenTheTestsAreFast.PATCH
+
+    def _measure(self, rerun_code, *, alongside=True):
+        suite = Future()
+        calls = []
+
+        def fake_run(*_args, **_kwargs):
+            calls.append(suite.done())
+            if len(calls) == 1:
+                return SandboxResult(0, "", "", False)  # the reference: fast, passing
+            if not suite.done():
+                suite.set_result(None)  # the suite finishes while this run is stuck
+                return SandboxResult(-1, "", "", True)
+            if rerun_code == -1:
+                return SandboxResult(-1, "", "", True)
+            return SandboxResult(rerun_code, "", "", False)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, src in (("baseline", self.BASE), ("patch", self.PATCH)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text("def test_count():\n    pass\n")
+            with mock.patch("adversary_gate.verifiers.strength.run_test", side_effect=fake_run):
+                _, detail = measure_mutation_score(
+                    root / "baseline", root / "patch", "test_calc.py",
+                    max_mutants=1, timeout_seconds=30,
+                    alongside=suite if alongside else None,
+                )
+        return detail["mutants"][0], calls
+
+    def test_a_timeout_that_passes_alone_is_a_survivor(self):
+        entry, _ = self._measure(0)
+        self.assertEqual(entry["result"], "survived", entry)
+        self.assertEqual(entry["rerun_alone"], -1)
+
+    def test_a_timeout_that_hangs_alone_too_is_still_a_kill(self):
+        entry, _ = self._measure(-1)
+        self.assertEqual((entry["result"], entry.get("by")), ("killed", "timeout"), entry)
+        self.assertEqual(entry["rerun_alone"], -1)
+
+    def test_without_anything_alongside_nothing_is_rerun(self):
+        entry, calls = self._measure(0, alongside=False)
+        self.assertEqual((entry["result"], entry.get("by")), ("killed", "timeout"), entry)
+        self.assertNotIn("rerun_alone", entry)
+        self.assertEqual(len(calls), 2)
 
 
 class TestCensusIsNotASample(unittest.TestCase):

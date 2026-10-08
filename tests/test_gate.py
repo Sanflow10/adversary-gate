@@ -485,6 +485,47 @@ class TestSidesTogether(unittest.TestCase):
         self.assertTrue(all(seen))
         self.assertIs(payload["execution"]["serial_sides"], True)
 
+    def _suite_dirs(self, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "test_calc.py").write_text("def test_add():\n    assert 1 + 1 == 2\n")
+            import adversary_gate.cli as cli
+
+            real_run, dirs = cli.run_test, []
+
+            def spy(directory, *a, **k):
+                dirs.append(Path(directory))
+                return real_run(directory, *a, **k)
+
+            out = root / "out.json"
+            with patch.object(cli, "run_test", spy), \
+                    patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "test_calc.py::test_add", "--max-rounds", "1",
+                    "--rounds-used", "1", "--full-suite-path", "test_calc.py", *extra,
+                    *TestCliExitCodes.UNTRUSTED_COVERAGE,
+                ])
+            payload = json.loads(out.read_text())
+            return root, dirs, payload
+
+    def test_full_suite_runs_alongside_on_a_copy(self):
+        """Not in the directory the claims are running in, and recorded."""
+        root, dirs, payload = self._suite_dirs()
+        self.assertEqual(len(dirs), 1)
+        self.assertNotEqual(dirs[0], root / "patch")
+        self.assertTrue(dirs[0].parent.name.startswith("adversary-suite-"))
+        self.assertFalse(dirs[0].exists())  # removed before main returned
+        self.assertIs(payload["execution"]["full_suite_alongside"], True)
+        self.assertIs(payload["full_suite_ran"], True)
+
+    def test_serial_sides_runs_the_suite_after_in_place(self):
+        root, dirs, payload = self._suite_dirs("--serial-sides")
+        self.assertEqual(dirs, [root / "patch"])
+        self.assertIs(payload["execution"]["full_suite_alongside"], False)
+
     def test_an_error_on_one_side_still_raises(self):
         gate = make_gate()
 

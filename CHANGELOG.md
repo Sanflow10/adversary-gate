@@ -59,6 +59,24 @@ quando esta seção vira uma com versão e data.
   registra o modo em `execution.serial_sides`. Quando a suíte completa passa
   no baseline e estoura o tempo só no patch, `next_steps` sugere subir o
   limite ou `--serial-sides` em vez de "corrigir o código".
+- **A suíte completa roda junto com as claims e os mutantes**, não depois
+  deles. Ela não depende de nada que eles encontram, então começa antes da
+  primeira claim, numa cópia do patch feita nesse momento (com `.git`, para
+  uma suíte que consulta o git não falhar só na cópia e virar "regressão
+  colateral"), e o baseline continua rodando só se o patch falhar. A disputa
+  por máquina abria um caminho para fail-open: um mutante que estoura o tempo
+  conta como morto (AG-042), e um estouro causado pela suíte ao lado inflaria
+  o score. Por isso um mutante que estoura o tempo enquanto a suíte ainda roda
+  é repetido depois que ela termina, sozinho, e a repetição decide
+  (`rerun_alone` no artefato traz o código da primeira); a repetição só pode
+  trocar morto por sobrevivente ou natimorto. A execução de referência é
+  repetida do mesmo jeito quando saiu lenta demais sob carga. Na matriz dos
+  cinco casos do more-itertools, a decisão, `fix_proven`, as claims e o
+  morto/sobrevivente de cada mutante saíram idênticos, e a parte do gate caiu
+  de 192→145 s, 120→100 s, 158→106 s e 153→103 s (a reversão 6b1907d ficou
+  em ~93 s). `--serial-sides` também desliga isto (suíte depois, no próprio
+  diretório do patch), e o artefato registra o modo em
+  `execution.full_suite_alongside`.
 - **O transplante da suíte completa é copiado antes de a suíte do patch
   rodar** (antes, depois). Arquivos que a suíte do patch gerava dentro do
   repositório não entram mais na cópia que o oráculo do baseline julga.

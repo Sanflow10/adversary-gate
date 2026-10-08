@@ -55,6 +55,7 @@ import shutil
 import tempfile
 import time
 import tokenize
+from concurrent.futures import Future, wait
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import NormalDist
@@ -646,8 +647,17 @@ def measure_mutation_score(
     targets: Optional[Sequence[str]] = None,
     run_kwargs: Optional[Mapping[str, Any]] = None,
     census_min: int = 0,
+    alongside: Optional[Future] = None,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
+
+    ``alongside`` is work running at the same time (the full suite). A run
+    that hits the time limit while it is still going may have been slowed by
+    it rather than hung, and a hang counts as a kill -- so that run is
+    repeated once the work is done, and the repeat is the result. It can
+    only turn a kill into a survivor or a stillborn mutant, never the other
+    way. The reference run is repeated the same way when it was too slow to
+    vouch for timeouts.
 
     ``census_min`` > 0 turns on the census rule: when every mutation site of
     the change was executed -- nothing cut by the budget, every changed
@@ -786,17 +796,34 @@ def measure_mutation_score(
         # unmutated run finishes with room to spare. If the reference itself
         # is slow, a timeout says nothing about the mutant (the AG-039 trap:
         # counted as kills, a slow run would read as a perfect score).
-        reference_fast = False
-        if timeout_seconds:
-            started = time.monotonic()
-            reference = run_test(
+        def _run():
+            return run_test(
                 work, test_path, test_id,
                 timeout_seconds=timeout_seconds, cpu_seconds=cpu_seconds,
                 mem_bytes=mem_bytes, processes=processes, targets=targets,
                 **dict(run_kwargs or {}),
             )
+
+        def _contended() -> bool:
+            return alongside is not None and not alongside.done()
+
+        def _settle() -> None:
+            if alongside is not None:
+                wait([alongside])  # its exception, if any, is the caller's to raise
+
+        reference_fast = False
+        if timeout_seconds:
+            contended = _contended()
+            started = time.monotonic()
+            reference = _run()
             elapsed = time.monotonic() - started
             reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
+            if contended and not reference_fast:
+                _settle()
+                started = time.monotonic()
+                reference = _run()
+                elapsed = time.monotonic() - started
+                reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
             detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
                                        "hang_counts_as_kill": reference_fast}
 
@@ -818,18 +845,15 @@ def measure_mutation_score(
                 continue
             try:
                 target.write_text(mutant_source, encoding="utf-8")
-                outcome = run_test(
-                    work,
-                    test_path,
-                    test_id,
-                    timeout_seconds=timeout_seconds,
-                    cpu_seconds=cpu_seconds,
-                    mem_bytes=mem_bytes,
-                    processes=processes,
-                    targets=targets,
-                    **dict(run_kwargs or {}),
-                )
+                contended = _contended()
+                outcome = _run()
                 code = outcome.exit_code
+                if contended and reference_fast and (outcome.timed_out or code < 0):
+                    # Slowed or hung? Only a run with nothing beside it says.
+                    _settle()
+                    entry["rerun_alone"] = code
+                    outcome = _run()
+                    code = outcome.exit_code
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
                 entry["result"] = "harness-error"
                 entry["error"] = f"{type(exc).__name__}: {exc}"
