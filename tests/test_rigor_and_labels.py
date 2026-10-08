@@ -312,6 +312,88 @@ class TestAHangUnderLoadIsRerunAlone(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
 
+class TestMutantsInParallel(unittest.TestCase):
+    """Several mutants at once, each worker on its own copy of the tree.
+
+    The entries come back in plan order whatever finishes first; a run killed
+    by the wall clock beside other runs is repeated alone, and the repeat is
+    the result; a kill by the CPU-time limit is not repeated (CPU time is the
+    process's own) unless the reference used a third of that limit.
+    """
+
+    CALC_PATCH = CALC.replace("a + b", "b + a").replace("a - b", "a - b + 0")
+
+    def _tree(self, root: Path):
+        for side, src in (("baseline", CALC), ("patch", self.CALC_PATCH)):
+            (root / side).mkdir()
+            (root / side / "calc.py").write_text(src)
+
+    def test_same_entries_as_one_at_a_time(self):
+        results = []
+        for parallel in (1, 3):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tree(root)
+                for side in ("baseline", "patch"):
+                    (root / side / "test_calc.py").write_text(TESTS)
+                _, detail = measure_mutation_score(
+                    root / "baseline", root / "patch", "test_calc.py", parallel=parallel,
+                )
+            results.append(([(m["file"], m["line"], m["replaces"], m["result"]) for m in detail["mutants"]],
+                            detail["mutants_counted"], detail["mutants_killed"]))
+        self.assertEqual(results[0], results[1])
+        self.assertGreater(results[0][1], 1)
+
+    def _fake(self, first, reference_seconds=0.0):
+        """Reference passes; each mutant's first run is ``first``, any later run passes."""
+        seen = {}
+
+        def fake_run(directory, *_a, **_k):
+            if not seen:
+                seen["reference"] = 1
+                if reference_seconds:
+                    import time as _t
+                    _t.sleep(reference_seconds)
+                return SandboxResult(0, "", "", False)
+            source = (Path(directory) / "calc.py").read_text()
+            if seen.get(source):
+                return SandboxResult(0, "", "", False)
+            seen[source] = 1
+            return first
+        return fake_run
+
+    def _measure(self, first, **kwargs):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            for side in ("baseline", "patch"):
+                (root / side / "test_calc.py").write_text("def test_x():\n    pass\n")
+            with mock.patch("adversary_gate.verifiers.strength.run_test",
+                            side_effect=self._fake(first, kwargs.pop("reference_seconds", 0.0))):
+                _, detail = measure_mutation_score(
+                    root / "baseline", root / "patch", "test_calc.py", parallel=2,
+                    timeout_seconds=30, **kwargs,
+                )
+        return detail["mutants"]
+
+    def test_a_wall_clock_kill_beside_others_is_rerun_alone(self):
+        mutants = self._measure(SandboxResult(-1, "", "", True))
+        self.assertTrue(mutants)
+        for m in mutants:
+            self.assertEqual((m["result"], m.get("rerun_alone")), ("survived", -1), m)
+
+    def test_a_cpu_limit_kill_is_not_rerun(self):
+        mutants = self._measure(SandboxResult(-9, "", "", False), cpu_seconds=10)
+        for m in mutants:
+            self.assertEqual((m["result"], m.get("by")), ("killed", "timeout"), m)
+            self.assertNotIn("rerun_alone", m)
+
+    def test_a_cpu_limit_kill_is_rerun_when_the_reference_was_close(self):
+        mutants = self._measure(SandboxResult(-9, "", "", False), cpu_seconds=3, reference_seconds=1.1)
+        for m in mutants:
+            self.assertEqual((m["result"], m.get("rerun_alone")), ("survived", -9), m)
+
+
 class TestCensusIsNotASample(unittest.TestCase):
     """When every mutation site of the change was executed, the ratio is exact.
 

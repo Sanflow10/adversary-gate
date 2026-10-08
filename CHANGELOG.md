@@ -77,6 +77,19 @@ quando esta seção vira uma com versão e data.
   em ~93 s). `--serial-sides` também desliga isto (suíte depois, no próprio
   diretório do patch), e o artefato registra o modo em
   `execution.full_suite_alongside`.
+- **Mutantes rodam em paralelo**, metade das CPUs e no máximo 4 ao mesmo
+  tempo, cada worker na sua própria cópia da árvore; o artefato traz a
+  quantidade em `execution.mutation_workers` e as entradas saem na ordem do
+  plano, seja qual for o worker que terminar primeiro. Toda execução teve
+  vizinhas, então a mesma regra de cima vale: um mutante morto pelo relógio é
+  repetido sozinho, depois que todos terminam, e a repetição decide. Um morto
+  pelo limite de **CPU** não é repetido, porque tempo de CPU é do próprio
+  processo e não cresce com a disputa, a não ser que a referência sem
+  mutação tenha usado um terço desse limite (aí ele também é repetido). Na
+  matriz do more-itertools, o morto/sobrevivente de cada mutante, as claims e
+  a decisão saíram idênticos ao modo um-por-vez, sem nenhuma repetição; o
+  ganho aparece onde há mutantes em número (d992be0, 12 mutantes: 145→127 s),
+  e com 3 mutantes é nulo. `--serial-sides` volta a um por vez.
 - **O transplante da suíte completa é copiado antes de a suíte do patch
   rodar** (antes, depois). Arquivos que a suíte do patch gerava dentro do
   repositório não entram mais na cópia que o oráculo do baseline julga.

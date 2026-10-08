@@ -686,7 +686,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the baseline side and the patch side of each check one after "
         "the other instead of at the same time, and the full suite after the "
-        "claims and the mutants instead of alongside them. The runs are the "
+        "claims and the mutants instead of alongside them, and one mutant at a "
+        "time. The runs are the "
         "same either way; use it on a machine too small for several test "
         "processes, or when the tests share something outside the repository "
         "(a fixed /tmp path, a port) and collide.",
@@ -1058,6 +1059,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             background.append(suite_pool)
             suite_future = suite_pool.submit(_patch_suite, patch_copy, oracle_tree)
         execution["full_suite_alongside"] = suite_future is not None
+        # Mutants at once, each on its own copy: half the CPUs, at most 4.
+        # --serial-sides means one at a time, as before.
+        execution["mutation_workers"] = (
+            1 if args.serial_sides else max(1, min(4, (os.cpu_count() or 1) // 2))
+        )
 
         verdicts: List[GateVerdict] = [
             gate.verify_claim(
@@ -1165,6 +1171,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 run_kwargs=run_options,
                 census_min=max(0, args.census_min_mutants),
                 alongside=suite_future,
+                parallel=execution["mutation_workers"],
                 **limits,
             )
             if strength_obj.is_measured:

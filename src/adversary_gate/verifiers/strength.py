@@ -55,7 +55,7 @@ import shutil
 import tempfile
 import time
 import tokenize
-from concurrent.futures import Future, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import NormalDist
@@ -648,6 +648,7 @@ def measure_mutation_score(
     run_kwargs: Optional[Mapping[str, Any]] = None,
     census_min: int = 0,
     alongside: Optional[Future] = None,
+    parallel: int = 1,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -658,6 +659,12 @@ def measure_mutation_score(
     only turn a kill into a survivor or a stillborn mutant, never the other
     way. The reference run is repeated the same way when it was too slow to
     vouch for timeouts.
+
+    ``parallel`` > 1 runs that many mutants at once, each worker on its own
+    copy of the tree. Every such run had neighbours, so the same rule applies
+    to it: a wall-clock kill is repeated alone after all of them finish. A
+    kill by the CPU-time limit is not -- CPU time is the process's own --
+    unless the unmutated reference itself used a third of that limit.
 
     ``census_min`` > 0 turns on the census rule: when every mutation site of
     the change was executed -- nothing cut by the budget, every changed
@@ -791,14 +798,9 @@ def measure_mutation_score(
         work = Path(tmp) / "repo"
         shutil.copytree(patch_dir, work, ignore=_IGNORE)
 
-        # AG-042: the claims, unmutated, once. A mutant whose run is killed at
-        # the time limit made the tests hang -- detected -- but only if the
-        # unmutated run finishes with room to spare. If the reference itself
-        # is slow, a timeout says nothing about the mutant (the AG-039 trap:
-        # counted as kills, a slow run would read as a perfect score).
-        def _run():
+        def _run(directory: Path = work):
             return run_test(
-                work, test_path, test_id,
+                directory, test_path, test_id,
                 timeout_seconds=timeout_seconds, cpu_seconds=cpu_seconds,
                 mem_bytes=mem_bytes, processes=processes, targets=targets,
                 **dict(run_kwargs or {}),
@@ -811,7 +813,13 @@ def measure_mutation_score(
             if alongside is not None:
                 wait([alongside])  # its exception, if any, is the caller's to raise
 
+        # AG-042: the claims, unmutated, once. A mutant whose run is killed at
+        # the time limit made the tests hang -- detected -- but only if the
+        # unmutated run finishes with room to spare. If the reference itself
+        # is slow, a timeout says nothing about the mutant (the AG-039 trap:
+        # counted as kills, a slow run would read as a perfect score).
         reference_fast = False
+        elapsed = 0.0
         if timeout_seconds:
             contended = _contended()
             started = time.monotonic()
@@ -826,11 +834,22 @@ def measure_mutation_score(
                 reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
             detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
                                        "hang_counts_as_kill": reference_fast}
+        # A run killed by a signal *other* than the wall clock (the CPU-time
+        # limit, mostly) does not depend on what else the machine was doing --
+        # CPU time is the process's own -- unless the reference itself came
+        # close to that limit. A wall-clock kill under load does depend on it.
+        cpu_room = not cpu_seconds or elapsed < cpu_seconds / 3
 
-        counted = killed = 0
-        survivors: List[str] = []
+        def _ambiguous(outcome) -> bool:
+            """Killed at a limit that the load around this run may have reached for it."""
+            return reference_fast and (
+                outcome.timed_out or (outcome.exit_code < 0 and not cpu_room)
+            )
+
+        # Every mutant gets its entry up front, in plan order: the artefact
+        # (and the census) must not depend on which worker finished first.
+        jobs: List[Tuple[Dict[str, object], Path, str, str]] = []
         for rel, (start, end, replacement) in plan:
-            target = work / rel
             original = originals[rel]
             mutant_source = "\n".join(_apply(original.split("\n"), start, end, replacement))
             entry: Dict[str, object] = {
@@ -843,29 +862,63 @@ def measure_mutation_score(
             if mutant_source == original:
                 entry["result"] = "no-op"
                 continue
+            jobs.append((entry, Path(rel), mutant_source, original))
+
+        def _attempt(directory: Path, job) -> Tuple[Any, bool]:
+            """One run of one mutant in ``directory``: (outcome or exception, contended)."""
+            _entry, rel, mutant_source, original = job
+            target = directory / rel
+            contended = _contended()
             try:
                 target.write_text(mutant_source, encoding="utf-8")
-                contended = _contended()
-                outcome = _run()
-                code = outcome.exit_code
-                if contended and reference_fast and (outcome.timed_out or code < 0):
-                    # Slowed or hung? Only a run with nothing beside it says.
-                    _settle()
-                    entry["rerun_alone"] = code
-                    outcome = _run()
-                    code = outcome.exit_code
+                return _run(directory), contended
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
-                entry["result"] = "harness-error"
-                entry["error"] = f"{type(exc).__name__}: {exc}"
-                continue
+                return exc, contended
             finally:
                 if target.exists():
                     target.write_text(original, encoding="utf-8")
 
+        outcomes: List[Tuple[Any, bool]] = []
+        workers = max(1, min(parallel, len(jobs)))
+        if workers == 1:
+            outcomes = [_attempt(work, job) for job in jobs]
+        else:
+            # Each worker breaks its own copy; every run beside another one
+            # is "contended", so a run its neighbours may have slowed past
+            # the wall clock is repeated alone below before it can count.
+            copies = [work] + [Path(tmp) / f"repo{i}" for i in range(1, workers)]
+            for copy in copies[1:]:
+                shutil.copytree(work, copy)
+
+            def _lane(index: int) -> List[Tuple[int, Tuple[Any, bool]]]:
+                return [(i, (_attempt(copies[index], jobs[i])[0], True))
+                        for i in range(index, len(jobs), workers)]
+
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="adversary-mutant") as pool:
+                lanes = [pool.submit(_lane, i) for i in range(workers)]
+                by_index = dict(pair for lane in lanes for pair in lane.result())
+            outcomes = [by_index[i] for i in range(len(jobs))]
+
+        counted = killed = 0
+        survivors: List[str] = []
+        for job, (outcome, contended) in zip(jobs, outcomes):
+            entry = job[0]
+            if not isinstance(outcome, BaseException) and contended and _ambiguous(outcome):
+                # Slowed or hung? Only a run with nothing beside it says, and
+                # its answer is the result.
+                _settle()
+                entry["rerun_alone"] = outcome.exit_code
+                outcome, _ = _attempt(work, job)
+            if isinstance(outcome, BaseException):
+                entry["result"] = "harness-error"
+                entry["error"] = f"{type(outcome).__name__}: {outcome}"
+                continue
+            code = outcome.exit_code
+            where = f"{entry['file']}:{entry['line']}"
             if code == PYTEST_OK:
                 counted += 1
                 entry["result"] = "survived"
-                survivors.append(f"{rel}:{start[0]}")
+                survivors.append(where)
             elif code == PYTEST_TESTS_FAILED:
                 counted += 1
                 killed += 1
