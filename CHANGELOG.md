@@ -42,6 +42,15 @@ quando esta seção vira uma com versão e data.
 
 ### Corrigido
 
+- **AG-046 — um teste que lê o código não mede nada.** Os claims passam a rodar
+  também numa cópia do patch com um comentário ao fim de cada linha que ele
+  escreveu; se falham ali, leem o texto do código (hash, `inspect.getsource`) e
+  não o comportamento: a força fica não medida e `fix_proven` vira `false`.
+  Antes, esse teste chegava a MERGE com força 1,0.
+- **Arquivos novos recebem mutantes.** Um módulo que o patch cria era pulado e
+  nenhum patch que acrescenta código alcançava MERGE. Agora é mutado nas linhas
+  que o patch escreveu; renomeado ou copiado, é comparado com o arquivo do
+  baseline de que veio (`mutation.added_files`).
 - **AG-045 — o baseline do MCP é o que o id do commit contém.** O baseline passa
   a ser lido objeto a objeto (`ls-tree` + `cat-file`), com a substituição de
   objetos desligada, e cada blob é conferido contra o id que a árvore cita; o

@@ -1306,7 +1306,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": len(verdicts),
             "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
-            "fix_proven": any(v.classification.value == "fixed" for v in verdicts),
+            # AG-046: a claim that fails on a comment-only copy of the patch
+            # reads the code's text, so "fails before, passes after" proves
+            # nothing about the fix.
+            "fix_proven": any(v.classification.value == "fixed" for v in verdicts)
+            and not mutation_detail.get("source_sensitive_claims"),
             "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,

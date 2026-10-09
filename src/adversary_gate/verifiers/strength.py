@@ -486,6 +486,100 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
     return differing
 
 
+#: Appended to the end of every logical line the patch wrote, in the canary copy.
+_CANARY = "  # adversary-gate canary"
+
+
+def canary_source(source: str, edited: set) -> Optional[str]:
+    """``source`` with a comment after every logical line that holds an edited row.
+
+    A comment cannot change what the code does, so a test that fails on this
+    copy is reading the *text* of the code (its bytes, ``inspect.getsource``,
+    its line layout) and not what the code does (AG-046). Comments go only
+    where the tokenizer says a logical line ends -- never inside a string or
+    after a continuation -- and the result is returned only if it parses to
+    the very same tree, so the copy is neutral by construction. ``None`` when
+    the source cannot be tokenized or the check fails: no canary, no claim
+    that there was one.
+    """
+    lines = source.split("\n")
+    starts: Dict[int, int] = {}
+    first_row: Optional[int] = None
+    cuts: List[Tuple[int, int]] = []
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING):
+                continue
+            if tok.type == tokenize.ENDMARKER:
+                break
+            if first_row is None:
+                first_row = tok.start[0]
+            if tok.type == tokenize.NEWLINE:
+                if any(row in edited for row in range(first_row, tok.start[0] + 1)):
+                    cuts.append(tok.start)
+                first_row = None
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return None
+    if not cuts:
+        return None
+    for row, col in sorted(cuts, reverse=True):
+        text = lines[row - 1]
+        lines[row - 1] = text[:col] + _CANARY + text[col:]
+    result = "\n".join(lines)
+    try:
+        if ast.dump(ast.parse(result)) != ast.dump(ast.parse(source)):
+            return None
+    except SyntaxError:
+        return None
+    return result
+
+
+#: A file the patch added is paired with the baseline file it most resembles
+#: when at least this share of its lines match (git's own rename threshold).
+PAIRING_THRESHOLD = 0.5
+#: Past these sizes the comparison is not attempted and the added file stays
+#: unmutated, as before -- never "all new", which could score a renamed module's
+#: untouched code.
+_PAIRING_MAX_FILES = 400
+_PAIRING_MAX_LINES = 5000
+
+
+def pair_added_file(rel: str, source: str, baseline_dir: Path) -> Tuple[Optional[str], str, float, bool]:
+    """``(paired_path, baseline_text, similarity, comparable)`` for a file the patch added.
+
+    Only the lines the patch wrote are mutation targets, and for an added file
+    that is "every line" *unless* it is a renamed or copied module: a patch
+    that moves ``pkg/a.py`` to ``pkg/b.py`` and edits one line wrote one line,
+    and mutating the rest would score code nobody changed -- tests of the old
+    module would kill those mutants and report strength for a diff nobody
+    checked. So the added file is compared with every baseline source file and
+    diffed against the most similar one when it resembles it enough.
+    ``comparable`` is False when the comparison was too large to run.
+    """
+    new_lines = source.splitlines()
+    candidates = [p for p in _python_files(Path(baseline_dir))]
+    if len(candidates) > _PAIRING_MAX_FILES or len(new_lines) > _PAIRING_MAX_LINES:
+        return None, "", 0.0, False
+    best: Tuple[Optional[str], str, float] = (None, "", 0.0)
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        old_lines = text.splitlines()
+        if len(old_lines) > _PAIRING_MAX_LINES:
+            return None, "", 0.0, False
+        matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
+        if matcher.real_quick_ratio() < best[2] or matcher.quick_ratio() < best[2]:
+            continue
+        ratio = matcher.ratio()
+        if ratio > best[2]:
+            best = (path.relative_to(Path(baseline_dir)).as_posix(), text, ratio)
+    if best[0] is not None and best[2] >= PAIRING_THRESHOLD:
+        return best[0], best[1], round(best[2], 3), True
+    return None, "", round(best[2], 3), True
+
+
 # ----------------------------------------------------------------------
 # what to break
 # ----------------------------------------------------------------------
@@ -709,6 +803,9 @@ def measure_mutation_score(
         "stillborn": 0,
         "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
         "reference_run": None,
+        "source_sensitive_claims": False,
+        "canary": {"files": [], "exit_code": None},
+        "added_files": {},
     }
     changed = list(detail["changed_files"])  # type: ignore[arg-type]
     foreign = list(detail["foreign_changed_files"])  # type: ignore[arg-type]
@@ -745,6 +842,8 @@ def measure_mutation_score(
         )
 
     originals: Dict[str, str] = {}
+    pairing: Dict[str, Dict[str, object]] = {}
+    edited_rows: Dict[str, set] = {}
     by_line: Dict[Tuple[str, int], List[Mutation]] = {}
     uncovered_lines: List[str] = []
     #: Statement-level sites (census only). They prove a census covers the
@@ -755,15 +854,26 @@ def measure_mutation_score(
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
-            before = (Path(baseline_dir) / rel).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            # One side is missing: added on the patch side, or deleted by it.
-            # Neither has a pair to diff, so neither can produce a mutant.
+            continue  # deleted by the patch (or unreadable): nothing left to mutate
+        try:
+            before = (Path(baseline_dir) / rel).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # Added by the patch. Mutated against the baseline file it was
+            # moved or copied from, or in every line when it resembles none.
+            paired, before, similarity, comparable = pair_added_file(rel, source, Path(baseline_dir))
+            if not comparable:
+                pairing[rel] = {"paired_with": None, "similarity": None, "mutated": False,
+                                "why": "too large to compare with the baseline"}
+                continue
+            pairing[rel] = {"paired_with": paired, "similarity": similarity, "mutated": True}
+        except (OSError, UnicodeDecodeError):
             continue
         originals[rel] = source
         edited = changed_lines(before, source)
         if not edited:
             continue
+        edited_rows[rel] = edited
         # Scan generously, then keep only sites on lines this patch wrote,
         # grouped by line.
         operator_rows = set()
@@ -779,6 +889,7 @@ def measure_mutation_score(
             uncovered_lines.extend(f"{rel}:{n}" for n in missing)
     total_sites = sum(len(v) for v in by_line.values())
     plan = _spread(by_line, max_mutants)
+    detail["added_files"] = pairing
 
     if not plan:
         deleted = detail["deleted_files"]
@@ -819,12 +930,14 @@ def measure_mutation_score(
         # is slow, a timeout says nothing about the mutant (the AG-039 trap:
         # counted as kills, a slow run would read as a perfect score).
         reference_fast = False
+        reference_passed = True  # unknown counts as "may pass": the canary decides alone
         elapsed = 0.0
         if timeout_seconds:
             started = time.monotonic()
             reference = _run()
             elapsed = time.monotonic() - started
-            reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
+            reference_passed = reference.exit_code == PYTEST_OK
+            reference_fast = reference_passed and elapsed < timeout_seconds / 3
             detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
                                        "hang_counts_as_kill": reference_fast}
         # A run killed by a signal *other* than the wall clock (the CPU-time
@@ -832,6 +945,45 @@ def measure_mutation_score(
         # CPU time is the process's own -- unless the reference itself came
         # close to that limit. A wall-clock kill under load does depend on it.
         cpu_room = not cpu_seconds or elapsed < cpu_seconds / 3
+
+        # AG-046: the claims on a copy whose only difference is a comment after
+        # each line the patch wrote. The code does exactly the same, so a claim
+        # that stops passing was not checking what the code does -- it was
+        # reading the code (a hash of the file, ``inspect.getsource``). Such a
+        # claim "kills" every mutant, so its score says nothing; it cannot be
+        # measured, and the reason says why.
+        canary_files = {rel: neutral for rel, rows in edited_rows.items()
+                        if (neutral := canary_source(originals[rel], rows)) is not None}
+        # Only when the unmutated claims pass here: a claim that cannot pass
+        # (killed at a limit, say) has nothing to say about the comment, and
+        # the mutant runs below report that on their own.
+        if canary_files and reference_passed:
+            for rel, neutral in canary_files.items():
+                (work / rel).write_text(neutral, encoding="utf-8")
+            try:
+                probe = _run()
+                if probe.exit_code != PYTEST_OK:
+                    # Once more: a claim that reads the text fails again, a run
+                    # a busy machine cut short does not. Two failures decide.
+                    probe = _run()
+            finally:
+                for rel in canary_files:
+                    (work / rel).write_text(originals[rel], encoding="utf-8")
+            detail["canary"] = {"files": sorted(canary_files), "exit_code": probe.exit_code}
+            if probe.exit_code != PYTEST_OK:
+                sensitive = probe.exit_code == PYTEST_TESTS_FAILED
+                detail["source_sensitive_claims"] = sensitive
+                return finish(
+                    SuiteStrength(0, 0, 0.0, is_measured=False),
+                    ("the claims fail on a copy of the patch whose only change is a comment after "
+                     "each line it wrote: they read the text of the code, not what it does, so "
+                     "breaking the code proves nothing about them"
+                     if sensitive else
+                     f"the claims could not be run on the comment-only copy of the patch (exit code "
+                     f"{probe.exit_code}), so nothing was measured"),
+                )
+        else:
+            detail["canary"] = {"files": [], "exit_code": None}
 
         def _ambiguous(outcome) -> bool:
             """Killed at a limit that the load around this run may have reached for it."""

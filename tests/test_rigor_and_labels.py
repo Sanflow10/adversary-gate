@@ -792,3 +792,147 @@ class TestAnAddedTestCanProveTheFix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAClaimThatReadsTheCodeIsNotMeasured(unittest.TestCase):
+    """AG-046: a test that hashes the module's own source, or reads it with
+    ``inspect``, fails on *any* edit to it -- so it "kills" every mutant, fails
+    on the baseline and passes on the patch. Strength 1.0 and a proven fix,
+    and nothing about what the code does was checked. The gate runs the claims
+    once on a copy whose only change is a comment after each line the patch
+    wrote; code that behaves the same must pass the same."""
+
+    CALLS = ("    assert add(2, 3) == 5\n    assert sub(5, 3) == 2\n    assert mul(3, 4) == 12\n"
+             "    assert div(8, 2) == 4\n    assert mod(7, 3) == 1\n")
+
+    def _run(self, body: str):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            digest = hashlib.sha256((root / "patch" / "calc.py").read_bytes()).hexdigest()
+            text = ("import hashlib, inspect, pathlib\nimport calc\n"
+                    "from calc import add, sub, mul, div, mod\n\n\ndef test_ops():\n"
+                    + body.replace("DIGEST", digest))
+            for side in ("baseline", "patch"):
+                (root / side / "test_calc.py").write_text(text)
+            return _cli(root)
+
+    def test_a_test_that_hashes_its_module_is_not_a_measurement(self):
+        code, payload = self._run(
+            "    pathlib.Path(calc.__file__).read_bytes()\n    assert hashlib.sha256("
+            "pathlib.Path(calc.__file__).read_bytes()).hexdigest() == 'DIGEST'\n")
+        mutation = payload["mutation"]
+        self.assertFalse(mutation["measured"], mutation)
+        self.assertTrue(mutation["source_sensitive_claims"])
+        self.assertIn("text of the code", mutation["reason"])
+        self.assertNotEqual(code, EXIT_MERGE)
+        self.assertNotEqual(payload["decision"], "merge")
+        self.assertFalse(payload["fix_proven"])
+
+    def test_a_test_that_hashes_the_source_of_a_function_is_not_a_measurement(self):
+        import hashlib
+        expected = hashlib.sha256(
+            "def add(a, b):\n    return (a + b)\n".encode()).hexdigest()
+        _, payload = self._run(
+            self.CALLS.replace("    assert mod(7, 3) == 1\n", "    assert mod(7, 3) == 1\n")
+            + f"    src = inspect.getsource(calc.add)\n"
+              f"    assert hashlib.sha256(src.encode()).hexdigest() == '{expected}'\n")
+        self.assertFalse(payload["mutation"]["measured"], payload["mutation"])
+        self.assertNotEqual(payload["decision"], "merge")
+
+    def test_a_test_that_checks_behaviour_is_measured_as_before(self):
+        _, payload = self._run(self.CALLS)
+        mutation = payload["mutation"]
+        self.assertTrue(mutation["measured"], mutation)
+        self.assertFalse(mutation["source_sensitive_claims"])
+        self.assertEqual(mutation["canary"]["exit_code"], 0)
+        self.assertEqual(mutation["mutants_killed"], mutation["mutants_counted"])
+
+
+class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
+    def test_the_copy_parses_to_the_same_tree_and_comments_only_line_ends(self):
+        import ast
+        from adversary_gate.verifiers.strength import canary_source
+        source = ('def f(a, b):\n    x = a + b\n    s = """one\n# not a comment\ntwo"""\n'
+                  '    y = (a +\n         b)\n    return x + y + len(s)\n')
+        out = canary_source(source, {2, 3, 4, 5, 6, 7, 8})
+        self.assertIsNotNone(out)
+        self.assertEqual(ast.dump(ast.parse(out)), ast.dump(ast.parse(source)))
+        self.assertIn('# not a comment\ntwo"""  # adversary-gate canary', out)
+        self.assertNotIn("# not a comment  # adversary-gate canary", out)
+
+    def test_only_lines_the_patch_wrote_get_a_comment(self):
+        from adversary_gate.verifiers.strength import canary_source
+        out = canary_source("a = 1\nb = 2\nc = 3\n", {2})
+        self.assertEqual(out.split("\n")[:3],
+                         ["a = 1", "b = 2  # adversary-gate canary", "c = 3"])
+
+    def test_no_canary_when_there_is_nothing_to_comment_or_the_source_does_not_parse(self):
+        from adversary_gate.verifiers.strength import canary_source
+        self.assertIsNone(canary_source("a = 1\n", set()))
+        self.assertIsNone(canary_source("def (:\n", {1}))
+
+
+class TestAFileThePatchAddedIsMutated(unittest.TestCase):
+    """A module the patch creates has no baseline copy, so it used to be
+    skipped: the mutation run found "no mutable operator", suite strength was
+    unverified, and no patch that adds code could reach MERGE. It is mutated
+    now -- but only the lines the patch wrote: a module that is a rename or a
+    copy of a baseline file is diffed against it, or tests of the old module
+    would kill mutants in code nobody changed."""
+
+    NEW = ("def total(items):\n    t = 0\n    for i in items:\n        t = t + i\n    return t\n\n\n"
+           "def avg(items):\n    return total(items) / len(items)\n")
+    STRONG = ("from newmod import total, avg\n\n\ndef test_it():\n"
+              "    assert total([1, 2, 3]) == 6\n    assert avg([2, 4]) == 3\n    assert total([]) == 0\n")
+    HOLLOW = ("from newmod import total, avg\n\n\ndef test_it():\n"
+              "    total([1, 2, 3])\n    avg([2, 4])\n")
+
+    def _measure(self, files_base: dict, files_patch: dict, test_text: str, **kwargs):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, files in (("baseline", files_base), ("patch", files_patch)):
+                (root / side).mkdir()
+                for name, text in files.items():
+                    (root / side / name).write_text(text)
+                (root / side / "test_new.py").write_text(test_text)
+            return measure_mutation_score(root / "baseline", root / "patch", "test_new.py", **kwargs)
+
+    def test_a_new_module_with_a_strong_test_is_measured(self):
+        score, detail = self._measure({"other.py": "X = 1\n"}, {"other.py": "X = 1\n", "newmod.py": self.NEW},
+                                      self.STRONG)
+        self.assertTrue(score.is_measured, detail)
+        self.assertEqual(score.mutants_killed, score.mutants_total, detail["survivors"])
+        self.assertGreaterEqual(score.mutants_total, 2)
+        self.assertEqual(detail["added_files"]["newmod.py"]["paired_with"], None)
+        self.assertTrue(detail["added_files"]["newmod.py"]["mutated"])
+
+    def test_a_new_module_with_a_test_that_asserts_nothing_is_not_strong(self):
+        score, detail = self._measure({"other.py": "X = 1\n"}, {"other.py": "X = 1\n", "newmod.py": self.NEW},
+                                      self.HOLLOW)
+        self.assertTrue(score.is_measured, detail)
+        self.assertFalse(score.is_strong, detail)
+        self.assertTrue(detail["survivors"])
+
+    def test_a_renamed_module_is_mutated_only_where_it_changed(self):
+        old = "def total(items):\n    t = 0\n    for i in items:\n        t = t + i\n    return t\n"
+        new = old.replace("t = 0", "t = 1 - 1")  # the one line the patch wrote
+        score, detail = self._measure({"oldmod.py": old}, {"newmod.py": new}, self.STRONG.replace(
+            "from newmod import total, avg", "from newmod import total\navg = lambda x: sum(x) / len(x)"))
+        self.assertEqual(detail["added_files"]["newmod.py"]["paired_with"], "oldmod.py")
+        self.assertEqual({m["line"] for m in detail["mutants"]}, {2}, detail["mutants"])
+
+    def test_a_copied_module_is_mutated_only_where_it_differs_from_its_source(self):
+        copy = self.NEW.replace("t = 0", "t = 1 - 1")
+        score, detail = self._measure({"newmod_orig.py": self.NEW}, {"newmod_orig.py": self.NEW, "newmod.py": copy},
+                                      self.STRONG)
+        self.assertEqual(detail["added_files"]["newmod.py"]["paired_with"], "newmod_orig.py")
+        self.assertEqual({(m["file"], m["line"]) for m in detail["mutants"]}, {("newmod.py", 2)}, detail["mutants"])
+
+    def test_an_unrelated_module_is_mutated_in_every_line(self):
+        _, detail = self._measure({"other.py": "def unrelated(a):\n    return a * 9\n"},
+                                  {"other.py": "def unrelated(a):\n    return a * 9\n", "newmod.py": self.NEW},
+                                  self.STRONG)
+        self.assertIsNone(detail["added_files"]["newmod.py"]["paired_with"])
+        self.assertEqual({m["line"] for m in detail["mutants"]}, {4, 9})
