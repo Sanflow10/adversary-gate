@@ -686,11 +686,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the baseline side and the patch side of each check one after "
         "the other instead of at the same time, and the full suite after the "
-        "claims and the mutants instead of alongside them, and one mutant at a "
-        "time. The runs are the "
+        "claims and the mutants instead of alongside the claims; forces "
+        "--mutation-workers 1. The runs are the "
         "same either way; use it on a machine too small for several test "
         "processes, or when the tests share something outside the repository "
-        "(a fixed /tmp path, a port) and collide.",
+        "(a fixed /tmp path, a port) and collide. The mutants never run beside "
+        "the suite (AG-043).",
+    )
+    parser.add_argument(
+        "--mutation-workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run N mutants at once, each on its own copy of the tree (default 1). "
+        "Only for claims that share nothing outside the repository: two runs that "
+        "meet on the same /tmp path, port or test database make one of them fail, "
+        "and a failing run is counted as a killed mutant (AG-043). "
+        "--serial-sides forces 1.",
     )
     parser.add_argument(
         "--strength-confidence",
@@ -855,6 +867,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # Every call sets it, empty included: a previous main() in the same
         # process must not leave its declarations behind.
         set_test_support(args.test_support)
+        if args.mutation_workers < 1:
+            raise ValueError("--mutation-workers must be at least 1")
+        if args.mutation_workers > 1 and args.census_min_mutants > 0 and not args.serial_sides:
+            # A census demands every mutant killed and then reads the exact
+            # ratio: a neighbour that fails a run would turn straight into 1.0.
+            raise ValueError("--census-min-mutants needs the mutants run one at a time "
+                             "(drop --mutation-workers)")
 
         criteria: List[AcceptanceCriterion] = []
         for raw in args.criterion:
@@ -1059,11 +1078,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             background.append(suite_pool)
             suite_future = suite_pool.submit(_patch_suite, patch_copy, oracle_tree)
         execution["full_suite_alongside"] = suite_future is not None
-        # Mutants at once, each on its own copy: half the CPUs, at most 4.
-        # --serial-sides means one at a time, as before.
-        execution["mutation_workers"] = (
-            1 if args.serial_sides else max(1, min(4, (os.cpu_count() or 1) // 2))
-        )
+        # One mutant at a time unless the operator asks (AG-043): 2.14.0 ran
+        # half the CPUs' worth at once, and a run a neighbour made fail
+        # counted as a kill. --serial-sides means one, whatever was asked.
+        execution["mutation_workers"] = 1 if args.serial_sides else args.mutation_workers
 
         verdicts: List[GateVerdict] = [
             gate.verify_claim(

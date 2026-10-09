@@ -474,7 +474,8 @@ adversary-gate ... --python .venv/bin/python \
 | `--memory` | `512M` | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
 | `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
 | `--env NAME=VALUE` | — | set one |
-| `--serial-sides` | off | run the baseline and patch sides of a check one after the other instead of together, and the full suite after the claims and mutants instead of alongside them, and one mutant at a time (small machines; tests that share a fixed `/tmp` path or a port) |
+| `--serial-sides` | off | run the baseline and patch sides of a check one after the other instead of together, and the full suite after the claims and mutants instead of alongside the claims; forces `--mutation-workers 1` (small machines; tests that share a fixed `/tmp` path or a port). The mutants never run beside the suite either way (AG-043) |
+| `--mutation-workers N` | `1` | mutants at once, each on its own copy of the tree. Only for claims that share nothing outside the repository: two runs that meet on the same `/tmp` path, port or test database make one of them fail, and a failing run counts as a killed mutant (AG-043). Not with `--census-min-mutants` |
 
 The same choices apply to every run — claims, mutants and the collateral suite —
 except time and memory: the whole suite gets its own limits, because ones sized

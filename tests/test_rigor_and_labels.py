@@ -22,6 +22,7 @@ import json
 import math
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from concurrent.futures import Future
@@ -254,33 +255,22 @@ class TestAHangIsAKillWhenTheTestsAreFast(unittest.TestCase):
         self.assertFalse(any(m.get("by") == "timeout" for m in mutants), mutants)
 
 
-class TestAHangUnderLoadIsRerunAlone(unittest.TestCase):
-    """A timeout while the full suite runs alongside is not yet a kill.
+class TestMutantsNeverShareTheMachineWithTheSuite(unittest.TestCase):
+    """AG-043: no mutant run, and not the reference, starts while the suite runs.
 
-    The full suite runs at the same time as the mutants. A mutant whose run
-    hits the limit then may only have been slowed by it, and a hang counts as
-    a kill (AG-042) -- the fail-open direction. Such a run is repeated once
-    the suite is done, and the repeat decides.
+    2.14.0 ran the full suite alongside the mutants and re-ran only the
+    mutants killed *at a limit*. A mutant run that failed with exit 1 because
+    the suite touched the same thing outside the repository (a fixed /tmp
+    path, a port, a test database) counted as killed: a weak test went from
+    0/8 to 4/8 kills with the mutants one at a time and the suite beside them.
+    A kill is evidence only when nothing else could have failed the run, so
+    the mutants now wait for the suite to finish.
     """
 
     BASE = TestAHangIsAKillWhenTheTestsAreFast.BASE
     PATCH = TestAHangIsAKillWhenTheTestsAreFast.PATCH
 
-    def _measure(self, rerun_code, *, alongside=True):
-        suite = Future()
-        calls = []
-
-        def fake_run(*_args, **_kwargs):
-            calls.append(suite.done())
-            if len(calls) == 1:
-                return SandboxResult(0, "", "", False)  # the reference: fast, passing
-            if not suite.done():
-                suite.set_result(None)  # the suite finishes while this run is stuck
-                return SandboxResult(-1, "", "", True)
-            if rerun_code == -1:
-                return SandboxResult(-1, "", "", True)
-            return SandboxResult(rerun_code, "", "", False)
-
+    def _measure(self, suite, fake_run):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for side, src in (("baseline", self.BASE), ("patch", self.PATCH)):
@@ -288,28 +278,33 @@ class TestAHangUnderLoadIsRerunAlone(unittest.TestCase):
                 (root / side / "calc.py").write_text(src)
                 (root / side / "test_calc.py").write_text("def test_count():\n    pass\n")
             with mock.patch("adversary_gate.verifiers.strength.run_test", side_effect=fake_run):
-                _, detail = measure_mutation_score(
+                return measure_mutation_score(
                     root / "baseline", root / "patch", "test_calc.py",
-                    max_mutants=1, timeout_seconds=30,
-                    alongside=suite if alongside else None,
+                    max_mutants=2, timeout_seconds=30, alongside=suite,
                 )
-        return detail["mutants"][0], calls
 
-    def test_a_timeout_that_passes_alone_is_a_survivor(self):
-        entry, _ = self._measure(0)
-        self.assertEqual(entry["result"], "survived", entry)
-        self.assertEqual(entry["rerun_alone"], -1)
+    def test_no_run_starts_before_the_suite_is_done(self):
+        suite: Future = Future()
+        timer = threading.Timer(0.3, suite.set_result, (None,))
+        seen = []
 
-    def test_a_timeout_that_hangs_alone_too_is_still_a_kill(self):
-        entry, _ = self._measure(-1)
-        self.assertEqual((entry["result"], entry.get("by")), ("killed", "timeout"), entry)
-        self.assertEqual(entry["rerun_alone"], -1)
+        def fake_run(*_args, **_kwargs):
+            seen.append(suite.done())
+            # Killed with exit 1 -- exactly what a neighbour can cause.
+            return SandboxResult(0 if len(seen) == 1 else 1, "", "", False)
 
-    def test_without_anything_alongside_nothing_is_rerun(self):
-        entry, calls = self._measure(0, alongside=False)
-        self.assertEqual((entry["result"], entry.get("by")), ("killed", "timeout"), entry)
-        self.assertNotIn("rerun_alone", entry)
-        self.assertEqual(len(calls), 2)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        _, detail = self._measure(suite, fake_run)
+        self.assertGreater(len(seen), 1)
+        self.assertTrue(all(seen), f"runs started while the suite ran: {seen}")
+        self.assertNotIn("rerun_alone", json.dumps(detail["mutants"]))
+
+    def test_a_suite_that_raised_is_still_waited_for_and_left_to_the_caller(self):
+        suite: Future = Future()
+        suite.set_exception(RuntimeError("suite crashed"))
+        _, detail = self._measure(suite, lambda *_a, **_k: SandboxResult(0, "", "", False))
+        self.assertTrue(detail["mutants"])
 
 
 class TestMutantsInParallel(unittest.TestCase):
@@ -392,6 +387,49 @@ class TestMutantsInParallel(unittest.TestCase):
         mutants = self._measure(SandboxResult(-9, "", "", False), cpu_seconds=3, reference_seconds=1.1)
         for m in mutants:
             self.assertEqual((m["result"], m.get("rerun_alone")), ("survived", -9), m)
+
+
+class TestMutantWorkersAreOptIn(unittest.TestCase):
+    """AG-043: one mutant at a time unless the operator asks for more.
+
+    2.14.0 ran half the CPUs' worth of mutants at once by default. Two runs
+    of the same claims collide on anything they share outside their copies
+    of the tree, and the loser exits 1 -- a kill. Measured: a test that
+    checks no value went from 0/8 to 8/8 kills and MERGE. Workers above one
+    are for suites that share nothing outside the repository, and the
+    operator has to say so.
+    """
+
+    def _payload(self, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            with mock.patch("os.cpu_count", return_value=8):
+                code, payload = _cli(root, *extra)
+        return code, payload
+
+    def test_one_at_a_time_by_default_whatever_the_cpu_count(self):
+        _, payload = self._payload()
+        self.assertEqual(payload["execution"]["mutation_workers"], 1)
+
+    def test_more_only_when_asked(self):
+        _, payload = self._payload("--mutation-workers", "3")
+        self.assertEqual(payload["execution"]["mutation_workers"], 3)
+
+    def test_serial_sides_still_means_one(self):
+        _, payload = self._payload("--mutation-workers", "3", "--serial-sides")
+        self.assertEqual(payload["execution"]["mutation_workers"], 1)
+
+    def test_a_census_needs_mutants_run_alone(self):
+        """A census demands every mutant killed: interference would turn
+        straight into an exact score of 1.0."""
+        code, payload = self._payload("--mutation-workers", "2", "--census-min-mutants", "1")
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIsNone(payload)
+
+    def test_zero_workers_is_a_usage_error(self):
+        code, _ = self._payload("--mutation-workers", "0")
+        self.assertEqual(code, EXIT_USAGE)
 
 
 class TestCensusIsNotASample(unittest.TestCase):

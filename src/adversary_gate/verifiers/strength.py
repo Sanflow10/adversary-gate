@@ -652,19 +652,18 @@ def measure_mutation_score(
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
-    ``alongside`` is work running at the same time (the full suite). A run
-    that hits the time limit while it is still going may have been slowed by
-    it rather than hung, and a hang counts as a kill -- so that run is
-    repeated once the work is done, and the repeat is the result. It can
-    only turn a kill into a survivor or a stillborn mutant, never the other
-    way. The reference run is repeated the same way when it was too slow to
-    vouch for timeouts.
+    ``alongside`` is work started before this call (the full suite). It is
+    waited for before the first run: a run that fails because something else
+    touched the same thing outside the repository exits 1 like a kill, and
+    nothing in the run tells the two apart (AG-043).
 
     ``parallel`` > 1 runs that many mutants at once, each worker on its own
-    copy of the tree. Every such run had neighbours, so the same rule applies
-    to it: a wall-clock kill is repeated alone after all of them finish. A
-    kill by the CPU-time limit is not -- CPU time is the process's own --
-    unless the unmutated reference itself used a third of that limit.
+    copy of the tree -- the operator's choice, for claims that share nothing
+    outside the repository, because a neighbour that makes a run fail is
+    counted as a kill. A wall-clock kill beside other runs is repeated alone
+    after all of them finish. A kill by the CPU-time limit is not -- CPU time
+    is the process's own -- unless the unmutated reference itself used a
+    third of that limit.
 
     ``census_min`` > 0 turns on the census rule: when every mutation site of
     the change was executed -- nothing cut by the budget, every changed
@@ -806,12 +805,13 @@ def measure_mutation_score(
                 **dict(run_kwargs or {}),
             )
 
-        def _contended() -> bool:
-            return alongside is not None and not alongside.done()
-
-        def _settle() -> None:
-            if alongside is not None:
-                wait([alongside])  # its exception, if any, is the caller's to raise
+        # AG-043: nothing runs beside the mutants. A run that fails with exit 1
+        # is a kill, and a run that failed because the suite touched the same
+        # thing outside the repository (a fixed /tmp path, a port, a test
+        # database) looks exactly like one. 2.14.0 re-ran only the kills at a
+        # limit; a weak test went from 0/8 to 4/8 with the suite alongside.
+        if alongside is not None:
+            wait([alongside])  # its exception, if any, is the caller's to raise
 
         # AG-042: the claims, unmutated, once. A mutant whose run is killed at
         # the time limit made the tests hang -- detected -- but only if the
@@ -821,17 +821,10 @@ def measure_mutation_score(
         reference_fast = False
         elapsed = 0.0
         if timeout_seconds:
-            contended = _contended()
             started = time.monotonic()
             reference = _run()
             elapsed = time.monotonic() - started
             reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
-            if contended and not reference_fast:
-                _settle()
-                started = time.monotonic()
-                reference = _run()
-                elapsed = time.monotonic() - started
-                reference_fast = reference.exit_code == PYTEST_OK and elapsed < timeout_seconds / 3
             detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
                                        "hang_counts_as_kill": reference_fast}
         # A run killed by a signal *other* than the wall clock (the CPU-time
@@ -864,34 +857,37 @@ def measure_mutation_score(
                 continue
             jobs.append((entry, Path(rel), mutant_source, original))
 
-        def _attempt(directory: Path, job) -> Tuple[Any, bool]:
-            """One run of one mutant in ``directory``: (outcome or exception, contended)."""
+        def _attempt(directory: Path, job) -> Any:
+            """One run of one mutant in ``directory``: the outcome, or the exception."""
             _entry, rel, mutant_source, original = job
             target = directory / rel
-            contended = _contended()
             try:
                 target.write_text(mutant_source, encoding="utf-8")
-                return _run(directory), contended
+                return _run(directory)
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
-                return exc, contended
+                return exc
             finally:
                 if target.exists():
                     target.write_text(original, encoding="utf-8")
 
+        # (outcome, contended): contended runs had a neighbour.
         outcomes: List[Tuple[Any, bool]] = []
         workers = max(1, min(parallel, len(jobs)))
         if workers == 1:
-            outcomes = [_attempt(work, job) for job in jobs]
+            outcomes = [(_attempt(work, job), False) for job in jobs]
         else:
-            # Each worker breaks its own copy; every run beside another one
-            # is "contended", so a run its neighbours may have slowed past
-            # the wall clock is repeated alone below before it can count.
+            # Opt-in (--mutation-workers): each worker breaks its own copy, and
+            # every run beside another one is "contended". A run its neighbours
+            # may have slowed past the wall clock is repeated alone below
+            # before it can count. A run a neighbour made *fail* -- the same
+            # /tmp path, the same port -- is not told apart from a kill, which
+            # is why this is the operator's choice and off by default (AG-043).
             copies = [work] + [Path(tmp) / f"repo{i}" for i in range(1, workers)]
             for copy in copies[1:]:
                 shutil.copytree(work, copy)
 
             def _lane(index: int) -> List[Tuple[int, Tuple[Any, bool]]]:
-                return [(i, (_attempt(copies[index], jobs[i])[0], True))
+                return [(i, (_attempt(copies[index], jobs[i]), True))
                         for i in range(index, len(jobs), workers)]
 
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="adversary-mutant") as pool:
@@ -905,10 +901,9 @@ def measure_mutation_score(
             entry = job[0]
             if not isinstance(outcome, BaseException) and contended and _ambiguous(outcome):
                 # Slowed or hung? Only a run with nothing beside it says, and
-                # its answer is the result.
-                _settle()
+                # its answer is the result. Every lane has finished by now.
                 entry["rerun_alone"] = outcome.exit_code
-                outcome, _ = _attempt(work, job)
+                outcome = _attempt(work, job)
             if isinstance(outcome, BaseException):
                 entry["result"] = "harness-error"
                 entry["error"] = f"{type(outcome).__name__}: {outcome}"
