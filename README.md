@@ -670,7 +670,7 @@ adversary-gate-mcp --print-hermes-skill    # SKILL.md for ~/.hermes/skills/adver
 adversary-gate-mcp --print-hermes-config   # the mcp_servers block for ~/.hermes/config.yaml
 ```
 
-Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`. `verify_repo` judges the repository's **working tree** — committed or not, untracked files included — against a baseline: it materialises the baseline with `git archive`, writes the diff, runs coverage.py with per-test contexts (data file in a scratch directory, nothing written into the repo), discovers the claims when none are named, and runs the gate. The answer carries `decision`, `mergeable`, `fix_proven`, every claim's `oracle`, and the full artefact.
+Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`. `verify_repo` judges the repository's **working tree** — committed or not, untracked files included — against a baseline: it writes the baseline commit's tree into a scratch directory, every file as committed (not with `git archive`, which applies the repository's export attributes — AG-044), writes the diff, runs coverage.py with per-test contexts (data file in a scratch directory, nothing written into the repo), discovers the claims when none are named, and runs the gate. The answer carries `decision`, `mergeable`, `fix_proven`, every claim's `oracle`, and the full artefact.
 
 **The agent says what to judge; the operator says how strictly, and against what.** The tool arguments name evidence only. Everything that decides the answer comes from the server's environment, set in the agent's MCP config by whoever runs it:
 

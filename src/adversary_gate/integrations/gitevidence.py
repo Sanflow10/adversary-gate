@@ -4,7 +4,9 @@
 (``base...HEAD``). An agent's patch usually is not: it is whatever the working
 tree holds right now, committed or not. So here
 
-* **baseline** is ``git archive <base_ref>``: the committed tree and nothing else;
+* **baseline** is the committed tree of ``<base_ref>``, every file as committed
+  (a private index and ``checkout-index``; not ``git archive``, which applies the
+  repository's export attributes -- AG-044);
 * **patch** is the working tree itself, untracked files included;
 * **diff** is ``git diff <base_ref>`` (tracked changes, staged or not) plus a
   new-file hunk for every untracked, non-ignored file -- ``git diff`` alone
@@ -18,11 +20,10 @@ Nothing in the working tree is modified, staged or committed.
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import subprocess
-import tarfile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -75,12 +76,12 @@ class Evidence:
     untracked: List[str]
 
 
-def _git(repo: Path, *args: str, binary: bool = False):
+def _git(repo: Path, *args: str, binary: bool = False, env: Optional[dict] = None):
     proc = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=not binary,
-        env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat"},
+        env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat", **(env or {})},
     )
     if proc.returncode != 0:
         err = proc.stderr if isinstance(proc.stderr, str) else proc.stderr.decode(errors="replace")
@@ -121,16 +122,18 @@ def prepare(
 
     baseline = workdir / "baseline"
     baseline.mkdir(parents=True)
-    archive = _git(repo, "archive", "--format=tar", base_ref, binary=True)
-    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-        if hasattr(tarfile, "data_filter"):
-            tar.extractall(baseline, filter="data")
-        else:  # pragma: no cover - Python < 3.10.12 / 3.11.4
-            for member in tar.getmembers():
-                target = (baseline / member.name).resolve()
-                if not target.is_relative_to(baseline.resolve()) or member.issym() or member.islnk():
-                    raise EvidenceError(f"refusing archive member outside the baseline: {member.name}")
-            tar.extractall(baseline)  # nosec B202 - every member checked above
+    # Every file of the commit, as committed (AG-044). Not ``git archive``: it
+    # builds a release tarball and applies the export attributes the
+    # repository declares -- ``export-ignore`` drops files (a project that
+    # keeps its tests out of the sdist had no tests in the baseline, so the
+    # baseline oracle had nothing to judge with) and ``export-subst`` rewrites
+    # them. A private index and ``checkout-index`` write the tree; the
+    # repository's own index and working tree are not touched.
+    with tempfile.TemporaryDirectory(prefix="adversary-index-") as scratch:
+        index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        _git(repo, "read-tree", base_ref, env=index)
+        _git(repo, "checkout-index", "--all", "--force",
+             f"--prefix={baseline.resolve()}{os.sep}", env=index)
 
     diff_text = _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-color", base_ref, "--")
     untracked = [

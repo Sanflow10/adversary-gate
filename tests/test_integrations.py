@@ -291,6 +291,22 @@ class TestGitEvidence(unittest.TestCase):
             self.assertEqual(claims, [])
             self.assertEqual(detail["tests_found"], 0)
 
+    def test_the_baseline_is_the_commit_whatever_its_gitattributes_say(self):
+        """AG-044: ``git archive`` builds a release tarball, so it applies the
+        export attributes the repository declares -- ``export-ignore`` drops
+        files and ``export-subst`` rewrites them. A project that keeps its
+        tests out of the tarball had no tests in the baseline."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "_version.py").write_text('VERSION = "$Format:%H$"\n')
+            (repo / ".gitattributes").write_text("test_calc.py export-ignore\n_version.py export-subst\n")
+            for args in (["add", "-A"], ["commit", "-qm", "attributes"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertEqual((evidence.baseline / "test_calc.py").read_text(), TESTS)
+            self.assertEqual((evidence.baseline / "_version.py").read_text(), 'VERSION = "$Format:%H$"\n')
+
     def test_unknown_ref_is_an_evidence_error(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = _git_repo(Path(directory))

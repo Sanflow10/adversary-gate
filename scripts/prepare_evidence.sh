@@ -86,14 +86,26 @@ if [ "$HEAD_SHA" = "$(git -C "$WORKSPACE" rev-parse "$BASE_SHA^{commit}")" ]; th
 fi
 
 # ------------------------------------------------------------------ baseline
-# `git archive` gives the committed tree and nothing else: no build output, no
-# untracked files, no worktree state that a previous step may have left behind.
+# The committed tree and nothing else: no build output, no untracked files, no
+# worktree state that a previous step may have left behind -- and every file
+# as committed. Not `git archive`: it builds a release tarball, so it applies
+# the export attributes the repository declares. `export-ignore` drops files
+# (a project that keeps its tests out of the sdist had no tests in the
+# baseline, and the baseline oracle had nothing to judge with -- AG-044) and
+# `export-subst` rewrites them. A private index and `checkout-index` write the
+# tree the way the workspace's own checkout was written (line endings,
+# filters); the workspace and its index are not touched.
 rm -rf "$BASELINE_DIR"
 mkdir -p "$BASELINE_DIR"
-if ! git -C "$WORKSPACE" archive "$BASE_SHA" | tar -x -C "$BASELINE_DIR"; then
-  rm -rf "$BASELINE_DIR"
+BASELINE_ABS="$(cd "$BASELINE_DIR" && pwd)"
+BASE_INDEX_DIR="$(mktemp -d)"
+if ! GIT_INDEX_FILE="$BASE_INDEX_DIR/index" git -C "$WORKSPACE" read-tree "$BASE_SHA" \
+   || ! GIT_INDEX_FILE="$BASE_INDEX_DIR/index" git -C "$WORKSPACE" \
+          checkout-index --all --force --prefix="$BASELINE_ABS/"; then
+  rm -rf "$BASE_INDEX_DIR" "$BASELINE_DIR"
   die "$EXIT_ENV" "could not materialise '$BASE_SHA' into $BASELINE_DIR"
 fi
+rm -rf "$BASE_INDEX_DIR"
 [ -e "$BASELINE_DIR" ] || die "$EXIT_ENV" "baseline ended up empty: $BASELINE_DIR"
 
 # ---------------------------------------------------------------------- diff

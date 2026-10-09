@@ -165,5 +165,37 @@ grep -q "did not produce a non-empty file" "$WORK/nocov.err" \
 grep -q '`' "$WORK/nocov.err" && fail "message contains a bare backtick (command substitution)"
 note "no coverage artefact -> exit 4, with a readable reason"
 
+# ------------------- AG-044: the baseline is the commit, not a release tarball
+# `git archive` applies the export attributes the repository declares for its
+# tarballs: `export-ignore` drops files, `export-subst` rewrites them. A
+# project that keeps its tests out of the sdist had no tests in the baseline.
+mkdir -p "$WORK/repo2/tests"
+cd "$WORK/repo2"
+git init -q .
+git config user.email "test@example.com"
+git config user.name "prepare-evidence test"
+printf 'def add(a, b):\n    return a + b\n' > calc.py
+printf 'from calc import add\n\n\ndef test_add():\n    assert add(2, 2) == 4\n' > tests/test_calc.py
+printf 'VERSION = "$Format:%%H$"\n' > _version.py
+printf 'tests/ export-ignore\n_version.py export-subst\n' > .gitattributes
+git add -A
+git commit -qm "baseline"
+BASE2="$(git rev-parse HEAD)"
+printf 'def add(a, b):\n    return (a + b)\n' > calc.py
+git commit -qam "patch"
+if ! bash "$PREPARE" --workspace "$WORK/repo2" --base-sha "$BASE2" \
+    --baseline-dir "$WORK/e2/baseline" --diff-file "$WORK/e2/change.diff" \
+    --skip-coverage >/dev/null 2>"$WORK/e2.err"; then
+  cat "$WORK/e2.err" >&2
+  fail "prepare_evidence.sh failed on a repository with export attributes"
+fi
+[ -f "$WORK/e2/baseline/tests/test_calc.py" ] \
+  || fail "export-ignore dropped tests/test_calc.py from the baseline"
+grep -q 'Format:%H' "$WORK/e2/baseline/_version.py" \
+  || fail "export-subst rewrote _version.py in the baseline"
+grep -q "return a + b" "$WORK/e2/baseline/calc.py" \
+  || fail "baseline calc.py is not the committed one"
+note "baseline holds every committed file as committed (export-ignore, export-subst)"
+
 echo
 echo "prepare_evidence.sh: all checks passed"
