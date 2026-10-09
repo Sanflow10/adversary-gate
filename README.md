@@ -610,7 +610,7 @@ What that does, and where each piece comes from:
 
 | Artefact | Derived from |
 |---|---|
-| `baseline` | `git archive <base-sha>` — the committed tree, no worktree leftovers |
+| `baseline` | `<base-sha>`'s tree through a private index (`read-tree` + `checkout-index`) — every file as committed, no worktree leftovers; not `git archive`, which applies the repository's export attributes (AG-044) |
 | `diff` | `git diff --no-ext-diff <base-sha>...HEAD` |
 | `coverage-json` | `coverage-command`, run in the checkout |
 | `patch` | the checkout itself |

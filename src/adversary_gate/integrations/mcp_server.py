@@ -121,11 +121,12 @@ def verify_repo(
     whether the baseline is pinned. Python/pytest only; changes in other
     languages come back inconclusive.
 
-    What it does: takes the baseline from ``git archive``, diffs it against the
-    working tree (uncommitted and untracked files included), runs the suite
-    under coverage.py, then runs the gate: the claims on the baseline and on the
-    patch, the baseline's copy of any test the patch rewrote, and mutation
-    testing on the changed lines. Nothing is committed or reverted.
+    What it does: writes the baseline commit's tree (every file as committed),
+    diffs it against the working tree (uncommitted and untracked files
+    included), runs the suite under coverage.py, then runs the gate: the
+    claims on the baseline and on the patch, the baseline's copy of any test
+    the patch rewrote, and mutation testing on the changed lines. Nothing is
+    committed or reverted.
 
     Side effects: the repository's tests execute -- its code runs, so they may
     do whatever they do when you run pytest yourself. The coverage run uses the

@@ -2,7 +2,7 @@
 # Glama that start the server and introspect its tools.
 FROM python:3.12-slim
 
-# verify_repo builds the baseline with `git archive`.
+# verify_repo writes the baseline commit's tree with git (read-tree + checkout-index).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
