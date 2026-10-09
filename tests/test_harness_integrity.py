@@ -1,6 +1,6 @@
 """Regression suite for AG-032: the patch configured the runner that judged it.
 
-Executed against ``02aa0cd`` (2.3.0) and pinned here as it was measured: a
+Executed against ``2ba13a7`` (2.3.0) and pinned here as it was measured: a
 patch breaks ``add`` (``a + b`` -> ``a + b + 1``), adds a ``.pytest.ini`` with
 ``addopts = -p agplug`` and an ``agplug.py`` whose hook rewrites the report to
 "passed" only while ``calc.py`` has exactly the broken bytes. Mutants change

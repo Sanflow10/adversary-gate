@@ -177,7 +177,7 @@ Status, não omitido.**
 
 ## 11. AG-032 — o patch configurava o runner que o julgava
 
-Achado em revisão externa de 2026-10-03 contra `02aa0cd` (2.3.0), reproduzido
+Achado em revisão externa de 2026-10-03 contra `2ba13a7` (2.3.0), reproduzido
 por exit code antes da correção e travado em `tests/test_harness_integrity.py`.
 
 | ID | Severidade | Achado | Status |
