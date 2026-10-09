@@ -225,7 +225,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
   <div class="wrap page-hero">
     <p class="eyebrow">Releases 2.4 to 2.14 · October 2026</p>
     <h1>What changed, and what comes next</h1>
-    <p class="lead">Eleven releases in five days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
+    <p class="lead">Twelve releases in six days, all aimed at one question: can the patch being judged influence its own verdict? Each answer below closed a way it could.</p>
   </div>
 
   <section aria-labelledby="changes-title">
@@ -233,12 +233,23 @@ pre code { background: none; padding: 0; font-size: inherit; }
       <h2 id="changes-title">What changed</h2>
       <ol class="releases" reversed>
         <li>
+          <span class="v">2.14.1<small>Oct 9, 2026</small></span>
+          <div>
+            <h3>Two fail-opens, found by reviewing 2.14.0</h3>
+            <ul>
+              <li>A mutant run that failed because another run touched the same thing outside the repository &mdash; a fixed <code>/tmp</code> path, a port, a test database &mdash; counted as a killed mutant. With 2.14.0's mutants in parallel and the full suite alongside, a test that checks no value went from 0/8 kills to 8/8 and MERGE (AG-043). Mutants now wait for the suite and run one at a time; <code>--mutation-workers N</code> is the operator's choice, for suites that share nothing outside the repository.</li>
+              <li>The baseline was built with <code>git archive</code>, which applies the project's own export attributes: with <code>tests/ export-ignore</code> the baseline had no tests, and the baseline oracle could not judge a rewritten one (AG-044). The baseline is now the commit's tree, every file as committed.</li>
+            </ul>
+          </div>
+        </li>
+        <li>
           <span class="v">2.14.0<small>Oct 8, 2026</small></span>
           <div>
             <h3>Same verdicts, less waiting</h3>
             <ul>
               <li>The baseline and patch sides of each check, the full suite and the mutants now run at the same time. On five real more-itertools cases the gate's own time fell from 319&nbsp;s to 127&nbsp;s, 177 to 101, 285 to 109 and 285 to 108; the decision, <code>fix_proven</code> and every mutant's killed/survived came out identical.</li>
               <li>Running side by side can push a run past the wall clock, and a mutant that hangs counts as killed. So a mutant killed by the clock while anything else was running is rerun alone, and the rerun decides: it can only lower the score. <code>--serial-sides</code> turns all of it off.</li>
+              <li><strong>Correction (2.14.1):</strong> the identical results held for tests that share nothing outside the repository. A mutant run that another run made <em>fail</em> was counted as killed; see 2.14.1.</li>
             </ul>
           </div>
         </li>

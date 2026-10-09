@@ -8,13 +8,13 @@
     "source": "github"
   },
   "websiteUrl": "https://sanflow10.github.io/adversary-gate/",
-  "version": "2.14.0",
+  "version": "2.14.1",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "adversary-gate-mcp",
-      "version": "2.14.0",
+      "version": "2.14.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

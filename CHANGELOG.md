@@ -11,12 +11,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0` e `v2.13.0`**, mais a
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0` e `v2.14.0`**, mais a
 flutuante `v2`, que o Release move para a 2.x mais nova. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
-`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.14.0` é
+`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.14.1` é
 publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
-partir do commit que a contém — se `v2.14.0` não aparece em *Releases*, o
+partir do commit que a contém — se `v2.14.1` não aparece em *Releases*, o
 workflow ainda não rodou, e esta seção ainda é uma promessa.
 
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
@@ -27,8 +27,10 @@ environment) e a `2.4.0` subiu por OIDC, com atestados de proveniência. A
 Rotas de publicação até aqui: `2.0.0`, `2.0.1` e `2.1.0` subiram ao PyPI **por
 upload com API token**, não por OIDC. A partir da `2.2.0` o workflow Release
 envia ao PyPI sozinho quando o segredo `PYPI_API_TOKEN` existe, e avisa na run
-quando não existe. Enquanto o PyPI estiver em `2.1.0`, ele **ainda contém o
-AG-018, o AG-021 e o AG-022** — confira com `pip index versions adversary-gate`.
+quando não existe. Hoje o PyPI tem a mesma versão que o Release; uma versão
+antiga lá continua com os achados corrigidos depois dela (a `2.14.0` tem o
+AG-043; todas antes da `2.14.1` têm o AG-044) — confira com
+`pip index versions adversary-gate`.
 
 ---
 
@@ -40,7 +42,67 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [2.14.1] — 2026-10-09
+
+Corrige dois fail-open achados na revisão da `2.14.0` (ledger, seção 18). A tag
+flutuante `v2` passa para a `2.14.1` sozinha quando o Release roda; quem fixou
+uma versão anterior (`@v2.14.0`, `==2.14.0` ou mais antiga) deve atualizar. O
+padrão da `2.14.0` podia dar `MERGE` para um teste que não confere nada.
+
+### Corrigido
+
+- **AG-043 — uma execução que outra execução fez falhar contava como mutante
+  morto (só na `2.14.0`).** Os mutantes rodavam em paralelo e a suíte completa
+  junto com eles, e só a morte por limite de tempo era refeita sozinha. Uma
+  execução que falha porque outra mexeu na mesma coisa fora do repositório (um
+  caminho fixo em `/tmp`, uma porta, um banco de teste) sai com exit 1, igual a
+  uma detecção. Medido: um teste que não confere nenhum valor foi de 0/8 mortos
+  (`INCONCLUSIVE`) para 8/8 e `MERGE`; só a suíte ao lado, com os mutantes um
+  por vez, já levava 0/8 a 4/8. Agora a mutação espera a suíte terminar e roda
+  um mutante por vez. Custo no caso real que mais ganhava com o paralelo
+  (more-itertools d992be0, 12 mutantes): a parte do gate foi de 126,5 s para
+  153,6 s, com a mesma decisão e os mesmos 12/12 mortos. As claims continuam
+  rodando com os lados juntos e com a suíte ao lado: ali a interferência pode inflar o rótulo
+  `fixed` (`fix_proven`), nunca a decisão; `--serial-sides` evita.
+- **AG-044 — o baseline perdia o que o `.gitattributes` do projeto tira do
+  pacote.** O baseline era montado com `git archive`, que aplica os atributos
+  de exportação: `export-ignore` tira arquivos e `export-subst` os reescreve.
+  Num projeto com `tests/ export-ignore` (prática comum para deixar os testes
+  fora do sdist), o baseline saía sem os testes, um teste reescrito pelo patch
+  era julgado como novo e o oráculo do baseline (AG-021) não se aplicava. Na
+  Action e no servidor MCP, o baseline agora é a árvore do commit escrita por
+  um índice temporário (`read-tree` + `checkout-index`): todo arquivo como foi
+  commitado, como o checkout do workspace o escreveu, sem tocar no índice nem
+  na árvore de trabalho.
+
+### Adicionado
+
+- **`--mutation-workers N`** (padrão 1): mutantes ao mesmo tempo, cada um na
+  sua cópia da árvore. Só para testes que não dividem nada fora do
+  repositório; recusado junto com `--census-min-mutants`, porque uma contagem
+  completa exige todos mortos e lê a razão exata. `--serial-sides` força 1.
+
+### Alterado
+
+- **A documentação do servidor MCP diz o limite do baseline fixado:** fixar a
+  ref nomeia o baseline; não é defesa contra um agente que pode escrever no
+  `.git` do repositório (refs, objetos, configuração) — esse agente tem que
+  rodar onde não pode, como qualquer código que roda com os seus privilégios.
+- **`TestWholeFileRunsHaveSuiteLimits` deixou de depender da máquina:** usava
+  `--timeout 1` fixo e falhava onde o pytest leva mais que isso só para subir
+  (1,8 s com alguns plugins). O limite sai de uma execução medida na hora.
+
+---
+
 ## [2.14.0] — 2026-10-08
+
+**Errata (2.14.1).** Duas afirmações desta seção não valem para os mutantes.
+"Cada um desses derruba um lado, o que termina em BLOCK ou INCONCLUSIVE, nunca
+em MERGE" vale para os lados de uma checagem; uma execução de mutante que
+outra execução fez falhar contava como **morta**, a direção do `MERGE`
+(AG-043). E "a decisão ... saíram idênticos" foi medido numa matriz cujos
+testes não dividem nada fora do repositório, onde isso não aparece. Use a
+`2.14.1`.
 
 O gate ficou mais rápido sem mudar o que decide. Os lados baseline e patch, a
 suíte completa e os mutantes passam a rodar ao mesmo tempo. Na matriz de
