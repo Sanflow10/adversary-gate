@@ -34,6 +34,7 @@ import argparse
 import inspect
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -175,11 +176,22 @@ def verify_repo(
             summary = _summary(_run_gate(argv + policy, timeout_seconds))
             summary["untracked_files_judged"] = evidence.untracked
             summary["baseline"] = base
+            summary["baseline_sha"] = evidence.baseline_sha
             summary["baseline_chosen_by"] = "operator" if pinned else "agent"
             return summary
     except (EvidenceError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
                 "reason": f"the gate could not run: {exc}", "claims": []}
+
+
+def _pin_kind(pinned: Optional[str]) -> str:
+    """What the operator's pin holds, for ``gate_policy``: a commit id names one
+    commit for good; a ref name names whatever the ref points at when a run starts."""
+    if not pinned:
+        return "none"
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", pinned):
+        return "commit id"
+    return "ref name (resolved at the start of each run; a commit id never moves)"
 
 
 def gate_policy() -> Dict[str, Any]:
@@ -208,6 +220,7 @@ def gate_policy() -> Dict[str, Any]:
         "defaults": "coverage floor 0.80; strength floor 0.75 on the 80% Wilson lower bound; "
                     "baseline oracle on rewritten tests; fail-closed",
         "baseline": os.environ.get("ADVERSARY_GATE_BASE_REF") or "chosen by the agent (not pinned)",
+        "baseline_pin": _pin_kind(os.environ.get("ADVERSARY_GATE_BASE_REF")),
         "python": os.environ.get("ADVERSARY_GATE_PYTHON") or sys.executable,
         "agent_controls": ["repo", "claims", "pytest_args (paths only)"]
         + ([] if os.environ.get("ADVERSARY_GATE_BASE_REF") else ["base_ref"]),

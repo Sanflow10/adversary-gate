@@ -40,6 +40,17 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Corrigido
+
+- **AG-045 — o baseline do MCP é o que o id do commit contém.** O baseline passa
+  a ser lido objeto a objeto (`ls-tree` + `cat-file`), com a substituição de
+  objetos desligada, e cada blob é conferido contra o id que a árvore cita; o
+  `ref` é resolvido uma vez por execução e o diff roda contra esse id, sempre
+  como texto. `verify_repo` devolve `baseline_sha`, e `gate_policy` diz se o pin
+  do operador é um id de commit (que não se move) ou um nome de ref. Limite
+  mantido: um agente que executa código com o mesmo usuário ainda alcança a
+  pasta temporária do gate (a fronteira já documentada).
+
 ### Alterado
 
 - **Licença: AGPL-3.0-only a partir da próxima versão.** Qualquer cópia

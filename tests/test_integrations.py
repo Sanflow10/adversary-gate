@@ -307,6 +307,73 @@ class TestGitEvidence(unittest.TestCase):
             self.assertEqual((evidence.baseline / "test_calc.py").read_text(), TESTS)
             self.assertEqual((evidence.baseline / "_version.py").read_text(), 'VERSION = "$Format:%H$"\n')
 
+    def _commit_all(self, repo, message):
+        for args in (["add", "-A"], ["commit", "-qm", message]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
+
+    def _tree_files(self, directory):
+        return {str(p.relative_to(directory)): p.read_bytes()
+                for p in sorted(directory.rglob("*")) if p.is_file() and not p.is_symlink()}
+
+    def test_baseline_is_the_committed_tree_whatever_the_repository_declares(self):
+        """AG-045 property: for a given commit id the baseline is the files that
+        commit holds, byte for byte -- whatever the repository's own attribute
+        files, object-substitution refs or config say."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "data.bin").write_bytes(b"a\r\nb\x00\xff")
+            self._commit_all(repo, "data")
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            reference = prepare(repo, head, root / "ref", python=sys.executable, coverage=False)
+            expected = self._tree_files(reference.baseline)
+            self.assertEqual(expected["data.bin"], b"a\r\nb\x00\xff")
+            # a second commit, to be named by a replacement ref
+            (repo / "calc.py").write_text("def add(a, b):\n    return 0\n")
+            self._commit_all(repo, "other")
+            other = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                   capture_output=True, text=True).stdout.strip()
+            subprocess.run(["git", "-C", str(repo), "replace", head, other], check=True,
+                           env={**os.environ, **GIT_ENV})
+            info = repo / ".git" / "info"
+            info.mkdir(exist_ok=True)
+            (info / "attributes").write_text("* export-ignore\n*.py -diff\n*.bin filter=nothing\n")
+            again = prepare(repo, head, root / "again", python=sys.executable, coverage=False)
+            self.assertEqual(again.baseline_sha, head)
+            self.assertEqual(self._tree_files(again.baseline), expected)
+
+    def test_the_ref_is_resolved_once_and_the_id_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertEqual(evidence.baseline_sha, head)
+
+    def test_the_diff_reads_every_file_as_text(self):
+        """A changed file the repository marks as not-for-diff still reaches the
+        coverage denominator."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / ".git" / "info").mkdir(exist_ok=True)
+            (repo / ".git" / "info" / "attributes").write_text("*.py -diff\n")
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertIn("+    return (a + b)", evidence.diff.read_text())
+
+    def test_a_blob_that_does_not_match_its_id_is_refused(self):
+        from adversary_gate.integrations import gitevidence
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            oid = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD:calc.py"],
+                                 capture_output=True, text=True).stdout.strip()
+            with mock.patch.object(gitevidence.hashlib, "sha1", lambda data: __import__("hashlib").md5(data)):
+                with self.assertRaises(EvidenceError):
+                    gitevidence._read_blobs(repo, [oid], gitevidence._blob_hasher("sha1"))
+
     def test_unknown_ref_is_an_evidence_error(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = _git_repo(Path(directory))

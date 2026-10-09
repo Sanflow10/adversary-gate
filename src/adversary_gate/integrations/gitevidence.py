@@ -4,9 +4,12 @@
 (``base...HEAD``). An agent's patch usually is not: it is whatever the working
 tree holds right now, committed or not. So here
 
-* **baseline** is the committed tree of ``<base_ref>``, every file as committed
-  (a private index and ``checkout-index``; not ``git archive``, which applies the
-  repository's export attributes -- AG-044);
+* **baseline** is the committed tree of ``<base_ref>``, every file as committed.
+  The ref is resolved once to a commit id; the tree is read object by object
+  (``ls-tree`` and ``cat-file``) with object substitution switched off, and every
+  blob is checked against the id the tree names. No archive, no checkout, so no
+  attribute, filter or export rule of the repository can change what is written
+  (AG-044, AG-045);
 * **patch** is the working tree itself, untracked files included;
 * **diff** is ``git diff <base_ref>`` (tracked changes, staged or not) plus a
   new-file hunk for every untracked, non-ignored file -- ``git diff`` alone
@@ -20,10 +23,12 @@ Nothing in the working tree is modified, staged or committed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import subprocess
-import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -74,14 +79,28 @@ class Evidence:
     diff: Path
     coverage: Optional[Path]
     untracked: List[str]
+    #: The commit the baseline was read from, as an object id: what ``base_ref``
+    #: resolved to when this run started.
+    baseline_sha: str = ""
+
+
+#: Settings every git call of the gate carries. Object substitution
+#: (``refs/replace``, grafts) would let the repository answer for a commit with
+#: another one's content; the gate reads the objects the ids name.
+_GIT_FIXED = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat", "GIT_NO_REPLACE_OBJECTS": "1"}
+_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull)
+
+
+def _git_env(extra: Optional[dict] = None) -> dict:
+    return {**os.environ, **(extra or {}), **_GIT_FIXED}
 
 
 def _git(repo: Path, *args: str, binary: bool = False, env: Optional[dict] = None):
     proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
+        ["git", *_GIT_CONFIG, "-C", str(repo), *args],
         capture_output=True,
         text=not binary,
-        env={**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat", **(env or {})},
+        env=_git_env(env),
     )
     if proc.returncode != 0:
         err = proc.stderr if isinstance(proc.stderr, str) else proc.stderr.decode(errors="replace")
@@ -101,6 +120,86 @@ def _new_file_hunk(rel: str, path: Path) -> str:
     return f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{len(lines)} @@\n{body}"
 
 
+_MODES = {"100644": 0o644, "100755": 0o755}
+
+
+def _blob_hasher(object_format: str):
+    return hashlib.sha256 if object_format == "sha256" else hashlib.sha1
+
+
+def _read_blobs(repo: Path, oids: Sequence[str], hasher) -> dict:
+    """``{oid: bytes}`` through one ``git cat-file --batch``, each blob checked
+    against its own id: the content hashed as git hashes it must give the id
+    the tree names."""
+    if not oids:
+        return {}
+    proc = subprocess.Popen(
+        ["git", *_GIT_CONFIG, "-C", str(repo), "cat-file", "--batch"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_git_env(),
+    )
+
+    def feed() -> None:
+        try:
+            proc.stdin.write("".join(f"{oid}\n" for oid in oids).encode())
+        finally:
+            proc.stdin.close()
+
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
+    blobs: dict = {}
+    failed = True
+    try:
+        for oid in oids:
+            header = proc.stdout.readline().split()
+            if len(header) != 3 or header[0].decode() != oid or header[1] != b"blob":
+                raise EvidenceError(f"git could not read blob {oid}")
+            size = int(header[2])
+            data = proc.stdout.read(size)
+            proc.stdout.read(1)  # the newline that follows each object
+            if len(data) != size:
+                raise EvidenceError(f"blob {oid} was cut short")
+            if hasher(b"blob %d\0" % size + data).hexdigest() != oid:
+                raise EvidenceError(f"blob {oid} does not match its own id")
+            blobs[oid] = data
+        failed = False
+    finally:
+        if failed:
+            proc.kill()
+        writer.join()
+        proc.stdout.close()
+        proc.wait()
+    return blobs
+
+
+def _write_tree(repo: Path, commit: str, dest: Path, object_format: str) -> None:
+    """Write the tree of ``commit`` under ``dest``, byte for byte as committed."""
+    listing = _git(repo, "ls-tree", "-r", "-z", "--full-tree", commit, binary=True)
+    entries = []
+    for record in listing.split(b"\0"):
+        if not record:
+            continue
+        meta, _, raw = record.partition(b"\t")
+        mode, kind, oid = meta.decode().split()
+        if kind != "blob":
+            continue  # submodule commits are not part of the repository's own files
+        rel = raw.decode("utf-8", errors="surrogateescape")
+        parts = rel.split("/")
+        if rel.startswith("/") or ".." in parts or ".git" in (p.lower() for p in parts):
+            raise EvidenceError(f"refusing to write {rel!r} from the baseline tree")
+        entries.append((mode, oid, rel))
+    blobs = _read_blobs(repo, sorted({oid for _, oid, _ in entries}), _blob_hasher(object_format))
+    for mode, oid, rel in entries:
+        target = dest / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if mode == "120000":
+            os.symlink(blobs[oid].decode("utf-8", errors="surrogateescape"), target)
+        elif mode in _MODES:
+            target.write_bytes(blobs[oid])
+            target.chmod(_MODES[mode])
+        else:
+            raise EvidenceError(f"unexpected mode {mode} for {rel!r} in the baseline tree")
+
+
 def prepare(
     repo: Path,
     base_ref: str,
@@ -118,24 +217,18 @@ def prepare(
     top = Path(_git(repo, "rev-parse", "--show-toplevel").strip()).resolve()
     if top != repo:
         raise EvidenceError(f"pass the repository root ({top}), not a subdirectory")
-    _git(repo, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}")
+    # Resolved once; everything below uses the id, so a ref that moves while the
+    # run is under way changes nothing.
+    commit = _git(repo, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+        raise EvidenceError(f"{base_ref!r} does not name a commit")
+    object_format = _git(repo, "rev-parse", "--show-object-format").strip()
 
     baseline = workdir / "baseline"
     baseline.mkdir(parents=True)
-    # Every file of the commit, as committed (AG-044). Not ``git archive``: it
-    # builds a release tarball and applies the export attributes the
-    # repository declares -- ``export-ignore`` drops files (a project that
-    # keeps its tests out of the sdist had no tests in the baseline, so the
-    # baseline oracle had nothing to judge with) and ``export-subst`` rewrites
-    # them. A private index and ``checkout-index`` write the tree; the
-    # repository's own index and working tree are not touched.
-    with tempfile.TemporaryDirectory(prefix="adversary-index-") as scratch:
-        index = {"GIT_INDEX_FILE": str(Path(scratch) / "index")}
-        _git(repo, "read-tree", base_ref, env=index)
-        _git(repo, "checkout-index", "--all", "--force",
-             f"--prefix={baseline.resolve()}{os.sep}", env=index)
+    _write_tree(repo, commit, baseline, object_format)
 
-    diff_text = _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-color", base_ref, "--")
+    diff_text = _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", "--text", "--no-color", commit, "--")
     untracked = [
         line for line in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
         if line and "__pycache__" not in line.split("/")
@@ -181,4 +274,4 @@ def prepare(
             raise EvidenceError(
                 "coverage produced no report: " + (report.stderr or run.stderr)[-500:].strip()
             )
-    return Evidence(baseline, repo, diff, coverage_path, sorted(untracked))
+    return Evidence(baseline, repo, diff, coverage_path, sorted(untracked), commit)
