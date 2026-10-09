@@ -851,4 +851,8 @@ is a usage error, always.
 
 ## 📄 License
 
-Distributed under the [MIT License](LICENSE).
+Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
+
+Releases after 2.14.1 are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). Releases up to and including 2.14.1 were published under the MIT License, which still applies to them — each of those tags carries its own `LICENSE`.
+
+For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.

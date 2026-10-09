@@ -40,6 +40,14 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Alterado
+
+- **Licença: AGPL-3.0-only a partir da próxima versão.** Qualquer cópia
+  modificada, inclusive oferecida como serviço, tem que publicar o código. As
+  versões até a `2.14.1` foram publicadas sob MIT e continuam sob MIT (cada tag
+  carrega o seu `LICENSE`). Licença comercial, sem as obrigações da AGPL, sob
+  consulta.
+
 ---
 
 ## [2.14.1] — 2026-10-09
