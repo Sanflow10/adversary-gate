@@ -1471,13 +1471,32 @@ class TestWholeFileRunsHaveSuiteLimits(unittest.TestCase):
     reference", INCONCLUSIVE, in five of eight real fixes replayed forward.
     """
 
+    @staticmethod
+    def _pytest_seconds(directory: Path) -> float:
+        """One single-test pytest run here, now, under a limit too generous to matter.
+
+        A fixed ``--timeout 1`` assumed pytest starts in well under a second;
+        with a few plugins installed it takes 1.8 s, and the claim itself timed
+        out before the file run this test is about was ever reached.
+        """
+        from adversary_gate.sandbox.runner import run_test
+
+        (directory / "test_probe.py").write_text("def test_probe():\n    pass\n")
+        started = time.monotonic()
+        run_test(directory, "test_probe.py", "test_probe", timeout_seconds=120)
+        return time.monotonic() - started
+
     def test_a_slow_test_file_still_gives_a_reference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / "probe").mkdir()
+            # The claim alone fits the per-test limit twice over; the whole
+            # file, with a test that sleeps past that limit, does not.
+            limit = int(2 * self._pytest_seconds(root / "probe")) + 1
             tests = (
                 "import time\n\nfrom calc import add\n\n\n"
                 "def test_add():\n    assert add(2, 2) == 4\n\n\n"
-                "def test_slow():\n    time.sleep(1.5)\n"
+                f"def test_slow():\n    time.sleep({limit + 1})\n"
             )
             for side in ("baseline", "patch"):
                 (root / side).mkdir()
@@ -1490,7 +1509,7 @@ class TestWholeFileRunsHaveSuiteLimits(unittest.TestCase):
                 main([
                     "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
                     "--claim", "test_calc.py::test_add_zero", "--max-rounds", "1",
-                    "--rounds-used", "1", "--timeout", "1", "--full-suite-path", "",
+                    "--rounds-used", "1", "--timeout", str(limit), "--full-suite-path", "",
                     *TestCliExitCodes.UNTRUSTED_COVERAGE,
                 ])
             claim = json.loads(out.read_text())["claims"][0]
