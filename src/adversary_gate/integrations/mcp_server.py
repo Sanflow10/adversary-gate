@@ -14,7 +14,9 @@ environment the operator sets in the agent's MCP configuration:
 * ``ADVERSARY_GATE_BASE_REF`` the baseline (e.g. ``origin/main``). Whoever
   picks the baseline picks the oracle: an agent could commit a rewritten test
   and name that commit. Unset, the agent may pass ``base_ref`` and the answer
-  says ``"baseline_chosen_by": "agent"``;
+  says ``"baseline_chosen_by": "agent"``. Pinning names the baseline; it is
+  not a defence against an agent that can write the repository's ``.git``
+  (refs, objects, configuration) -- run such an agent where it cannot;
 * ``ADVERSARY_GATE_PYTHON``   the interpreter. Its site-packages are harness
   too -- a plugin installed there runs inside pytest -- so it must be one the
   agent cannot write to.

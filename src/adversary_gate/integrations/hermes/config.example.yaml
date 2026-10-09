@@ -10,6 +10,8 @@ mcp_servers:
     timeout: 900
     env:
       # The baseline is the oracle. Pin it, or the agent chooses what it is judged against.
+      # Pinning names it; it does not defend against an agent that can write the
+      # repository's .git (refs, objects, config): run such an agent where it cannot.
       ADVERSARY_GATE_BASE_REF: "origin/main"
       # The interpreter that runs the project's tests (pytest + coverage installed).
       # Its site-packages are part of the harness: the agent must not be able to write to it.
