@@ -40,6 +40,14 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.0] — 2026-10-11
+
+A primeira versão sob AGPL-3.0-only. Traz as correções do AG-045 e do AG-046 —
+as mesmas que a `2.14.2` leva para a linha MIT — e a nova licença. A tag
+flutuante `v3` nasce aqui; a `v2` continua na linha 2.x.
+
 ### Corrigido
 
 - **AG-046 — um teste que lê o código não mede nada.** Os claims passam a rodar
@@ -64,11 +72,17 @@ quando esta seção vira uma com versão e data.
 
 ### Alterado
 
-- **Licença: AGPL-3.0-only a partir da próxima versão.** Qualquer cópia
-  modificada, inclusive oferecida como serviço, tem que publicar o código. As
-  versões até a `2.14.1` foram publicadas sob MIT e continuam sob MIT (cada tag
-  carrega o seu `LICENSE`). Licença comercial, sem as obrigações da AGPL, sob
-  consulta.
+- **Licença: AGPL-3.0-only, com termos adicionais.** Qualquer cópia
+  modificada, inclusive oferecida como serviço, tem que publicar o código. O
+  `NOTICE` traz os termos que a seção 7 da AGPL permite: manter os avisos de
+  autoria, marcar a versão modificada, não usar os nomes Sanflow/Sanflow10 para
+  promover derivados e nenhum direito à marca AdversaryGate. A linha 2.x, até a
+  `2.14.2`, foi publicada sob MIT e continua sob MIT (cada tag carrega o seu
+  `LICENSE`). Licença comercial, sem as obrigações da AGPL, sob consulta.
+- **Versão major por causa da licença.** Nenhum contrato da ferramenta mudou;
+  o número muda para que a troca de licença não chegue em silêncio a quem segue
+  `@v2` ou instala `adversary-gate` sem limite de versão. Para ficar no MIT:
+  `@v2` ou `adversary-gate<3`, que recebem as mesmas correções na `2.14.2`.
 
 ---
 
