@@ -562,7 +562,9 @@ def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional
     }
 
 
-def _summary(verdicts) -> Dict[str, Any]:
+def _summary(verdicts, mutation: Dict[str, Any]) -> Dict[str, Any]:
+    """The claim counts, computed once: the answer and the decision record
+    both take them from here, so one cannot prove a fix the other refuses."""
     return {
         "claims_total": len(verdicts),
         "verified": sum(1 for v in verdicts if v.outcome.value == "verified"),
@@ -573,7 +575,11 @@ def _summary(verdicts) -> Dict[str, Any]:
         # says it fixes" -- is true only when a claim went FAIL -> PASS.
         "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
         "claims_no_regression": sum(1 for v in verdicts if v.classification.value == "no_regression"),
-        "fix_proven": any(v.classification.value == "fixed" for v in verdicts),
+        # AG-046: a claim that fails on a comment-only copy of the patch
+        # reads the code's text, so "fails before, passes after" proves
+        # nothing about the fix.
+        "fix_proven": any(v.classification.value == "fixed" for v in verdicts)
+        and not mutation.get("source_sensitive_claims"),
     }
 
 
@@ -1258,13 +1264,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             suite_strength_unverified=strength_unverified,
         )
 
+        summary = _summary(verdicts, mutation_detail)
         if log is not None:
             log.append_decision(
                 decision.value,
                 args.rounds_used,
                 coverage_ratio,
                 {
-                    **_summary(verdicts),
+                    **summary,
                     # Where the coverage number came from, next to the number:
                     # a ratio with no provenance is exactly the artefact AG-002
                     # was about.
@@ -1304,13 +1311,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
             ),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
-            "claims_total": len(verdicts),
-            "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
-            # AG-046: a claim that fails on a comment-only copy of the patch
-            # reads the code's text, so "fails before, passes after" proves
-            # nothing about the fix.
-            "fix_proven": any(v.classification.value == "fixed" for v in verdicts)
-            and not mutation_detail.get("source_sensitive_claims"),
+            "claims_total": summary["claims_total"],
+            "claims_fixed": summary["claims_fixed"],
+            "fix_proven": summary["fix_proven"],
             "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,

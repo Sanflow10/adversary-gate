@@ -669,6 +669,30 @@ class TestFixedIsNotNoRegression(unittest.TestCase):
             self.assertFalse(payload["fix_proven"])
             self.assertEqual(payload["claims"][0]["classification"], "no_regression")
 
+    def test_the_evidence_log_says_the_same(self):
+        # The decision record repeats these counts, and nothing compared them
+        # with the answer: either side could drift without a test noticing.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "evidence.jsonl"
+            _tree(root, 5)
+            broken = CALC.replace("return a % b", "return a * b")
+            (root / "baseline" / "calc.py").write_text(broken)
+            (root / "change.diff").write_text(
+                (root / "change.diff").read_text().replace("-    return a % b", "-    return a * b")
+            )
+            _, fixed = _cli(root, "--evidence-log", str(log))
+            _tree(root, 5)
+            _, unchanged = _cli(root, "--evidence-log", str(log))
+            records = [json.loads(line) for line in log.read_text().splitlines()]
+        decisions = [r for r in records if r.get("kind") == "decision"]
+        for payload, record in zip((fixed, unchanged), decisions):
+            for key in ("claims_total", "claims_fixed", "fix_proven"):
+                self.assertEqual(record[key], payload[key], key)
+        self.assertEqual([d["claims_fixed"] for d in decisions], [1, 0])
+        self.assertEqual([d["claims_no_regression"] for d in decisions], [0, 1])
+        self.assertEqual([d["fix_proven"] for d in decisions], [True, False])
+
     def test_metrics_count_them_apart(self):
         records = [
             {"outcome": "verified", "classification": "fixed"},
@@ -804,8 +828,10 @@ class TestAClaimThatReadsTheCodeIsNotMeasured(unittest.TestCase):
 
     CALLS = ("    assert add(2, 3) == 5\n    assert sub(5, 3) == 2\n    assert mul(3, 4) == 12\n"
              "    assert div(8, 2) == 4\n    assert mod(7, 3) == 1\n")
+    HASHES_ITS_MODULE = ("    pathlib.Path(calc.__file__).read_bytes()\n    assert hashlib.sha256("
+                         "pathlib.Path(calc.__file__).read_bytes()).hexdigest() == 'DIGEST'\n")
 
-    def _run(self, body: str):
+    def _run(self, body: str, *extra: str):
         import hashlib
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -816,12 +842,10 @@ class TestAClaimThatReadsTheCodeIsNotMeasured(unittest.TestCase):
                     + body.replace("DIGEST", digest))
             for side in ("baseline", "patch"):
                 (root / side / "test_calc.py").write_text(text)
-            return _cli(root)
+            return _cli(root, *extra)
 
     def test_a_test_that_hashes_its_module_is_not_a_measurement(self):
-        code, payload = self._run(
-            "    pathlib.Path(calc.__file__).read_bytes()\n    assert hashlib.sha256("
-            "pathlib.Path(calc.__file__).read_bytes()).hexdigest() == 'DIGEST'\n")
+        code, payload = self._run(self.HASHES_ITS_MODULE)
         mutation = payload["mutation"]
         self.assertFalse(mutation["measured"], mutation)
         self.assertTrue(mutation["source_sensitive_claims"])
@@ -829,6 +853,17 @@ class TestAClaimThatReadsTheCodeIsNotMeasured(unittest.TestCase):
         self.assertNotEqual(code, EXIT_MERGE)
         self.assertNotEqual(payload["decision"], "merge")
         self.assertFalse(payload["fix_proven"])
+
+    def test_the_evidence_log_does_not_record_a_proven_fix_either(self):
+        # The decision record is what an auditor keeps; it must not prove a
+        # fix the answer itself refuses to call proven.
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "evidence.jsonl"
+            _, payload = self._run(self.HASHES_ITS_MODULE, "--evidence-log", str(log))
+            records = [json.loads(line) for line in log.read_text().splitlines()]
+        decision = [r for r in records if r.get("kind") == "decision"][-1]
+        self.assertFalse(payload["fix_proven"])
+        self.assertFalse(decision["fix_proven"], decision)
 
     def test_a_test_that_hashes_the_source_of_a_function_is_not_a_measurement(self):
         import hashlib
