@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """Risk triage with Jev (TypeSafe AI), as advice that can only tighten the gate.
 
 Jev is a "System One" model: unstructured state plus a schema in, typed

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """The three artefacts the gate measures, from a git working tree and a ref.
 
 ``scripts/prepare_evidence.sh`` does this for CI, where the patch is a commit

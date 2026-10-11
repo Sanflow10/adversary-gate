@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """Circuit breaker for claims that keep failing to execute.
 
 Changed from the original: it records :class:`Outcome` instead of a bool.

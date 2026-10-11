@@ -853,6 +853,6 @@ is a usage error, always.
 
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
-Releases after 2.14.1 are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`). Releases up to and including 2.14.1 were published under the MIT License, which still applies to them — each of those tags carries its own `LICENSE`.
+Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, which still applies to it — each of those tags carries its own `LICENSE`.
 
 For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.

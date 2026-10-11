@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """Stability policy: how many runs a claim needs before it counts.
 
 The policies are unchanged from the original design. What is new is that

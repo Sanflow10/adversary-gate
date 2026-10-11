@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """Map pytest exit codes to :class:`ExecState`.
 
 These values were **measured** against pytest 9.0.3 on this machine, not

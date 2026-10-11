@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """What counts as a test file, decided in one place.
 
 Two verifiers need the answer and used to disagree about who owned it:

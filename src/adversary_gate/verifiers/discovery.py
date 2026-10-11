@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Sanflow (Sanflow10). Additional terms: see NOTICE (AGPL section 7).
+
 """Which tests exercise the lines a patch changed -- read from coverage, not guessed.
 
 AG-031: a run used to verify exactly one claim, named by hand. In a workflow

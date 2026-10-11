@@ -1,0 +1,35 @@
+AdversaryGate: additional terms under section 7 of the GNU Affero General
+Public License, version 3
+
+Copyright (C) 2026 Sanflow (GitHub: Sanflow10)
+
+AdversaryGate 3.0.0 and later are licensed under the GNU Affero General Public
+License, version 3 only (AGPL-3.0-only). The full text of that license is in
+LICENSE. As section 7 of that license permits, the following additional terms
+apply to every file that refers to this notice. They are among the terms that
+sections 7(b) to 7(e) allow. They restrict no right that the AGPL grants.
+
+1. Notices (section 7(b)). Anyone who conveys this work, modified or not, must
+   keep intact this NOTICE file, the copyright notice above, and the author
+   attribution "AdversaryGate by Sanflow (Sanflow10)" wherever it appears in
+   the work's documentation or in its Appropriate Legal Notices.
+
+2. Origin (section 7(c)). Anyone who modifies this work must mark the modified
+   version as modified, in its documentation and in any output that names the
+   program. The modified version must not be presented as the original
+   AdversaryGate or as a release from its author.
+
+3. Names (section 7(d)). Nobody may use the names "Sanflow" or "Sanflow10" to
+   endorse or promote a product derived from this work without prior written
+   permission.
+
+4. Trademarks (section 7(e)). This license grants no right to use the name
+   "AdversaryGate", or any other trade name, trademark or service mark of the
+   author. Using the name to describe where the work came from, or to reproduce
+   this NOTICE, is still allowed.
+
+Versions up to and including 2.14.2 were published under the MIT License, and
+these terms do not apply to them.
+
+For a commercial license without the AGPL obligations, write to
+sanflow086@gmail.com.
