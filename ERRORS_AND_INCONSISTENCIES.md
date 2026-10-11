@@ -462,12 +462,11 @@ teste volta a falhar.
 |---|---|---|---|
 | **AG-046** | Alta — fail-open | Um teste que calcula o hash do arquivo que o patch alterou (ou lê o texto da função com `inspect.getsource`) e também chama a função falha em **qualquer** edição desse arquivo. Então falha no baseline e passa no patch (claim `fixed`, `fix_proven: true`) e "mata" todos os mutantes (força 1,0): com 10 linhas mutáveis o resultado na `main` de 09/out (`3cd239c`) foi **MERGE**, com o teste verificando nada do comportamento. Com poucos mutantes só o piso estatístico segurava (1 de 1 → lower bound 0,38). | **Corrigido na `3.0.0` e na `2.14.2`** — os claims rodam uma vez numa cópia do patch cuja única diferença é um comentário ao fim de cada linha lógica que o patch escreveu (colocado pelo tokenizer, só onde a linha termina; a cópia só é usada se a AST for idêntica). Código que faz o mesmo tem de passar o mesmo; claim que falha ali lê o texto, não o comportamento: a força fica **não medida** (INCONCLUSIVE), `fix_proven` vira `false` e o motivo diz por quê. Artefato: `mutation.canary` e `mutation.source_sensitive_claims`. Limite: um teste que depende do texto só em lugar que o comentário não alcança (linha em branco, ordem de definições) não é pego. Testes: `TestAClaimThatReadsTheCodeIsNotMeasured` e `TestTheCanaryChangesNothingTheCodeDoes`; sem a correção, 3 dos 6 falham. |
 
-**Limite fechado junto — arquivos novos:** um módulo que o patch cria não recebia
-nenhum mutante (sem cópia no baseline para comparar), a força ficava "não
-verificada" e nenhum patch que adiciona código chegava a MERGE. Agora é mutado
-nas linhas que o patch escreveu: se parece com um arquivo do baseline (50% das
-linhas, o limiar de renomeação do git) é comparado com o mais parecido, para que
-renomear ou copiar um módulo não faça o código que ninguém mexeu contar como
-medido; senão, todas as linhas. O artefato diz o pareamento em
-`mutation.added_files`. Testes: `TestAFileThePatchAddedIsMutated` (5; sem a mudança
-os 5 falham).
+**Também nesta correção — arquivos novos:** um módulo que o patch cria não
+recebia nenhum mutante (sem cópia no baseline para comparar). Agora é mutado nas
+linhas que o patch escreveu, quando dá para compará-lo com o baseline: se parece
+com um arquivo do baseline (50% das linhas, o limiar de renomeação do git) é
+comparado com o mais parecido, para que renomear ou copiar um módulo não faça o
+código que ninguém mexeu contar como medido; senão, todas as linhas. O artefato
+diz o pareamento, e se o arquivo foi mutado, em `mutation.added_files`. Testes:
+`TestAFileThePatchAddedIsMutated` (5; sem a mudança os 5 falham).

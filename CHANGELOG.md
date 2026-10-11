@@ -57,10 +57,11 @@ flutuante `v3` nasce aqui; a `v2` continua na linha 2.x.
   Antes, esse teste chegava a MERGE com força 1,0. A linha de decisão do
   registro de evidências (`--evidence-log`) segue a mesma regra: as contagens da
   resposta e do registro saem de um lugar só.
-- **Arquivos novos recebem mutantes.** Um módulo que o patch cria era pulado e
-  nenhum patch que acrescenta código alcançava MERGE. Agora é mutado nas linhas
-  que o patch escreveu; renomeado ou copiado, é comparado com o arquivo do
-  baseline de que veio (`mutation.added_files`).
+- **Arquivos novos recebem mutantes.** Antes, um módulo que o patch cria nunca
+  era mutado. Agora é mutado nas linhas que o patch escreveu, quando dá para
+  compará-lo com o baseline; renomeado ou copiado, é comparado com o arquivo do
+  baseline de que veio. `mutation.added_files` diz o pareamento e se cada
+  arquivo foi mutado.
 - **AG-045 — o baseline do MCP é o que o id do commit contém.** O baseline passa
   a ser lido objeto a objeto (`ls-tree` + `cat-file`), com a substituição de
   objetos desligada, e cada blob é conferido contra o id que a árvore cita; o
