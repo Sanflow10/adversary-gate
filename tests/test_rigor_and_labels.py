@@ -943,6 +943,24 @@ class TestAFileThePatchAddedIsMutated(unittest.TestCase):
         self.assertEqual(detail["added_files"]["newmod.py"]["paired_with"], None)
         self.assertTrue(detail["added_files"]["newmod.py"]["mutated"])
 
+    def test_a_new_module_that_cannot_be_paired_makes_the_strength_unmeasured(self):
+        # Past the pairing limits the new module is not mutated, so its code is
+        # never judged. The strength of the rest of the patch must not be
+        # reported as the strength of the whole patch (B: a mixed patch on a
+        # baseline over 400 files reached MERGE with the new module untested).
+        # A mixed patch: a visible file with a mutable operator that the test
+        # kills, next to the new module that cannot be paired.
+        strong_and_g = self.STRONG.replace("from newmod import total, avg",
+                                           "from newmod import total, avg\nfrom other import g") + (
+            "\n\ndef test_g():\n    assert g(2, 3) == 5\n")
+        with mock.patch("adversary_gate.verifiers.strength._PAIRING_MAX_FILES", 0):
+            score, detail = self._measure({"other.py": "def g(a, b):\n    return a - b\n"},
+                                          {"other.py": "def g(a, b):\n    return a + b\n",
+                                           "newmod.py": self.NEW},
+                                          strong_and_g)
+        self.assertFalse(score.is_measured, detail)
+        self.assertIn("newmod.py", detail["reason"])
+
     def test_a_new_module_with_a_test_that_asserts_nothing_is_not_strong(self):
         score, detail = self._measure({"other.py": "X = 1\n"}, {"other.py": "X = 1\n", "newmod.py": self.NEW},
                                       self.HOLLOW)

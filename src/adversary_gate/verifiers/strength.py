@@ -893,6 +893,19 @@ def measure_mutation_score(
     total_sites = sum(len(v) for v in by_line.values())
     plan = _spread(by_line, max_mutants)
     detail["added_files"] = pairing
+    # Fail closed: an added module that could not be paired with the baseline
+    # was never mutated, so its code is unjudged. Scoring the rest of the patch
+    # would present that number as the strength of the whole patch (a mixed
+    # patch on a baseline over the pairing limits reached MERGE this way).
+    unpaired = [rel for rel, info in pairing.items() if not info["mutated"]]
+    if unpaired:
+        shown = ", ".join(sorted(unpaired)[:5])
+        more = f" (+{len(unpaired) - 5} more)" if len(unpaired) > 5 else ""
+        return finish(
+            SuiteStrength(0, 0, 0.0, is_measured=False),
+            f"added file(s) too large to pair with the baseline, so their code was "
+            f"never mutated and nothing about the patch can be measured: {shown}{more}",
+        )
 
     if not plan:
         deleted = detail["deleted_files"]
