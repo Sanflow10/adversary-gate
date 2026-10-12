@@ -312,7 +312,14 @@ runs:
 
         # Per-test contexts are what lets the gate find the tests that ran
         # the changed lines (AG-031).
-        printf '[run]\ndynamic_context = test_function\n' > "$TOOLS/coveragerc"
+        #
+        # ignore_errors on the report side: a suite that execs compile()d
+        # code -- doctest runners, exec-based plugins, and this repo's own
+        # canary tests, which label the copy "m.py" -- leaves frames whose
+        # filename names no file on disk. Without this, `coverage json`
+        # refuses to write the whole report over that one frame, and the
+        # gate dies having measured the entire suite and recorded nothing.
+        printf '[run]\ndynamic_context = test_function\n\n[report]\nignore_errors = True\n' > "$TOOLS/coveragerc"
 
         echo "python=$PROJECT" >> "$GITHUB_OUTPUT"
         echo "bin=$TOOLS/bin" >> "$GITHUB_OUTPUT"
@@ -368,9 +375,9 @@ runs:
         export PATH="$AG_TOOLS_BIN:$PATH"
         if [ -z "$AG_COVERAGE_CMD" ]; then
           if [ "$AG_DISCOVER" = "true" ]; then
-            AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --show-contexts -o "$COVERAGE_JSON"'
+            AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --rcfile "$ADVERSARY_COVERAGE_RC" --show-contexts -o "$COVERAGE_JSON"'
           else
-            AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json -o "$COVERAGE_JSON"'
+            AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json --rcfile "$ADVERSARY_COVERAGE_RC" -o "$COVERAGE_JSON"'
           fi
         fi
 

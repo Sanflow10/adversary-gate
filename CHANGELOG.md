@@ -40,6 +40,18 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+Um frame compilado sem arquivo atrás não mata mais o relatório de coverage.
+Os testes de canário deste repositório executam
+`compile(..., "m.py", "exec")` — o nome é rótulo, não arquivo — e o coverage
+registrava esses frames como `m.py` na raiz do workspace; o `coverage json`
+se recusava a escrever o relatório inteiro por causa deles, e o job
+"Composite action discovers claims" do CI morria sem gravar evidência alguma
+desde o 3.0.1 (runs 89–91 e o push da correção de versão). A Action e o
+`prepare_evidence.sh` passam a gerar o relatório com `ignore_errors = True`:
+o arquivo sem origem vira aviso, e o relatório sai. O contrato fica em
+`test_execution_and_claims.py`; a prova de execução é o próprio job dogfood,
+que roda a ação sobre esta suíte envenenada.
+
 ---
 
 ## [3.0.2] — 2026-10-12

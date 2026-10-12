@@ -598,6 +598,40 @@ class TestActionContract(unittest.TestCase):
         self.assertRegex(self.text, r"(?m)^  exit-code:\n(?:.*\n)*?    value: \$\{\{ steps\.gate\.outputs\.exit-code \}\}")
         self.assertIn('echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"', self.text)
 
+    def test_coverage_json_is_told_to_survive_a_frame_with_no_source(self):
+        """One phantom filename must not cost the whole report.
+
+        A suite that execs compile()d code -- doctest runners, exec-based
+        plugins, and this repo's own canary tests, which label the copy
+        ``m.py`` -- leaves frames whose filename names no file on disk.
+        ``coverage json`` then refuses to write the report at all, and the
+        dogfood job died having measured the whole suite and recording
+        nothing. ``ignore_errors`` turns that one frame into a warning.
+        """
+        self.assertIn("ignore_errors = True", self.text)
+        # Both default report commands run through the Action's own rcfile.
+        self.assertEqual(
+            self.text.count('coverage json --rcfile "$ADVERSARY_COVERAGE_RC"'), 2,
+            "both default coverage commands must report through the Action's rcfile",
+        )
+
+
+class TestPrepareEvidenceContract(unittest.TestCase):
+    """scripts/prepare_evidence.sh, read as data: the same trap, one layer out.
+
+    The default coverage command here has no rcfile of its own, so the script
+    writes a report-only one -- ``coverage run`` still reads whatever config
+    the project already has.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = (ROOT / "scripts" / "prepare_evidence.sh").read_text()
+
+    def test_default_coverage_report_survives_a_frame_with_no_source(self):
+        self.assertIn("ignore_errors = True", self.text)
+        self.assertIn('coverage json --rcfile "$REPORT_RC"', self.text)
+
 
 if __name__ == "__main__":
     unittest.main()
