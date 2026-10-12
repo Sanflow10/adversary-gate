@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.2)
+# AdversaryGate (v3.0.3)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -331,7 +331,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.2** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.3** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -340,21 +340,21 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.2 is there; older versions lack what the CHANGELOG lists after them
+# PyPI -- 3.0.3 is there; older versions lack what the CHANGELOG lists after them
 # (2.14.0 has AG-043; everything before 2.14.1 has AG-044; 2.14.1 has AG-045 and
 # AG-046; 2.14.2 has every fix and is the last MIT release)
-pip install adversary-gate==3.0.2
+pip install adversary-gate==3.0.3
 ```
 
 ```bash
-# GitHub Release -- 3.0.2: every fix in this document.
+# GitHub Release -- 3.0.3: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.2/adversary_gate-3.0.2-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.3/adversary_gate-3.0.3-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.2` has not been published yet. (There is no `v2.1.1`: that
+Release for `v3.0.3` has not been published yet. (There is no `v2.1.1`: that
 version was written up and never released; its fixes are in `2.2.0`.) Releases
 are published from
 **Actions → Release → Run workflow**. That workflow:
@@ -374,7 +374,7 @@ are published from
    warning in the run, that PyPI was **not** updated.
 
 To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v3.0.2`). It builds from that tag's
+→ Run workflow** and give it the tag (`v3.0.3`). It builds from that tag's
 tree, refuses a tag whose `pyproject.toml` names another version, and
 authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
 Publishing when it does not.
@@ -604,7 +604,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.2` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.3` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. `v2` follows the 2.x line, which ends at `v2.14.2`: the same fixes,
 > under MIT. `v2.14.1` lacks AG-045 and AG-046; `v2.14.0` lacks AG-043 (its default counted a run another run broke

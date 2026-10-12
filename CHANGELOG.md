@@ -11,7 +11,7 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0`, `v2.14.0`, `v2.14.1`, `v2.14.2`, `v3.0.0` e `v3.0.1`**, mais as
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0`, `v2.14.0`, `v2.14.1`, `v2.14.2`, `v3.0.0`, `v3.0.1` e `v3.0.2`**, mais as
 flutuantes `v2` e `v3`. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
 `2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.14.1` é
@@ -40,6 +40,10 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.3] — 2026-10-12
+
 Um frame compilado sem arquivo atrás não mata mais o relatório de coverage.
 Os testes de canário deste repositório executam
 `compile(..., "m.py", "exec")` — o nome é rótulo, não arquivo — e o coverage
@@ -51,6 +55,10 @@ desde o 3.0.1 (runs 89–91 e o push da correção de versão). A Action e o
 o arquivo sem origem vira aviso, e o relatório sai. O contrato fica em
 `test_execution_and_claims.py`; a prova de execução é o próprio job dogfood,
 que roda a ação sobre esta suíte envenenada.
+
+Leva adiante o conteúdo da `3.0.2` (uma versão em todo lugar). O CLI no PyPI
+não era afetado — ele só lê o JSON que o usuário gera —, mas a Action em
+`@v3` e o caminho do MCP passavam pelos comandos default corrigidos aqui.
 
 ---
 
