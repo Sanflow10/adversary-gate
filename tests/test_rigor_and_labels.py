@@ -886,27 +886,62 @@ class TestAClaimThatReadsTheCodeIsNotMeasured(unittest.TestCase):
 
 
 class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
-    def test_the_copy_parses_to_the_same_tree_and_comments_only_line_ends(self):
+    def test_the_copy_differs_from_the_patch_only_by_comments_and_probes(self):
         import ast
-        from adversary_gate.verifiers.strength import canary_source
+        from adversary_gate.verifiers.strength import _WithoutProbes, canary_source
         source = ('def f(a, b):\n    x = a + b\n    s = """one\n# not a comment\ntwo"""\n'
                   '    y = (a +\n         b)\n    return x + y + len(s)\n')
         out = canary_source(source, {2, 3, 4, 5, 6, 7, 8})
         self.assertIsNotNone(out)
-        self.assertEqual(ast.dump(ast.parse(out)), ast.dump(ast.parse(source)))
+        self.assertEqual(ast.dump(_WithoutProbes().visit(ast.parse(out))), ast.dump(ast.parse(source)))
         self.assertIn('# not a comment\ntwo"""  # adversary-gate canary', out)
         self.assertNotIn("# not a comment  # adversary-gate canary", out)
 
-    def test_only_lines_the_patch_wrote_get_a_comment(self):
+    def test_only_lines_the_patch_wrote_get_a_comment_and_a_probe(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("a = 1\nb = 2\nc = 3\n", {2})
-        self.assertEqual(out.split("\n")[:3],
-                         ["a = 1", "b = 2  # adversary-gate canary", "c = 3"])
+        self.assertEqual(out.split("\n")[:4],
+                         ["a = 1", "__adversary_probe__ = 0", "b = 2  # adversary-gate canary", "c = 3"])
 
-    def test_no_canary_when_there_is_nothing_to_comment_or_the_source_does_not_parse(self):
+    def test_a_probe_changes_the_tree_and_the_bytecode_but_not_the_result(self):
+        import ast
+        from adversary_gate.verifiers.strength import canary_source
+        source = "def f(a):\n    return a + 1\n"
+        out = canary_source(source, {2})
+        self.assertNotEqual(ast.dump(ast.parse(out)), ast.dump(ast.parse(source)))
+        namespace, probed = {}, {}
+        exec(compile(source, "<patch>", "exec"), namespace)
+        exec(compile(out, "<canary>", "exec"), probed)
+        self.assertNotEqual(namespace["f"].__code__.co_code, probed["f"].__code__.co_code)
+        self.assertEqual(probed["f"](4), namespace["f"](4))
+
+    def test_a_header_row_gets_its_probe_at_the_start_of_the_body(self):
+        from adversary_gate.verifiers.strength import canary_source
+        out = canary_source("def f(a,\n      b):\n    return a + b\n", {1})
+        self.assertIn("    __adversary_probe__ = 0\n    return a + b", out)
+
+    def test_a_decorator_row_gets_its_probe_in_the_decorated_body(self):
+        from adversary_gate.verifiers.strength import canary_source
+        out = canary_source("@staticmethod\ndef f():\n    return 1\n", {1})
+        self.assertIn("    __adversary_probe__ = 0\n    return 1", out)
+
+    def test_a_statement_that_shares_its_line_is_probed_in_front_of_the_line(self):
+        # It used to have no place, so nothing was measured; in front of the
+        # line's first statement is the same block. A one-line ``def`` still
+        # has no place inside it (see TestTheProbeStaysNeutralWhereAStatementCannotGo).
+        from adversary_gate.verifiers.strength import canary_source
+        out = canary_source("x = 1; y = 2\n", {1})
+        self.assertTrue(out.startswith("__adversary_probe__ = 0\nx = 1; y = 2"), out)
+
+    def test_no_canary_when_there_is_nothing_to_probe(self):
         from adversary_gate.verifiers.strength import canary_source
         self.assertIsNone(canary_source("a = 1\n", set()))
-        self.assertIsNone(canary_source("def (:\n", {1}))
+        self.assertIsNone(canary_source("# just a comment\n", {1}))
+
+    def test_a_file_that_does_not_parse_has_no_copy_and_no_pass(self):
+        from adversary_gate.verifiers.strength import CanaryUnavailable, canary_source
+        with self.assertRaises(CanaryUnavailable):
+            canary_source("def (:\n", {1})
 
 
 class TestAFileThePatchAddedIsMutated(unittest.TestCase):
@@ -1035,3 +1070,521 @@ class TestTheUnmutatedRunDecides(unittest.TestCase):
             return SandboxResult(1, "", "", False)
         _, detail = self._measure(fake, timeout_seconds=None)
         self.assertFalse(detail["source_sensitive_claims"], detail)
+
+    def test_an_unmutated_run_killed_by_a_limit_names_the_limit(self):
+        # Not "did not pass": a run that --timeout, --cpu-seconds or --memory
+        # stopped neither passed nor failed, and the way out is the limit.
+        for code, timed_out in ((-1, True), (-6, False)):
+            with self.subTest(exit_code=code):
+                def fake(directory, *_a, _code=code, _timed_out=timed_out, **_k):
+                    return SandboxResult(_code, "", "", _timed_out)
+                score, detail = self._measure(fake, timeout_seconds=30)
+                self.assertFalse(score.is_measured, detail)
+                self.assertIn("killed by a limit", detail["reason"])
+                self.assertNotIn("did not pass", detail["reason"])
+
+
+class TestAClaimThatHashesTheTreeIsNotMeasured(unittest.TestCase):
+    """A (reproduced in 3.0.0): a claim that only compares the hash of the
+    changed module's tree passed the comment-only canary, so it "killed" every
+    mutant and the suite read as strong: MERGE with suite strength 1.0.
+
+    The probes change the tree, so such a claim fails on the copy and nothing
+    is measured. A claim about behaviour keeps working on the same patch.
+    """
+
+    BASE = ("def add(a, b):\n    return a - b\n\n\ndef total(values):\n    out = 0\n"
+            "    for v in values:\n        out = out + v * 2 - 1\n    return out + len(values) * 3\n")
+    PATCH = BASE.replace("return a - b", "return a + b")
+
+    def _measure(self, test_text: str):
+        import ast as _ast
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, src in (("baseline", self.BASE), ("patch", self.PATCH)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_new.py").write_text(test_text(_ast.dump(_ast.parse(self.PATCH))))
+            return measure_mutation_score(root / "baseline", root / "patch", "test_new.py",
+                                          max_mutants=20)
+
+    def test_a_claim_that_hashes_the_tree_is_not_measured(self):
+        def hash_claim(expected: str) -> str:
+            return ("import ast\nimport hashlib\nimport pathlib\n\nimport calc\n\n"
+                    f"EXPECTED = hashlib.sha256({expected!r}.encode()).hexdigest()\n\n\n"
+                    "def test_structure():\n"
+                    "    src = pathlib.Path(calc.__file__).read_text()\n"
+                    "    digest = hashlib.sha256(ast.dump(ast.parse(src)).encode()).hexdigest()\n"
+                    "    calc.add(1, 2)\n    calc.total([1, 2])\n    assert digest == EXPECTED\n")
+        score, detail = self._measure(hash_claim)
+        self.assertFalse(score.is_measured, detail)
+        self.assertTrue(detail["source_sensitive_claims"], detail)
+        # The copy is not comment-only any more: the reason says what it changed.
+        self.assertIn("no-op assignment", detail["reason"])
+
+    def test_a_claim_about_behaviour_is_still_measured(self):
+        def behaviour_claim(_expected: str) -> str:
+            return ("import calc\n\n\ndef test_behaviour():\n"
+                    "    assert calc.add(2, 3) == 5\n    assert calc.total([1, 2]) == 10\n")
+        score, detail = self._measure(behaviour_claim)
+        self.assertTrue(score.is_measured, detail)
+        self.assertFalse(detail["source_sensitive_claims"], detail)
+
+
+class TestTheProbeStaysNeutralWhereAStatementCannotGo(unittest.TestCase):
+    """A follow-up: the probe went in front of the statement the patch wrote, and
+    three places cannot take a statement in front of them. In front of a
+    docstring, ``__doc__`` became None, so a claim that reads it (a doctest, a
+    command's help) was called source-sensitive. In front of a module docstring
+    followed by ``from __future__``, the copy did not compile, so every claim
+    was. And ``if x: return y`` had no place at all, so nothing was measured.
+    The copy must compile and behave the same, and it must still change the
+    tree and the bytecode of the function the patch edited.
+    """
+
+    def _copy(self, source: str, rows) -> str:
+        from adversary_gate.verifiers.strength import CanaryUnavailable, canary_source
+        try:
+            neutral = canary_source(source, set(rows))
+        except CanaryUnavailable as exc:
+            self.fail(f"no copy was built: {exc}")
+        self.assertIsNotNone(neutral)
+        try:
+            compile(neutral, "m.py", "exec")
+        except SyntaxError as exc:
+            self.fail(f"the copy does not compile: {exc}\n{neutral}")
+        return neutral
+
+    @staticmethod
+    def _namespace(source: str) -> dict:
+        namespace: dict = {}
+        exec(compile(source, "m.py", "exec"), namespace)
+        return namespace
+
+    def test_a_docstring_keeps_its_place(self):
+        source = 'def add(a, b):\n    """Add two numbers."""\n    return a + b\n'
+        neutral = self._copy(source, [2])
+        before, after = self._namespace(source)["add"], self._namespace(neutral)["add"]
+        self.assertEqual(after.__doc__, "Add two numbers.")
+        self.assertNotEqual(after.__code__.co_code, before.__code__.co_code)
+
+    def test_a_module_docstring_before_future_imports_still_compiles(self):
+        import ast as _ast
+        source = ('"""Module doc."""\nfrom __future__ import annotations\n\n\n'
+                  "def f(x):\n    return x + 1\n")
+        neutral = self._copy(source, [1])
+        self.assertEqual(self._namespace(neutral)["__doc__"], "Module doc.")
+        self.assertNotEqual(_ast.dump(_ast.parse(neutral)), _ast.dump(_ast.parse(source)))
+
+    def test_an_edited_future_import_still_compiles(self):
+        self._copy("from __future__ import annotations\n\n\ndef f(x):\n    return x + 1\n", [1])
+
+    def test_a_one_line_if_is_probed_in_front_of_the_if(self):
+        source = "def f(x):\n    if x < 0: return 0\n    return x + 1\n"
+        neutral = self._copy(source, [2])
+        before, after = self._namespace(source)["f"], self._namespace(neutral)["f"]
+        self.assertEqual([after(-1), after(2)], [0, 3])
+        self.assertNotEqual(after.__code__.co_code, before.__code__.co_code)
+
+    def test_a_one_line_elif_and_else_are_probed_in_front_of_their_if(self):
+        source = ("def f(x):\n    if x < 0:\n        return 0\n    elif x == 0: return 1\n"
+                  "    else: return x + 1\n")
+        after = self._namespace(self._copy(source, [4, 5]))["f"]
+        self.assertEqual([after(-1), after(0), after(2)], [0, 1, 3])
+
+    def test_a_statement_after_a_semicolon_is_probed_in_front_of_its_line(self):
+        source = "def f(x):\n    a = x; b = a + 1\n    return b\n"
+        self.assertEqual(self._namespace(self._copy(source, [2]))["f"](1), 2)
+
+    def test_a_one_line_def_still_has_no_place_inside_it(self):
+        # In front of the ``def`` is outside the function, whose bytecode would
+        # not change: nothing measured beats a canary that cannot see the claim.
+        from adversary_gate.verifiers.strength import CanaryUnavailable, canary_source
+        with self.assertRaises(CanaryUnavailable):
+            canary_source("def f(x): return x + 1\n", {1})
+
+
+class TestAPythonFileGitHidesIsNotJudgedBlind(unittest.TestCase):
+    """C (candidate, reproduced in 3.0.0): with ``calc.py -diff`` in
+    .gitattributes, ``git diff`` writes "Binary files ... differ" for it. The
+    changed lines were then missing from the coverage diff, so a patch that
+    changed them and was covered elsewhere could MERGE.
+
+    Two fixes, both tested: the evidence script diffs with ``--text`` (the lines
+    are in the diff), and a Python file that still shows as binary is refused
+    rather than silently left out.
+    """
+
+    def test_a_python_file_shown_as_binary_is_refused(self):
+        from adversary_gate.verifiers.coverage import UnparseableDiff, validate_diff
+        diff = ("diff --git a/calc.py b/calc.py\nindex 12ee743..4693ad3 100644\n"
+                "Binary files a/calc.py and b/calc.py differ\n")
+        with self.assertRaises(UnparseableDiff) as caught:
+            validate_diff(diff)
+        self.assertIn("calc.py", str(caught.exception))
+        self.assertIn("--text", str(caught.exception))
+
+    def test_a_binary_asset_that_is_not_python_is_not_refused(self):
+        from adversary_gate.verifiers.coverage import validate_diff
+        diff = ("diff --git a/logo.png b/logo.png\nindex 1..2 100644\n"
+                "Binary files a/logo.png and b/logo.png differ\n")
+        self.assertEqual(validate_diff(diff), {})
+
+    def test_the_evidence_script_keeps_the_lines_of_a_file_marked_minus_diff(self):
+        import subprocess
+        script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_evidence.sh"
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            (repo / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "base"], cwd=repo, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (repo / ".gitattributes").write_text("calc.py -diff\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "patch"], cwd=repo, check=True)
+            out = Path(directory) / "out"
+            result = subprocess.run(
+                ["bash", str(script), "--base-sha", base, "--baseline-dir", str(out / "baseline"),
+                 "--diff-file", str(out / "change.diff"), "--skip-coverage", "--workspace", str(repo)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            diff = (out / "change.diff").read_text()
+            self.assertNotIn("Binary files", diff)
+            self.assertIn("+    return a + b", diff)
+
+    def test_the_evidence_script_leaves_a_binary_asset_binary(self):
+        # ``--text`` on every file turned a changed image into lines of text that
+        # no test runs: a patch whose code was all covered fell to 0.25. Only the
+        # Python files need it.
+        import subprocess
+        script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_evidence.sh"
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        png = bytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13])
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            (repo / "pkg").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            (repo / "pkg" / "calc.py").write_text("def add(a, b):\n    return a - b\n")
+            (repo / "logo.png").write_bytes(png + b"\x00old\nimage\x00")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "base"], cwd=repo, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            (repo / "pkg" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (repo / "logo.png").write_bytes(png + b"\x00new\nimage\nbytes\x00")
+            (repo / ".gitattributes").write_text("*.py -diff\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "patch"], cwd=repo, check=True)
+            out = Path(directory) / "out"
+            result = subprocess.run(
+                ["bash", str(script), "--base-sha", base, "--baseline-dir", str(out / "baseline"),
+                 "--diff-file", str(out / "change.diff"), "--skip-coverage", "--workspace", str(repo)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            diff = (out / "change.diff").read_text(errors="replace")
+            self.assertIn("+    return a + b", diff)
+            self.assertIn("Binary files a/logo.png and b/logo.png differ", diff)
+
+
+class TestASecondLineIsJudgedByItsStatement(unittest.TestCase):
+    """E: coverage.py reports a statement on its first line only, so the second
+    line of a statement was never "executed" and always counted as uncovered: a
+    module whose code all ran measured 5/9 and was blocked by the 0.80 floor.
+
+    Dropping such lines from the count was worse. The second line of a statement
+    that never ran stopped counting at all, and a patch that broke ``mul`` there
+    went from INCONCLUSIVE (0.67, in 3.0.0) to MERGE (1.0). The line still counts,
+    and it is covered when its statement ran. A docstring still counts and is never
+    covered, as in 3.0.0. Without the patch's source nothing is mapped.
+    """
+
+    SOURCE = ('def total(values):\n    """Sum the values.\n\n'
+              "    Long docstring line that coverage never marks.\n    \"\"\"\n"
+              "    result = (1 +\n              2)\n    for v in values:\n"
+              "        result = result + v\n    return result\n")
+    DIFF = ("diff --git a/mod.py b/mod.py\nnew file mode 100644\n--- /dev/null\n+++ b/mod.py\n"
+            "@@ -0,0 +1,10 @@\n" + "".join(f"+{line}\n" for line in SOURCE.split("\n")[:-1]))
+    RAN = {"files": {"mod.py": {"executed_lines": [1, 6, 8, 9, 10], "missing_lines": [],
+                                "excluded_lines": []}}}
+
+    #: Fixes ``add`` and breaks ``mul`` on the second line of its return, where no
+    #: mutable operator is left. Nothing calls ``mul``.
+    BASE_CALC = "def add(a, b):\n    return a - b\n\n\ndef mul(a, b):\n    return (a\n            * b)\n"
+    BROKEN_MUL = "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return (a\n            )\n"
+    OTHER = "def twice(x):\n    return x * 2 + 1 - 1 + x * 3 - x * 3\n"
+    BROKEN_MUL_DIFF = ("--- a/calc.py\n+++ b/calc.py\n@@ -1,7 +1,7 @@\n def add(a, b):\n"
+                       "-    return a - b\n+    return a + b\n \n \n def mul(a, b):\n"
+                       "     return (a\n-            * b)\n+            )\n"
+                       "--- a/other.py\n+++ b/other.py\n@@ -1,2 +1,2 @@\n def twice(x):\n"
+                       "-    return x\n+    return x * 2 + 1 - 1 + x * 3 - x * 3\n")
+    MUL_NEVER_RAN = {"files": {
+        "calc.py": {"executed_lines": [1, 2, 5], "missing_lines": [6], "excluded_lines": []},
+        "other.py": {"executed_lines": [1, 2], "missing_lines": [], "excluded_lines": []},
+    }}
+
+    def test_a_second_line_is_covered_when_its_statement_ran(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "mod.py").write_text(self.SOURCE)
+            ratio = covered_diff_ratio(self.DIFF, self.RAN, source_root=root)
+        # 9 lines count (the blank one never did); 7 is covered through 6, and
+        # the docstring lines 2, 4 and 5 are not covered.
+        self.assertEqual((ratio.changed_lines, ratio.covered_lines), (9, 6))
+
+    def test_a_second_line_of_a_statement_that_never_ran_counts_against_the_patch(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "calc.py").write_text(self.BROKEN_MUL)
+            (root / "other.py").write_text(self.OTHER)
+            ratio = covered_diff_ratio(self.BROKEN_MUL_DIFF, self.MUL_NEVER_RAN, source_root=root)
+        self.assertEqual((ratio.changed_lines, ratio.covered_lines), (3, 2))
+
+    def test_without_the_source_a_second_line_is_never_covered(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        ratio = covered_diff_ratio(self.DIFF, self.RAN)
+        self.assertEqual((ratio.changed_lines, ratio.covered_lines), (9, 5))
+        ratio = covered_diff_ratio(self.BROKEN_MUL_DIFF, self.MUL_NEVER_RAN)
+        self.assertEqual((ratio.changed_lines, ratio.covered_lines), (3, 2))
+
+    def test_a_symlinked_source_is_not_read(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "real.py").write_text(self.SOURCE)
+            (root / "mod.py").symlink_to(root / "real.py")
+            ratio = covered_diff_ratio(self.DIFF, self.RAN, source_root=root)
+        self.assertEqual((ratio.changed_lines, ratio.covered_lines), (9, 5))
+
+    def test_the_advice_names_the_lines_the_ratio_counts_against(self):
+        from adversary_gate.verifiers.coverage import uncovered_lines
+        readme = "--- a/README.md\n+++ b/README.md\n@@ -1,0 +1,1 @@\n+new line\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "mod.py").write_text(self.SOURCE)
+            self.assertEqual(uncovered_lines(self.DIFF + readme, self.RAN, source_root=root),
+                             {"mod.py": [2, 4, 5]})
+
+    def _tree(self, root: Path, claim_calls_mul: bool) -> None:
+        claim = ("import calc\nimport other\n\n\ndef test_ops():\n    assert calc.add(2, 3) == 5\n"
+                 "    assert other.twice(3) == 6\n    assert other.twice(5) == 10\n"
+                 + ("    calc.mul(2, 3)\n" if claim_calls_mul else ""))
+        for side, calc, other in (("baseline", self.BASE_CALC, "def twice(x):\n    return x\n"),
+                                  ("patch", self.BROKEN_MUL, self.OTHER)):
+            (root / side).mkdir()
+            (root / side / "calc.py").write_text(calc)
+            (root / side / "other.py").write_text(other)
+            (root / side / "test_calc.py").write_text(claim)
+        (root / "change.diff").write_text(self.BROKEN_MUL_DIFF)
+        report = json.loads(json.dumps(self.MUL_NEVER_RAN))
+        if claim_calls_mul:
+            report["files"]["calc.py"].update(executed_lines=[1, 2, 5, 6], missing_lines=[])
+        (root / "cov.json").write_text(json.dumps(report))
+
+    def test_the_cli_reads_the_patch_to_judge_a_second_line(self):
+        for calls_mul, expected in ((False, (3, 2)), (True, (3, 3))):
+            with self.subTest(claim_calls_mul=calls_mul), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tree(root, calls_mul)
+                code, payload = _cli(root)
+                coverage = payload["diff_coverage"]
+                self.assertEqual((coverage["changed_lines"], coverage["covered_lines"]), expected, coverage)
+                if not calls_mul:
+                    self.assertEqual(code, EXIT_INCONCLUSIVE, payload["reason"])
+
+
+class TestMessagesThatNameTheRealCause(unittest.TestCase):
+    """F: a full suite killed by a signal was reported as a timeout to raise,
+    whatever the signal was. G: ``--test-path .`` was reported as escaping the
+    repository, though it is the repository itself.
+    """
+
+    def test_a_memory_kill_is_not_reported_as_a_timeout(self):
+        from types import SimpleNamespace
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.gate import Decision
+        args = SimpleNamespace(full_suite_timeout=900, full_suite_cpu_seconds=None,
+                               full_suite_memory=4096)
+        reason = _reason(Decision.INCONCLUSIVE, [], None, (-6, -6), args)
+        self.assertIn("SIGABRT", reason)
+        self.assertIn("--full-suite-memory", reason)
+        self.assertNotIn("Raise the limit", reason)
+
+
+class TestADocumentCannotPassAsCoverage(unittest.TestCase):
+    """E, and a gap found while checking it: in 3.0.0 a patch that only deleted
+    a line of README.md measured coverage 1.0, and a claim that read the README
+    then passed, so the gate said MERGE. Documents and configuration are not
+    code, so they cannot be the fix; a patch with no source line has no coverage.
+    """
+
+    README_DELETE = ("diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+                     "@@ -1,2 +1,1 @@\n # Title\n-Old claim that is wrong.\n")
+    CODE_AND_README = ("diff --git a/mod.py b/mod.py\n--- a/mod.py\n+++ b/mod.py\n@@ -1,1 +1,2 @@\n"
+                       " def total(values):\n+    return sum(values)\n"
+                       "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n"
+                       "@@ -1,0 +1,3 @@\n+x\n+y\n+z\n")
+
+    def test_a_document_deletion_is_not_a_measured_perfect_ratio(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        result = covered_diff_ratio(self.README_DELETE, {"files": {}})
+        self.assertTrue(result.unmeasured, result)
+        self.assertIsNone(result.ratio)
+
+    def test_documents_are_left_out_of_a_patch_that_also_has_code(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        cov = {"files": {"mod.py": {"executed_lines": [1, 2], "missing_lines": [], "excluded_lines": []}}}
+        result = covered_diff_ratio(self.CODE_AND_README, cov)
+        self.assertEqual((result.changed_lines, result.covered_lines), (1, 1), result)
+        self.assertEqual(result.excluded_doc_files, ("README.md",))
+        self.assertEqual(result.ratio, 1.0)
+
+    def test_configuration_stays_counted_so_its_change_is_not_free(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio, is_documentation
+        self.assertFalse(is_documentation("pyproject.toml"))
+        self.assertFalse(is_documentation("requirements.txt"))
+        self.assertFalse(is_documentation("docs_helper.py"))
+        self.assertTrue(is_documentation("LICENSE"))
+        self.assertTrue(is_documentation("docs/guide.md"))
+        diff = ("diff --git a/pyproject.toml b/pyproject.toml\n--- a/pyproject.toml\n+++ b/pyproject.toml\n"
+                "@@ -1,1 +1,1 @@\n-timeout = 5\n+timeout = 60\n")
+        result = covered_diff_ratio(diff, {"files": {}})
+        self.assertEqual(result.changed_lines, 1)
+        self.assertEqual(result.ratio, 0.0)
+
+    def test_a_whole_python_file_deletion_keeps_its_documented_ratio(self):
+        from adversary_gate.verifiers.coverage import covered_diff_ratio
+        diff = "--- a/legacy.py\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-def a():\n-    pass\n"
+        result = covered_diff_ratio(diff, {"files": {}})
+        self.assertFalse(result.unmeasured)
+        self.assertEqual(result.ratio, 1.0)
+
+
+class TestATestOnlyPatchKeepsItsVacuousRatio(unittest.TestCase):
+    """The ``unmeasured`` rule was also catching a patch of tests alone, which
+    3.0.0 reads as "vacuously 1.0" (AG-022), so every such patch became
+    INCONCLUSIVE. No gap needed it, as checked against 3.0.0: a new conftest.py
+    is a protected path; a new test that reads a data file it brings passes on
+    both sides, so it is not evidence of a fix; and a claim that reads a test
+    data file the patch changed is judged by the baseline's copy of it. The rule
+    stays for what a claim can read outside the tests: documents and configuration.
+    """
+
+    def _resolve(self, diff: str):
+        from types import SimpleNamespace
+        from adversary_gate.cli import _resolve_coverage
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "change.diff").write_text(diff)
+            (root / "cov.json").write_text(json.dumps({"files": {}}))
+            return _resolve_coverage(SimpleNamespace(
+                diff=str(root / "change.diff"), coverage_json=str(root / "cov.json"),
+                coverage_source="auto", coverage_ratio=None, patch=str(root)))
+
+    TESTS = ("--- a/tests/test_calc.py\n+++ b/tests/test_calc.py\n@@ -0,0 +1,2 @@\n"
+             "+def test_new():\n+    assert 1 + 1 == 2\n"
+             "--- a/tests/data.txt\n+++ b/tests/data.txt\n@@ -0,0 +1,1 @@\n+ok\n")
+    README = "--- a/README.md\n+++ b/README.md\n@@ -1,2 +1,1 @@\n # Title\n-Old claim.\n"
+
+    def test_a_patch_of_tests_alone_is_vacuously_covered(self):
+        ratio, _, detail = self._resolve(self.TESTS)
+        self.assertEqual(ratio, 1.0)
+        self.assertIn("vacuously", detail["note"])
+
+    def test_tests_with_a_document_are_not_measured(self):
+        ratio, _, detail = self._resolve(self.TESTS + self.README)
+        self.assertIsNone(ratio)
+        self.assertIn("not measured", detail["note"])
+        self.assertNotIn("deletion", detail["note"])
+
+
+class TestAFixedLabelNeedsTheBaselineToFailAlone(unittest.TestCase):
+    """#4 (the AG-043 residue in the ledger, section 18): the two sides of a claim
+    run at once, so a baseline failure can be the other side's doing. A FIXED
+    label says the baseline fails on its own, so it is checked by rerunning the
+    baseline alone. The decision never depended on the label; ``fix_proven`` did.
+    """
+
+    def _verify(self, baseline_exit_for_call, config=None):
+        from adversary_gate.core.gate import Gate
+        from adversary_gate.core.types import CriticClaim
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+                (root / side / "test_calc.py").write_text(
+                    "import calc\n\n\ndef test_add():\n    assert calc.add(2, 3) == 5\n")
+            gate = Gate([], config=config)
+            calls = {"baseline": 0}
+
+            def fake_runs(run_dir, test_path, test_id, policy, limits):
+                if Path(run_dir) == root / "baseline":
+                    calls["baseline"] += 1
+                    code = baseline_exit_for_call(calls["baseline"])
+                else:
+                    code = 0  # the patch passes
+                return [code] * policy.runs, ""
+
+            gate._runs = fake_runs
+            verdict = gate.verify_claim(CriticClaim("test_calc.py", "test_add"),
+                                        root / "baseline", root / "patch")
+            return verdict, calls["baseline"]
+
+    def test_a_baseline_failure_that_does_not_repeat_alone_is_not_a_fix(self):
+        from adversary_gate.core.gate import FailureClass
+        # The first baseline run, the one beside the patch, fails; alone it passes.
+        verdict, runs = self._verify(lambda call: 1 if call == 1 else 0)
+        self.assertEqual(runs, 2, "the baseline must be rerun alone")
+        self.assertIsNot(verdict.classification, FailureClass.FIXED, verdict)
+
+    def test_a_baseline_that_fails_alone_is_still_a_fix(self):
+        from adversary_gate.core.gate import FailureClass
+        verdict, runs = self._verify(lambda call: 1)
+        self.assertEqual(runs, 2)
+        self.assertIs(verdict.classification, FailureClass.FIXED, verdict)
+
+
+class TestALimitThatKilledAClaimIsNamed(unittest.TestCase):
+    """#1 (issue #4, Android): a claim whose run died by SIGABRT got only "see the
+    reason", while the reason said the run was not executed. The advice now names
+    the limit that sent the signal, so it matches the reason.
+    """
+
+    def _steps_for(self, exit_code):
+        from types import SimpleNamespace
+        from adversary_gate.cli import _next_steps
+        from adversary_gate.core.gate import Decision, Gate
+        from adversary_gate.core.types import CriticClaim
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+                (root / side / "test_calc.py").write_text(
+                    "import calc\n\n\ndef test_add():\n    assert calc.add(2, 3) == 5\n")
+            gate = Gate([])
+            gate._runs = lambda run_dir, test_path, test_id, policy, limits: ([exit_code] * policy.runs, "")
+            verdict = gate.verify_claim(CriticClaim("test_calc.py", "test_add"),
+                                        root / "baseline", root / "patch")
+        args = SimpleNamespace(coverage_floor=0.8, suite_strength_floor=0.75, diff=None, coverage_json=None)
+        return _next_steps(Decision.INCONCLUSIVE, [verdict], None, args,
+                           coverage_ratio=None, mutation=None)
+
+    def test_an_abort_names_the_address_space_limit(self):
+        steps = self._steps_for(-6)
+        flags = [f for step in steps if step["action"] == "raise_limit" for f in step["flags"]]
+        self.assertIn("--memory", flags, steps)
+        self.assertNotIn("--timeout", flags, steps)
+
+    def test_a_kill_names_the_time_and_cpu_limits(self):
+        steps = self._steps_for(-9)
+        flags = [f for step in steps if step["action"] == "raise_limit" for f in step["flags"]]
+        self.assertIn("--timeout", flags, steps)
+        self.assertNotIn("--memory", flags, steps)

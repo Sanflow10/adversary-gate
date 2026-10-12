@@ -491,24 +491,193 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
 
 #: Appended to the end of every logical line the patch wrote, in the canary copy.
 _CANARY = "  # adversary-gate canary"
+#: The statement the canary adds after (or before) code the patch wrote. Assigning
+#: it changes the tree and the bytecode of the function that holds it, and nothing
+#: the code computes. The name ends in ``__``, so a class does not mangle it.
+_PROBE = "__adversary_probe__"
+_PROBE_LINE = f"{_PROBE} = 0"
+_SIMPLE = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Return, ast.Raise,
+           ast.Assert, ast.Pass, ast.Delete, ast.Import, ast.ImportFrom, ast.Global,
+           ast.Nonlocal, ast.Break, ast.Continue)
+
+
+class CanaryUnavailable(Exception):
+    """No neutral copy can be built for a file the patch changed (AG-046)."""
+
+
+def _is_probe(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name) and node.targets[0].id == _PROBE)
+
+
+class _WithoutProbes(ast.NodeTransformer):
+    """The tree with every probe removed; the copy is neutral when it equals the patch's."""
+
+    def generic_visit(self, node):
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                setattr(node, field, [item for item in value if not _is_probe(item)])
+        return super().generic_visit(node)
+
+
+def _clean_start(line: str, col: int) -> bool:
+    return line[:col].strip() == ""
+
+
+def _clean_end(line: str, col: int) -> bool:
+    rest = line[col:].strip()
+    return rest == "" or rest.startswith("#")
+
+
+def _indent_of(line: str, col: int) -> str:
+    return line[:col]
+
+
+def _innermost(tree: ast.AST, row: int) -> Optional[ast.AST]:
+    best = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.stmt, ast.excepthandler)):
+            continue
+        end = getattr(node, "end_lineno", None)
+        if end is None or not node.lineno <= row <= end:
+            continue
+        if best is None or (node.lineno, -end) >= (best.lineno, -best.end_lineno):
+            best = node
+    return best
+
+
+class _SharesLine(CanaryUnavailable):
+    """The statement the probe would precede does not start its own line."""
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _is_docstring(node: ast.AST, parent: Optional[ast.AST]) -> bool:
+    return (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and isinstance(parent, (ast.Module, *_SCOPES)) and parent.body[0] is node)
+
+
+def _module_head(tree: ast.Module) -> list:
+    """The module docstring and the ``from __future__`` imports: they must stay first."""
+    body = tree.body
+    count = 1 if body and _is_docstring(body[0], tree) else 0
+    while (count < len(body) and isinstance(body[count], ast.ImportFrom)
+           and body[count].module == "__future__"):
+        count += 1
+    return body[:count]
+
+
+def _block_probe(node: ast.AST, row: int, lines: List[str]) -> Tuple[str, int, str]:
+    """Probe at the start of the first block of ``node`` that follows ``row``."""
+    blocks = [getattr(node, field) for field in ("body", "orelse", "finalbody")
+              if isinstance(getattr(node, field, None), list) and getattr(node, field)]
+    following = [block for block in blocks if block[0].lineno > row]
+    if not following:
+        raise CanaryUnavailable(f"line {row} has no statement after it to probe")
+    block = min(following, key=lambda b: b[0].lineno)
+    first = block[0]
+    if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)):
+        if len(block) == 1:
+            # A docstring alone: the probe goes after it, so it stays a docstring.
+            line = lines[first.end_lineno - 1]
+            if not _clean_end(line, first.end_col_offset):
+                raise _SharesLine(f"line {first.end_lineno} shares its line with other code")
+            return ("after", first.end_lineno, _indent_of(lines[first.lineno - 1], first.col_offset))
+        first = block[1]
+    line = lines[first.lineno - 1]
+    if not _clean_start(line, first.col_offset):
+        raise _SharesLine(f"line {first.lineno} shares its line with other code")
+    return ("before", first.lineno, _indent_of(line, first.col_offset))
+
+
+def _before(node: ast.AST, row: int, lines: List[str], parents: dict, head: list) -> Tuple[str, int, str]:
+    """A probe in front of ``node``, or of what holds it, inside the same function.
+
+    Three places cannot take a statement in front of them, and each has its way out:
+    the module's docstring and ``__future__`` imports (the probe goes after them),
+    a docstring (after it: in front, ``__doc__`` would become ``None``), and a line
+    that starts with other code, like ``if x: return y`` or ``a = 1; b = 2`` (in
+    front of the statement that starts the line, as long as that one is still
+    inside the same function or class).
+    """
+    if any(node is item for item in head):
+        return ("after", head[-1].end_lineno, "")
+    parent = parents.get(node)
+    if _is_docstring(node, parent) and not isinstance(parent, ast.Module):
+        start, end = lines[node.lineno - 1], lines[node.end_lineno - 1]
+        if _clean_start(start, node.col_offset) and _clean_end(end, node.end_col_offset):
+            return ("after", node.end_lineno, _indent_of(start, node.col_offset))
+    current = node
+    while True:
+        holder = parents.get(current)
+        if isinstance(current, ast.stmt):
+            block = next((getattr(holder, field) for field in ("body", "orelse", "finalbody")
+                          if any(item is current for item in getattr(holder, field, None) or ())),
+                         [current])
+            starter = next(item for item in block if item.lineno == current.lineno)
+            if any(starter is item for item in head):  # ``from __future__ import x; y = 1``
+                return ("after", head[-1].end_lineno, "")
+            line = lines[starter.lineno - 1]
+            if (_clean_start(line, starter.col_offset)
+                    and not line[starter.col_offset:].startswith("elif")
+                    and not _is_docstring(starter, holder)):  # ``"""doc"""; x = 1``
+                return ("before", starter.lineno, _indent_of(line, starter.col_offset))
+        if holder is None or isinstance(holder, (ast.Module, *_SCOPES)):
+            raise _SharesLine(f"line {row} shares its line with other code")
+        current = holder
+
+
+def _probe_site(tree: ast.AST, lines: List[str], row: int, parents: dict, head: list
+                ) -> Tuple[str, int, str]:
+    """Where the probe for an edited code row goes: ``(side, row, indent)``."""
+    for node in ast.walk(tree):
+        decorators = getattr(node, "decorator_list", None)
+        if decorators and any(d.lineno <= row <= d.end_lineno for d in decorators):
+            return _block_probe(node, row, lines)
+    node = _innermost(tree, row)
+    if node is None:
+        raise CanaryUnavailable(f"line {row} is outside every statement")
+    if isinstance(node, _SIMPLE):
+        # Before the statement, not after it: a probe after a return or a raise is
+        # dead code, which the compiler drops, so the bytecode would not change.
+        return _before(node, row, lines, parents, head)
+    try:
+        return _block_probe(node, row, lines)
+    except _SharesLine:
+        # A header whose block shares its line, like ``if x: return y``. In front of
+        # the header is still the same function; in front of a ``def`` is not.
+        if isinstance(node, _SCOPES):
+            raise
+        return _before(node, row, lines, parents, head)
 
 
 def canary_source(source: str, edited: set) -> Optional[str]:
-    """``source`` with a comment after every logical line that holds an edited row.
+    """``source`` with a neutral change after every logical line that holds an edited row.
 
-    A comment cannot change what the code does, so a test that fails on this
-    copy is reading the *text* of the code (its bytes, ``inspect.getsource``,
-    its line layout) and not what the code does (AG-046). Comments go only
-    where the tokenizer says a logical line ends -- never inside a string or
-    after a continuation -- and the result is returned only if it parses to
-    the very same tree, so the copy is neutral by construction. ``None`` when
-    the source cannot be tokenized or the check fails: no canary, no claim
-    that there was one.
+    Two kinds of change, both invisible to what the code computes:
+
+    - a comment at the end of each such logical line, which changes the text of
+      the code (a claim that hashes the file or reads it with
+      ``inspect.getsource`` fails on it);
+    - an assignment to ``__adversary_probe__`` after each statement the patch
+      wrote (or at the start of the block that follows a header), which changes
+      the tree and the bytecode (a claim that hashes ``ast.dump`` or
+      ``__code__.co_code`` fails on it). Comments alone do not change those.
+
+    A claim that fails on this copy reads the code, not what it does (AG-046).
+    The copy is returned only when removing the probes gives back the patch's
+    own tree, so it differs from the patch by the probes and nothing else.
+    ``None`` when the patch wrote no code line at all: nothing to probe.
+    Raises ``CanaryUnavailable`` when the copy cannot be built, so the claims
+    cannot be told apart from ones that read the code -- that is never a pass.
     """
     lines = source.split("\n")
-    starts: Dict[int, int] = {}
     first_row: Optional[int] = None
     cuts: List[Tuple[int, int]] = []
+    code_rows: set = set()
     try:
         for tok in tokenize.generate_tokens(io.StringIO(source).readline):
             if tok.type in (tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.ENCODING):
@@ -518,22 +687,41 @@ def canary_source(source: str, edited: set) -> Optional[str]:
             if first_row is None:
                 first_row = tok.start[0]
             if tok.type == tokenize.NEWLINE:
-                if any(row in edited for row in range(first_row, tok.start[0] + 1)):
+                logical = set(range(first_row, tok.start[0] + 1))
+                if logical & edited:
                     cuts.append(tok.start)
+                    code_rows |= logical
                 first_row = None
-    except (tokenize.TokenError, IndentationError, SyntaxError):
-        return None
+    except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
+        raise CanaryUnavailable(f"the file cannot be tokenized: {exc}") from exc
     if not cuts:
         return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise CanaryUnavailable(f"the file does not parse: {exc}") from exc
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    head = _module_head(tree)
+    sites = {}
+    for row in sorted(code_rows & set(edited)):
+        side, at, indent = _probe_site(tree, lines, row, parents, head)
+        sites[(side, at)] = indent
+    # Insertion points are found on the original lines; the comments do not move a line.
+    inserts = []
+    for side, at in sites:
+        inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _PROBE_LINE))
     for row, col in sorted(cuts, reverse=True):
         text = lines[row - 1]
         lines[row - 1] = text[:col] + _CANARY + text[col:]
+    for index, text in sorted(inserts, reverse=True):
+        lines.insert(index, text)
     result = "\n".join(lines)
     try:
-        if ast.dump(ast.parse(result)) != ast.dump(ast.parse(source)):
-            return None
-    except SyntaxError:
-        return None
+        neutral = ast.parse(result)
+    except SyntaxError as exc:
+        raise CanaryUnavailable(f"the probes do not parse: {exc}") from exc
+    if ast.dump(_WithoutProbes().visit(neutral)) != ast.dump(tree):
+        raise CanaryUnavailable("the copy differs from the patch by more than the probes")
     return result
 
 
@@ -954,6 +1142,15 @@ def measure_mutation_score(
         reference_fast = bool(timeout_seconds) and reference_passed and elapsed < timeout_seconds / 3
         detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
                                    "hang_counts_as_kill": reference_fast}
+        if not reference_passed and (reference.timed_out or reference.exit_code < 0):
+            # Stopped by --timeout, --cpu-seconds or --memory: the claims neither
+            # passed nor failed, so the reason names the limit (AG-039, F).
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                f"the claims, run unmutated, were killed by a limit (exit {reference.exit_code}): "
+                "--timeout, --cpu-seconds or --memory stopped them before they could pass or "
+                "fail, so suite strength is not measured",
+            )
         if not reference_passed:
             # D: a mutant whose run also exits 1 fails for the same reason the
             # unmutated patch does, so it is not a kill. Nothing is measured.
@@ -974,10 +1171,24 @@ def measure_mutation_score(
         # reading the code (a hash of the file, ``inspect.getsource``). Such a
         # claim "kills" every mutant, so its score says nothing; it cannot be
         # measured, and the reason says why.
-        canary_files = {rel: neutral for rel, rows in edited_rows.items()
-                        if (neutral := canary_source(originals[rel], rows)) is not None}
+        canary_files = {}
+        for rel, rows in edited_rows.items():
+            try:
+                neutral = canary_source(originals[rel], rows)
+            except CanaryUnavailable as exc:
+                # Fail closed (AG-046 follow-up): a file the patch changed without a
+                # neutral copy is a file whose claims cannot be told apart from ones
+                # that read the code. Skipping it would pass them unexamined.
+                return finish(
+                    SuiteStrength(0, 0, 0.0, is_measured=False),
+                    f"no neutral copy of {rel} (comments and a no-op assignment) can be built "
+                    f"({exc}), so the "
+                    "claims cannot be checked for reading the code instead of running it",
+                )
+            if neutral is not None:
+                canary_files[rel] = neutral
         # The unmutated claims passed (checked above), so a claim that fails on
-        # the commented copy is reading the text.
+        # the neutral copy is reading the code, not running it.
         if canary_files:
             for rel, neutral in canary_files.items():
                 (work / rel).write_text(neutral, encoding="utf-8")
@@ -996,11 +1207,12 @@ def measure_mutation_score(
                 detail["source_sensitive_claims"] = sensitive
                 return finish(
                     SuiteStrength(0, 0, 0.0, is_measured=False),
-                    ("the claims fail on a copy of the patch whose only change is a comment after "
-                     "each line it wrote: they read the text of the code, not what it does, so "
-                     "breaking the code proves nothing about them"
+                    ("the claims fail on a copy of the patch whose only changes are a comment after "
+                     "each line it wrote and a no-op assignment beside it: they read the text of the "
+                     "code or its structure, not what it does, so breaking the code proves nothing "
+                     "about them"
                      if sensitive else
-                     f"the claims could not be run on the comment-only copy of the patch (exit code "
+                     f"the claims could not be run on the neutral copy of the patch (exit code "
                      f"{probe.exit_code}), so nothing was measured"),
                 )
         else:

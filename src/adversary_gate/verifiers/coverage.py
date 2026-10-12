@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from dataclasses import dataclass
@@ -40,9 +41,17 @@ class DiffCoverage:
     covered_lines: int
     excluded_test_lines: int = 0
     excluded_test_files: tuple[str, ...] = ()
+    #: Documents whose changed lines are left out of the ratio (E): they cannot run.
+    excluded_doc_files: tuple[str, ...] = ()
+    #: True when the patch changes files but no source line: there is nothing to
+    #: cover, so the ratio is not a measurement. It was reported as 1.0 before,
+    #: and a patch that only edits a document then passed a claim that reads it.
+    unmeasured: bool = False
 
     @property
-    def ratio(self) -> float:
+    def ratio(self) -> float | None:
+        if self.unmeasured:
+            return None
         return 1.0 if self.changed_lines == 0 else self.covered_lines / self.changed_lines
 
 
@@ -109,6 +118,31 @@ def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
     return files
 
 
+_BINARY_DIFF = re.compile(r"^Binary files (?P<old>.+?) and (?P<new>.+) differ$")
+
+
+def binary_python_diffs(diff_text: str) -> list[str]:
+    """Python files whose diff is ``Binary files ... differ`` instead of hunks.
+
+    ``git diff`` writes that for a file that .gitattributes marks ``-diff`` or
+    ``binary``. The file's changed lines are then not in the diff at all, so
+    coverage cannot see them and would judge the rest of the patch as if the
+    file had not changed (candidate C, reproduced in 3.0.0 with a claim that
+    passed while a change in ``calc.py`` was never checked).
+    """
+    found: list[str] = []
+    for line in diff_text.splitlines():
+        match = _BINARY_DIFF.match(line)
+        if not match:
+            continue
+        path = match.group("new") if match.group("new") != "/dev/null" else match.group("old")
+        if path[:2] in ("a/", "b/"):
+            path = path[2:]
+        if path.endswith(".py"):
+            found.append(path)
+    return found
+
+
 def validate_diff(diff_text: str) -> dict[str, set[int]]:
     """Parse the diff, or refuse to.
 
@@ -117,12 +151,24 @@ def validate_diff(diff_text: str) -> dict[str, set[int]]:
     into ``DiffCoverage(0, 0)`` and come out as ``ratio == 1.0`` -- perfect
     coverage computed from nothing. Refusing turns a silent false pass into
     exit 3, which CI reads as "the input was bad", not as "the patch is clean".
+
+    The same goes for a Python file the diff shows only as "Binary files
+    differ": its changes are missing, so refusing is the only honest answer.
+    Regenerate the diff with ``git diff --text``.
     """
     files = changed_lines_from_unified_diff(diff_text)
     if not files and "@@" in diff_text:
         raise UnparseableDiff(
             "diff contains hunk headers but no '--- / +++' file pair this parser "
             "could attribute; re-generate it with 'git diff' or 'diff -u'"
+        )
+    hidden = binary_python_diffs(diff_text)
+    if hidden:
+        raise UnparseableDiff(
+            "git wrote 'Binary files ... differ' for " + ", ".join(hidden) + ": their changed "
+            "lines are not in the diff, so their coverage cannot be judged. This happens when "
+            ".gitattributes marks the file -diff or binary; re-generate the diff with "
+            "'git diff --text'"
         )
     return files
 
@@ -159,7 +205,76 @@ def _non_code_added_lines(diff_text: str) -> dict:
     return out
 
 
-def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCoverage:
+#: Documents cannot run, so their changed lines cannot be covered (E). The list
+#: is deliberately narrow: a configuration, a requirements file or a workflow can
+#: change what the code does, so it stays in the ratio.
+DOCUMENT_SUFFIXES = (".md", ".markdown", ".rst", ".adoc", ".org", ".tex")
+DOCUMENT_NAMES = frozenset({
+    "readme", "license", "licence", "notice", "copying", "changelog", "changes",
+    "authors", "contributors", "code_of_conduct", "security",
+})
+
+
+def is_documentation(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1].lower()
+    if name.endswith(DOCUMENT_SUFFIXES):
+        return True
+    stem, dot, suffix = name.rpartition(".")
+    if not dot:  # no suffix: LICENSE, NOTICE, CHANGELOG
+        return name in DOCUMENT_NAMES
+    return suffix == "txt" and stem in DOCUMENT_NAMES
+
+
+#: Bigger sources are not parsed: their lines are judged one by one, as before.
+_SOURCE_LIMIT = 4 * 1024 * 1024
+
+
+def _statement_starts(source_root: Path | None, filename: str) -> dict[int, int] | None:
+    """Line -> first line of the innermost statement holding it, in the patch's file.
+
+    coverage.py reports a statement on its first line only, so the second line of
+    a statement is never in ``executed_lines`` (E). An ``except`` clause and a
+    ``case`` pattern start their own entry: they run apart from what holds them.
+    ``None`` -- each line judged on its own -- when there is no source, the path
+    leaves ``source_root`` or crosses a symlink, or the file does not parse.
+    """
+    if source_root is None or not filename.endswith(".py"):
+        return None
+    relative = Path(filename)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    path = Path(source_root)
+    try:
+        for part in relative.parts:
+            path = path / part
+            if path.is_symlink():
+                return None
+        if not path.is_file() or path.stat().st_size > _SOURCE_LIMIT:
+            return None
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return None
+    starts: dict[int, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.stmt, ast.excepthandler)):
+            first = min([node.lineno, *(d.lineno for d in getattr(node, "decorator_list", ()))])
+            last = node.end_lineno or node.lineno
+        elif isinstance(node, ast.match_case):
+            first = node.pattern.lineno
+            last = max(node.pattern.end_lineno or first,
+                       (node.guard.end_lineno or first) if node.guard else first)
+        else:
+            continue
+        for row in range(first, last + 1):
+            # What is nested starts on or after the line its parent starts on,
+            # so the latest start is the innermost entry.
+            if starts.get(row, 0) < first:
+                starts[row] = first
+    return starts
+
+
+def _judge(diff_text: str, coverage_json: Path | Mapping, source_root: Path | None):
+    """The changed source lines of each file, and which of them ran."""
     changed = validate_diff(diff_text)
     payload = (
         json.loads(Path(coverage_json).read_text())
@@ -167,18 +282,65 @@ def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping) -> DiffCov
         else coverage_json
     )
     files = payload.get("files", {})
-    covered = 0
-    total = 0
+    judged: dict[str, tuple[set[int], set[int]]] = {}
     excluded_lines = 0
     excluded_files: list[str] = []
+    excluded_docs: list[str] = []
     non_code = _non_code_added_lines(diff_text)
     for filename, lines in changed.items():
         if is_test_path(filename):
             excluded_lines += len(lines)
             excluded_files.append(filename)
             continue
+        if is_documentation(filename):
+            excluded_docs.append(filename)
+            continue
         lines = set(lines) - non_code.get(filename, set())
-        total += len(lines)
-        executed = set(files.get(filename, {}).get("executed_lines", []))
-        covered += len(lines & executed)
-    return DiffCoverage(total, covered, excluded_lines, tuple(sorted(excluded_files)))
+        executed = set((files.get(filename) or {}).get("executed_lines", []))
+        # Every changed line counts. One coverage.py does not report on its own --
+        # the second line of a statement -- is covered when its statement ran (E).
+        # Dropping it instead let a statement that never ran change for free: a
+        # patch that broke ``mul`` there went from INCONCLUSIVE to MERGE. A
+        # docstring line counts and is never covered, as before.
+        starts = _statement_starts(source_root, filename) or {}
+        judged[filename] = (lines, {row for row in lines
+                                    if row in executed or starts.get(row, row) in executed})
+    return changed, judged, excluded_lines, excluded_files, excluded_docs
+
+
+def uncovered_lines(diff_text: str, coverage_json: Path | Mapping, *,
+                    source_root: Path | None = None) -> dict[str, list[int]]:
+    """The changed source lines the ratio counts against the patch, by file."""
+    _, judged, *_ = _judge(diff_text, coverage_json, source_root)
+    return {name: sorted(lines - covered) for name, (lines, covered) in sorted(judged.items())
+            if lines - covered}
+
+
+def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping, *,
+                       source_root: Path | None = None) -> DiffCoverage:
+    """``source_root`` is the patch's tree, read to judge a statement's second line (E)."""
+    changed, judged, excluded_lines, excluded_files, excluded_docs = _judge(
+        diff_text, coverage_json, source_root
+    )
+    total = sum(len(lines) for lines, _ in judged.values())
+    covered = sum(len(ran) for _, ran in judged.values())
+    # A patch that changes documents or configuration and no source line has
+    # nothing to cover. Its ratio is not a measurement: a claim can read those
+    # files, and in 3.0.0 a patch that only edited the README merged on a claim
+    # that read it. The gate's own list of non-source files decides what counts.
+    # Tests are left out: a patch of tests alone keeps its vacuous 1.0 (AG-022),
+    # since a changed test is judged by the baseline's copy and a new conftest.py
+    # is a protected path.
+    from adversary_gate.verifiers.strength import _is_non_source  # noqa: PLC0415 -- the one list
+
+    unmeasured = total == 0 and any(
+        _is_non_source(name) and not is_test_path(name) for name in changed
+    )
+    return DiffCoverage(
+        total,
+        covered,
+        excluded_lines,
+        tuple(sorted(excluded_files)),
+        tuple(sorted(excluded_docs)),
+        unmeasured,
+    )

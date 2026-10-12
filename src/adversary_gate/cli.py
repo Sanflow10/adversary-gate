@@ -39,7 +39,7 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
-from adversary_gate.verifiers.coverage import _non_code_added_lines, covered_diff_ratio, validate_diff
+from adversary_gate.verifiers.coverage import covered_diff_ratio, uncovered_lines, validate_diff
 from adversary_gate.verifiers.discovery import discover_claims
 from adversary_gate.verifiers.strength import (
     DEFAULT_CONFIDENCE,
@@ -252,12 +252,23 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
                    "; no claim covered the change (a deletion leaves no line to trace)")
             )
         if base_code < 0 and patch_code < 0:
+            # F: name the signal and the limit that sends it. A memory limit
+            # (SIGABRT, SIGSEGV) used to be reported as a timeout to raise.
+            import signal  # noqa: PLC0415 -- only to name the signal
+
+            def _name(code: int) -> str:
+                try:
+                    return signal.Signals(-code).name
+                except ValueError:
+                    return f"signal {-code}"
+
             return (
-                f"the full suite was killed on both sides (signals {-base_code}, "
-                f"{-patch_code}), most likely by --full-suite-timeout "
-                f"({args.full_suite_timeout}) or --full-suite-cpu-seconds "
-                f"({args.full_suite_cpu_seconds}); the collateral check did not "
-                "run. Raise the limit."
+                f"the full suite was killed on both sides ({_name(base_code)} on the "
+                f"baseline, {_name(patch_code)} on the patch). Name the limit that applies: "
+                f"--full-suite-timeout ({args.full_suite_timeout}) and "
+                f"--full-suite-cpu-seconds ({args.full_suite_cpu_seconds}) stop a run with "
+                f"SIGKILL or SIGXCPU; --full-suite-memory ({args.full_suite_memory}) stops it "
+                "with SIGABRT or SIGSEGV. The collateral check did not run."
             )
         if base_code == patch_code and base_code in (2, 3, 4):
             return (
@@ -312,25 +323,19 @@ NEXT_STEP_ACTIONS = frozenset({
 
 
 def _uncovered(args) -> Dict[str, List[int]]:
-    """Changed source lines the coverage report says no test executed."""
+    """Changed source lines the coverage ratio counts against the patch.
+
+    The same judgement as the ratio itself, so the advice never names a line
+    the ratio forgave (a document) or forgives one it counted (E).
+    """
     if not (args.diff and args.coverage_json):
         return {}
     try:
         diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-        changed = validate_diff(diff_text)
-        non_code = _non_code_added_lines(diff_text)
-        files = json.loads(Path(args.coverage_json).read_text(encoding="utf-8")).get("files", {})
+        payload = json.loads(Path(args.coverage_json).read_text(encoding="utf-8"))
+        return uncovered_lines(diff_text, payload, source_root=Path(args.patch))
     except (OSError, ValueError):
         return {}
-    out: Dict[str, List[int]] = {}
-    for path, lines in changed.items():
-        if is_test_path(path):
-            continue
-        executed = set(files.get(path, {}).get("executed_lines", []))
-        missing = sorted(set(lines) - executed - non_code.get(path, set()))
-        if missing:
-            out[path] = missing
-    return out
 
 
 def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation) -> List[Dict[str, Any]]:
@@ -356,6 +361,20 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
         elif v.outcome is Outcome.UNVERIFIED:
             steps.append({"action": "see_reason", "test": f"{v.claim.test_path}::{v.claim.test_id}",
                           "why": v.reason})
+            # #1: a run that died by a signal names the limit that sent it, so the
+            # advice matches the reason. SIGABRT and SIGSEGV are the address-space
+            # limit (--memory: on Android, none); SIGKILL and SIGXCPU are time or CPU.
+            run = getattr(v, "outcome_run", None)
+            codes = set(run.baseline_exit_codes) | set(run.patch_exit_codes) if run else set()
+            if codes & {-6, -11}:
+                steps.append({"action": "raise_limit", "flags": ["--memory"],
+                              "why": "a run of this claim died with SIGABRT or SIGSEGV: that is the "
+                                     "address-space limit, not a timeout; on Android/Termux use "
+                                     "--memory none"})
+            if codes & {-9, -24}:
+                steps.append({"action": "raise_limit", "flags": ["--timeout", "--cpu-seconds"],
+                              "why": "a run of this claim was killed by SIGKILL or SIGXCPU: a "
+                                     "wall-clock or CPU limit"})
     if full_codes is not None and not any(v.outcome is Outcome.REFUTED for v in verdicts):
         base_code, patch_code = full_codes
         if base_code == 0 and patch_code < 0:
@@ -468,12 +487,16 @@ def _resolve_coverage(args: argparse.Namespace):
         diff_bytes = diff_path.read_bytes()
         cov_bytes = cov_path.read_bytes()
         payload = json.loads(cov_bytes.decode("utf-8"))
-        measured = covered_diff_ratio(diff_bytes.decode("utf-8", "replace"), payload)
+        measured = covered_diff_ratio(diff_bytes.decode("utf-8", "replace"), payload,
+                                      source_root=Path(args.patch))
         detail: Dict[str, Any] = {
             "source": "computed",
-            "ratio": round(measured.ratio, 6),
+            "ratio": None if measured.ratio is None else round(measured.ratio, 6),
             "changed_lines": measured.changed_lines,
             "covered_lines": measured.covered_lines,
+            # Documents are not code and are not in the ratio (E), said here so
+            # that nothing about them is hidden.
+            "documents_excluded": list(measured.excluded_doc_files),
             # Test files are not in the ratio (AG-022). Said here so that
             # ``changed_lines`` is not mistaken for "every line the diff added".
             "test_lines_excluded": measured.excluded_test_lines,
@@ -481,7 +504,13 @@ def _resolve_coverage(args: argparse.Namespace):
             "diff_sha256": hashlib.sha256(diff_bytes).hexdigest(),
             "coverage_json_sha256": hashlib.sha256(cov_bytes).hexdigest(),
         }
-        if measured.changed_lines == 0 and measured.excluded_test_lines:
+        if measured.unmeasured:
+            detail["note"] = (
+                "the diff changes no source line, only documents or configuration "
+                "(tests aside): there is nothing to cover, so the ratio is not measured "
+                "and the decision cannot be MERGE on coverage"
+            )
+        elif measured.changed_lines == 0 and measured.excluded_test_lines:
             detail["note"] = (
                 "the diff adds only test lines; there is no source line to cover, "
                 "so the ratio is vacuously 1.0"
@@ -578,7 +607,8 @@ def _summary(verdicts, mutation: Dict[str, Any]) -> Dict[str, Any]:
         # says it fixes" -- is true only when a claim went FAIL -> PASS.
         "claims_fixed": sum(1 for v in verdicts if v.classification.value == "fixed"),
         "claims_no_regression": sum(1 for v in verdicts if v.classification.value == "no_regression"),
-        # AG-046: a claim that fails on a comment-only copy of the patch
+        # AG-046: a claim that fails on the neutral copy of the patch (comments
+        # and no-op assignments)
         # reads the code's text, so "fails before, passes after" proves
         # nothing about the fix.
         "fix_proven": any(v.classification.value == "fixed" for v in verdicts)
@@ -591,7 +621,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--patch", required=True)
-    parser.add_argument("--test-path")
+    parser.add_argument(
+        "--test-path",
+        help="the test FILE that --test-id names refer to, relative to the repository "
+        "(e.g. tests/test_calc.py). Not a directory, and not '.'. --claim PATH::TEST_ID "
+        "names its own file and does not need --test-path.",
+    )
     parser.add_argument(
         "--test-id",
         action="append",
@@ -769,9 +804,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=_size,
         default=4 * 1024**3,
         metavar="SIZE|none",
-        help="address-space limit for the collateral full-suite run (default 4G). "
-        "Measured: more-itertools' suite dies with MemoryError under 2G of "
-        "address space and completes under 4G (AG-033).",
+        help="address-space limit (RLIMIT_AS) for the collateral full-suite run only "
+        "(default 4G; --memory governs the claims). Measured: more-itertools' suite dies "
+        "with MemoryError under 2G of address space and completes under 4G (AG-033). "
+        "A kill by SIGABRT or SIGSEGV is usually this limit.",
     )
     parser.add_argument(
         "--test-command",
@@ -825,8 +861,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=_size,
         default=512 * 1024**2,
         metavar="SIZE|none",
-        help="address-space limit for each test run, e.g. 512M or 4G (default 512M). "
-        "The JVM and Node cannot start under one: use 'none' for them.",
+        help="address-space limit (RLIMIT_AS) for each claim's test run, e.g. 512M or 4G "
+        "(default 512M). The JVM and Node cannot start under one: use 'none' for them. "
+        "Android/Termux aborts some processes under it too (PF-1): use 'none' there. "
+        "The collateral full-suite run has its own limit, --full-suite-memory.",
     )
     parser.add_argument(
         "--pass-env",

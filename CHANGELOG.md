@@ -40,6 +40,54 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Corrigido (medição, sem mudar a 3.0.0)
+
+Estas correções valem a partir da 3.0.0 e não reeditam a tag `v3.0.0`. Nenhuma foi
+publicada. Cada conserto de código tem teste que falha na 3.0.0 (conferido rodando os
+testes novos contra ela); os textos de ajuda, a nota do Android e o CI não têm teste.
+
+- **Arquivo novo que não pode ser pareado deixa a força não medida** (B). Acima de 400
+  arquivos `.py` ou 5000 linhas na baseline, um módulo que o patch cria não era mutado,
+  e a força saía medida sobre o resto. Um patch misto chegou a MERGE com o código novo
+  sem julgamento.
+- **A referência precisa passar, com ou sem limite de tempo** (D, UX-4). Se as claims
+  falham sem mutação, a força não é medida: um mutante que falha do mesmo jeito não é
+  morte. Sem `--timeout`, a referência era pulada e o canário marcava claims que já
+  falhavam como sensíveis ao texto.
+- **Claim que lê o arquivo, a árvore inteira ou o bytecode da função alterada não passa
+  no canário** (A). O canário agora também acrescenta, no bloco de cada instrução que o
+  patch escreveu, uma atribuição sem efeito, que muda a árvore e o bytecode. Uma claim
+  que compara o hash da AST passava com o canário de comentário e dava MERGE com força
+  1,0. O conserto é parcial: uma claim que lê um pedaço menor da árvore, como uma
+  expressão só, ainda passa. A atribuição nunca vai antes de uma docstring nem dos
+  `from __future__`, e uma linha como `if x: return y` a recebe antes do `if`. Se a
+  cópia neutra não puder ser montada para um arquivo alterado, a força não é medida
+  (antes o arquivo era pulado em silêncio).
+- **Arquivo Python que o git mostra como binário é recusado** (C). Com `-diff` ou
+  `binary` no `.gitattributes`, o `git diff` escreve `Binary files ... differ`, e as
+  linhas alteradas somem da diff de cobertura: um PR que mudava `calc.py` oculto e
+  tinha cobertura em outro arquivo dava MERGE. Agora `validate_diff` recusa (exit 3), e o
+  `prepare_evidence.sh` usa `--no-textconv` e passa `--text` só aos arquivos `.py`: num
+  binário, como uma imagem, `--text` escreve os bytes como linhas que nenhum teste roda.
+- **A segunda linha de uma instrução conta como coberta quando a instrução rodou** (E).
+  O coverage.py marca uma instrução só pela primeira linha, então a segunda contava
+  sempre como não coberta. O gate agora lê o arquivo do patch para saber a que instrução
+  a linha pertence. Se a instrução não rodou, a linha continua contando contra o patch.
+  Docstring continua contando e nunca é coberta.
+- **Documento não é código, e patch sem linha de código não mede cobertura** (E, e um buraco achado ao conferir). README, LICENSE, CHANGELOG e afins saem do cálculo. Um patch que muda documentação ou configuração e nenhuma linha de código não tem o que cobrir: a razão de cobertura fica *não medida* e a decisão não pode ser MERGE por cobertura. Um PR só com testes continua como na 3.0.0, com 1,0 por vacuidade: teste alterado é julgado pela cópia da baseline, e `conftest.py` novo é caminho protegido. Na 3.0.0, apagar uma linha do README dava cobertura 1,0, e uma claim que lia o README passava: MERGE.
+- **Rótulo FIXED confirmado sem o lado do patch** (#4 do relatório de validação, resíduo do AG-043). Os dois lados de uma claim rodam ao mesmo tempo; quando a baseline falha assim, o gate agora reexecuta a baseline sem o lado do patch antes de aceitar o rótulo. A suíte completa ainda pode rodar ao lado; `--serial-sides` tira isso também. A decisão não dependia do rótulo; `fix_proven` dependia.
+- **Próximos passos nomeiam o limite que matou a claim** (#1, issue #4). SIGABRT ou SIGSEGV indica `--memory` (no Android, `--memory none`); SIGKILL ou SIGXCPU indica `--timeout` e `--cpu-seconds`.
+- **Mensagem de sinal correta** (F). Um processo morto por SIGABRT ou SIGSEGV é, em geral,
+  o limite de memória, e a mensagem agora diz isso, em vez de mandar aumentar o timeout.
+- **`--test-path .` tem mensagem própria** (G): pede um arquivo de teste, não "escapes
+  repository".
+- **Textos de ajuda** de `--test-path`, `--memory` e `--full-suite-memory` dizem qual
+  limite cada um governa e que, no Android, `--memory none` é o caminho.
+- **Android/Termux documentado** (PF-1): `RLIMIT_AS` aborta processos lá; use
+  `--memory none` e `--full-suite-memory none`.
+- **CI** passa a testar Python 3.13 e 3.14. Ainda não rodou: só vale depois de enviar o
+  branch.
+
 ---
 
 ## [3.0.0] — 2026-10-11
