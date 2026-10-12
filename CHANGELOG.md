@@ -11,8 +11,8 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0` e `v2.14.0`**, mais a
-flutuante `v2`, que o Release move para a 2.x mais nova. A `2.1.1` chegou a ter
+Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0`, `v2.14.0`, `v2.14.1`, `v2.14.2`, `v3.0.0` e `v3.0.1`**, mais as
+flutuantes `v2` e `v3`. A `2.1.1` chegou a ter
 seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
 `2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.14.1` é
 publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
@@ -40,11 +40,45 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
-### Corrigido (medição, sem mudar a 3.0.0)
+---
 
-Estas correções valem a partir da 3.0.0 e não reeditam a tag `v3.0.0`. Nenhuma foi
-publicada. Cada conserto de código tem teste que falha na 3.0.0 (conferido rodando os
-testes novos contra ela); os textos de ajuda, a nota do Android e o CI não têm teste.
+## [3.0.2] — 2026-10-12
+
+Consistência de versão. A `3.0.1` foi publicada com o bump só no `pyproject.toml`:
+`__init__.py`, `README.md`, `demo/demo.py`, `site/index.html`,
+`packaging/mcp/pyproject.toml` e `server.json` seguiam dizendo `3.0.0`. A
+`tests/test_release_consistency.py` — escrita para pegar exatamente esse defeito —
+acusava 8 testes em todas as versões do CI (runs 89, 90 e 91), e o wheel no PyPI se
+reporta como `3.0.0` pelo `__version__`: o `METADATA` diz `3.0.1`, e os dois valores
+convivem no mesmo install. O PyPI não substitui arquivo de versão publicada, daí
+esta versão existir.
+
+O comportamento do gate não estava entre os 8: 396 testes de lógica passavam em
+todas as versões. O que faltava era o artefato dizer a mesma versão em todos os
+lugares — o defeito que a própria suíte de consistência foi escrita para impedir
+(ver o cabeçalho de `test_release_consistency.py` e o AG-026). O release da `3.0.1`
+no GitHub recebeu a nota de correção no corpo.
+
+### Alterado
+
+- Versão para `3.0.2` nos sete lugares que a suíte de consistência mede, mais os
+  pins de instalação do README e do site.
+- A seção da `3.0.1` abaixo ganhou data e a nota do drift: o corpo já estava escrito
+  sob `[Unreleased]`, com "Nenhuma foi publicada", enquanto a tag e o pacote já
+  existiam havia horas.
+
+---
+
+## [3.0.1] — 2026-10-12
+
+Fecha 7 formas de enganar o gate que a `3.0.0` não pegava. A tag saiu às 18:45 UTC.
+
+### Corrigido
+
+Estas correções valem a partir da 3.0.0 e não reeditam a tag `v3.0.0`. Cada conserto
+de código tem teste que falha na 3.0.0 (conferido rodando os testes novos contra ela);
+os textos de ajuda, a nota do Android e o CI não têm teste. O bump de versão saiu
+incompleto — o drift está na `3.0.2` acima.
 
 - **Arquivo novo que não pode ser pareado deixa a força não medida** (B). Acima de 400
   arquivos `.py` ou 5000 linhas na baseline, um módulo que o patch cria não era mutado,
@@ -89,8 +123,7 @@ testes novos contra ela); os textos de ajuda, a nota do Android e o CI não têm
   limite cada um governa e que, no Android, `--memory none` é o caminho.
 - **Android/Termux documentado** (PF-1): `RLIMIT_AS` aborta processos lá; use
   `--memory none` e `--full-suite-memory none`.
-- **CI** passa a testar Python 3.13 e 3.14. Ainda não rodou: só vale depois de enviar o
-  branch.
+- **CI** passa a testar Python 3.13 e 3.14.
 
 ---
 

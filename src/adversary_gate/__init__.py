@@ -10,4 +10,4 @@ project with a ``core`` package of its own shadowed, or was shadowed by, the
 gate's.
 """
 
-__version__ = "3.0.0"
+__version__ = "3.0.2"
