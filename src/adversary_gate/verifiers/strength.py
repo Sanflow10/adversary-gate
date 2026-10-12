@@ -945,17 +945,23 @@ def measure_mutation_score(
         # unmutated run finishes with room to spare. If the reference itself
         # is slow, a timeout says nothing about the mutant (the AG-039 trap:
         # counted as kills, a slow run would read as a perfect score).
-        reference_fast = False
-        reference_passed = True  # unknown counts as "may pass": the canary decides alone
-        elapsed = 0.0
-        if timeout_seconds:
-            started = time.monotonic()
-            reference = _run()
-            elapsed = time.monotonic() - started
-            reference_passed = reference.exit_code == PYTEST_OK
-            reference_fast = reference_passed and elapsed < timeout_seconds / 3
-            detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
-                                       "hang_counts_as_kill": reference_fast}
+        # The reference runs with or without a time limit: it is what every
+        # mutant is judged against, not only the yardstick for hangs (UX-4).
+        started = time.monotonic()
+        reference = _run()
+        elapsed = time.monotonic() - started
+        reference_passed = reference.exit_code == PYTEST_OK
+        reference_fast = bool(timeout_seconds) and reference_passed and elapsed < timeout_seconds / 3
+        detail["reference_run"] = {"exit_code": reference.exit_code, "seconds": round(elapsed, 3),
+                                   "hang_counts_as_kill": reference_fast}
+        if not reference_passed:
+            # D: a mutant whose run also exits 1 fails for the same reason the
+            # unmutated patch does, so it is not a kill. Nothing is measured.
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                f"the claims did not pass on the unmutated patch (exit {reference.exit_code}): "
+                "a mutant that fails the same way is not a kill, so suite strength is not measured",
+            )
         # A run killed by a signal *other* than the wall clock (the CPU-time
         # limit, mostly) does not depend on what else the machine was doing --
         # CPU time is the process's own -- unless the reference itself came
@@ -970,10 +976,9 @@ def measure_mutation_score(
         # measured, and the reason says why.
         canary_files = {rel: neutral for rel, rows in edited_rows.items()
                         if (neutral := canary_source(originals[rel], rows)) is not None}
-        # Only when the unmutated claims pass here: a claim that cannot pass
-        # (killed at a limit, say) has nothing to say about the comment, and
-        # the mutant runs below report that on their own.
-        if canary_files and reference_passed:
+        # The unmutated claims passed (checked above), so a claim that fails on
+        # the commented copy is reading the text.
+        if canary_files:
             for rel, neutral in canary_files.items():
                 (work / rel).write_text(neutral, encoding="utf-8")
             try:

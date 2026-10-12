@@ -989,3 +989,49 @@ class TestAFileThePatchAddedIsMutated(unittest.TestCase):
                                   self.STRONG)
         self.assertIsNone(detail["added_files"]["newmod.py"]["paired_with"])
         self.assertEqual({m["line"] for m in detail["mutants"]}, {4, 9})
+
+
+class TestTheUnmutatedRunDecides(unittest.TestCase):
+    """The claims, run unmutated, are the reference for every mutant.
+
+    D: when that reference fails, a mutant whose run also exits 1 is not a
+    kill -- it is the same failure. The score was measured anyway (1.0), so a
+    failing reference read as a perfect suite.
+
+    UX-4: without a time limit the reference used to be skipped, so the comment
+    probe ran on claims that already failed and labelled them source-sensitive.
+    The reference runs whether or not there is a limit.
+    """
+
+    BASE = "def add(a, b):\n    return a - b\n"
+    PATCH = "def add(a, b):\n    return a + b\n"
+
+    def _measure(self, fake_run, **kwargs):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, src in (("baseline", self.BASE), ("patch", self.PATCH)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text("def test_add():\n    pass\n")
+            with mock.patch("adversary_gate.verifiers.strength.run_test", side_effect=fake_run):
+                return measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                              max_mutants=3, **kwargs)
+
+    def test_a_failing_unmutated_run_leaves_the_strength_unmeasured(self):
+        def fake(directory, *_a, **_k):
+            return SandboxResult(1, "", "", False)  # the claims fail on the unmutated patch
+        score, detail = self._measure(fake, timeout_seconds=30)
+        self.assertFalse(score.is_measured, detail)
+        self.assertIn("unmutated", detail["reason"])
+
+    def test_the_unmutated_run_happens_without_a_time_limit(self):
+        def fake(directory, *_a, **_k):
+            return SandboxResult(0, "", "", False)
+        _, detail = self._measure(fake, timeout_seconds=None)
+        self.assertIsNotNone(detail["reference_run"], detail)
+
+    def test_a_claim_that_fails_unmutated_is_not_called_source_sensitive(self):
+        def fake(directory, *_a, **_k):
+            return SandboxResult(1, "", "", False)
+        _, detail = self._measure(fake, timeout_seconds=None)
+        self.assertFalse(detail["source_sensitive_claims"], detail)
