@@ -573,6 +573,7 @@ def _block_probe(node: ast.AST, row: int, lines: List[str]) -> Tuple[str, int, s
     """Probe at the start of the first block of ``node`` that follows ``row``."""
     blocks = [getattr(node, field) for field in ("body", "orelse", "finalbody")
               if isinstance(getattr(node, field, None), list) and getattr(node, field)]
+    blocks += [case.body for case in getattr(node, "cases", ()) if case.body]  # ``match``
     following = [block for block in blocks if block[0].lineno > row]
     if not following:
         raise CanaryUnavailable(f"line {row} has no statement after it to probe")

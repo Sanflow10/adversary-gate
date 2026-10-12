@@ -60,9 +60,13 @@ testes novos contra ela); os textos de ajuda, a nota do Android e o CI não têm
   que compara o hash da AST passava com o canário de comentário e dava MERGE com força
   1,0. O conserto é parcial: uma claim que lê um pedaço menor da árvore, como uma
   expressão só, ainda passa. A atribuição nunca vai antes de uma docstring nem dos
-  `from __future__`, e uma linha como `if x: return y` a recebe antes do `if`. Se a
-  cópia neutra não puder ser montada para um arquivo alterado, a força não é medida
-  (antes o arquivo era pulado em silêncio).
+  `from __future__`; uma linha como `if x: return y` a recebe antes do `if`, e uma
+  linha `case`, no bloco dela. Se a cópia neutra não puder ser montada para um
+  arquivo alterado, a força não é medida (antes o arquivo era pulado em silêncio).
+- **O MCP não para mais com um arquivo binário alterado** (achado ao conferir o C). Na
+  3.0.0 o MCP passava `--text` a todo arquivo e lia a saída do git como texto estrito:
+  um PR que alterava uma imagem parava com `UnicodeDecodeError`, e um `.py` em outra
+  codificação também. Agora o `--text` vai só aos `.py`, e a saída é lida em bytes.
 - **Arquivo Python que o git mostra como binário é recusado** (C). Com `-diff` ou
   `binary` no `.gitattributes`, o `git diff` escreve `Binary files ... differ`, e as
   linhas alteradas somem da diff de cobertura: um PR que mudava `calc.py` oculto e

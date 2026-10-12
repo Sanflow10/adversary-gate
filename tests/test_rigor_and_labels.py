@@ -1196,6 +1196,14 @@ class TestTheProbeStaysNeutralWhereAStatementCannotGo(unittest.TestCase):
         source = "def f(x):\n    a = x; b = a + 1\n    return b\n"
         self.assertEqual(self._namespace(self._copy(source, [2]))["f"](1), 2)
 
+    def test_an_edited_case_is_probed_in_its_block(self):
+        # A ``case`` line had no block of its own in the search, so nothing was
+        # measured for a patch that edited one.
+        source = ("def f(x):\n    match x:\n        case 1:\n            return 'one'\n"
+                  "        case _: return 'other'\n")
+        after = self._namespace(self._copy(source, [3, 5]))["f"]
+        self.assertEqual([after(1), after(2)], ["one", "other"])
+
     def test_a_one_line_def_still_has_no_place_inside_it(self):
         # In front of the ``def`` is outside the function, whose bytecode would
         # not change: nothing measured beats a canary that cannot see the claim.
