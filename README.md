@@ -97,6 +97,8 @@ Coverage is an **evidence** question, not a parameter. There are exactly three w
 
 Test files are not part of the ratio: `diff_coverage` is covered added lines over added lines **of source files**. A test executes by construction, so counting its lines let ten unexecuted source lines plus forty test lines read as `0.8`. The artefact records `test_lines_excluded` and `test_files_excluded` next to `changed_lines`.
 
+Documents (README, LICENSE, CHANGELOG and the like) are not code and are left out. A patch that changes documents or configuration and no source line has nothing to cover: its ratio is **not measured**, so the decision cannot be `MERGE` on coverage. A patch of tests alone keeps the vacuous `1.0` it always had. That closes a gap in the earlier 3.0.0 code, where deleting one line of a README measured `1.0`, and a claim that read the README then passed. Every changed source line counts. coverage.py reports a statement on its first line only, so the second line of a statement is covered when its statement ran and counts against the patch when it did not (E); the gate reads the patch's file to tell which statement a line belongs to. A docstring line counts and is never covered. A Python file that `git diff` shows only as `Binary files ... differ` (its `.gitattributes` says `-diff` or `binary`) is **refused with exit 3**, because its changed lines are not in the diff at all (C). The evidence script diffs with `--text --no-textconv`, so the GitHub Action does not reach that case.
+
 A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)**. Before v2.1.0 the flag defaulted to `1.0`, the gate never read a diff or a coverage report, and the GitHub Action passed neither — so `diff_coverage >= 80%` was satisfied by a default value on every run.
 
 `--coverage-floor 0` disables the requirement explicitly; it is not a way to satisfy it.
@@ -104,6 +106,8 @@ A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)*
 ### How `suite_strength` is measured
 
 It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. It is not derived from coverage or from parsing pytest output.
+
+Three things must hold before a score exists, and each one that fails leaves the strength **not measured**. The claims must pass on the unmutated patch, the reference: if they do not, a mutant that fails the same way is not a kill (D). A Python file the patch adds that cannot be paired with a baseline file, because the baseline is over 400 files or 5000 lines, is never mutated (B). And every claim runs on a neutral copy of the patch: one comment per changed line, and one no-op assignment in the block of each changed statement (in front of it, or after a docstring or the `from __future__` imports, which must stay first). A claim that fails on that copy reads the code's text or structure instead of what it does (A). The copy catches a claim that reads the file, its whole tree or the bytecode of the changed function; one that reads a smaller piece of the tree, such as a single expression, can still pass. If that copy cannot be built for a changed file, nothing is measured either.
 
 **`--census-min-mutants N` (experimental, off by default).** Below the mutant budget the gate breaks *every* mutable site of the change — a census, not a sample. With this flag, when the census covers the whole change (every changed executable line has a site; statement-level sites are added for lines with no operator), nothing was stillborn, **every mutant died**, and there are at least N, the exact ratio is judged instead of the Wilson lower bound. Off by default: "1 killed out of 1 is not strong" stays the rule unless you opt in. A first version let a real bug through (one surviving operator mutant diluted by easy statement-level kills); the ledger has the case.
 
@@ -704,6 +708,8 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
 ## 🛡️ Execution boundary (read this before trusting it with untrusted code)
 
 `src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
+
+**Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space. Use `--memory none` and `--full-suite-memory none` there. The other limits still apply, and in the runs reported in issue #4, no finite address-space limit worked on Android.
 
 ### `--sandbox bwrap` — opt-in, and what it honestly buys
 

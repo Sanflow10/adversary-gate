@@ -231,7 +231,15 @@ def prepare(
     baseline.mkdir(parents=True)
     _write_tree(repo, commit, baseline, object_format)
 
-    diff_text = _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", "--text", "--no-color", commit, "--")
+    # --text only for Python files: `-diff` or `binary` in .gitattributes must not
+    # hide their lines (C), but on an image --text writes bytes that are not text,
+    # and decoding them stopped the run (a UnicodeDecodeError in 3.0.0). Read as
+    # bytes, so a source in another encoding does not stop it either.
+    diff_text = "".join(
+        _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
+             "--no-color", commit, "--", pathspec, binary=True).decode("utf-8", "replace")
+        for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
+    )
     untracked = [
         line for line in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
         if line and "__pycache__" not in line.split("/")

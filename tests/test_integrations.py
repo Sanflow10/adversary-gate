@@ -364,6 +364,34 @@ class TestGitEvidence(unittest.TestCase):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
             self.assertIn("+    return (a + b)", evidence.diff.read_text())
 
+    def test_a_changed_image_does_not_stop_the_evidence(self):
+        """With --text on every file, a changed image went through git as bytes
+        that are not UTF-8, and preparing the evidence failed with a
+        UnicodeDecodeError: no patch that touched an image could be judged.
+        Only Python files need --text (C); the image stays "Binary files"."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            png = bytes([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13])
+            (repo / "logo.png").write_bytes(png + b"\x00\xff\xfeold\nimage\x00")
+            for args in (["add", "-A"], ["commit", "-qm", "image"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            (repo / "logo.png").write_bytes(png + b"\x00\xff\xfenew\nimage\nbytes\x00")
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            diff = evidence.diff.read_text()
+            self.assertIn("+    return (a + b)", diff)
+            self.assertIn("Binary files a/logo.png and b/logo.png differ", diff)
+
+    def test_a_python_file_in_another_encoding_does_not_stop_the_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "calc.py").write_bytes(
+                b"# -*- coding: latin-1 -*-\nNAME = 'caf\xe9'\n" + _clean_patch(CALC).encode())
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertIn("+    return (a + b)", evidence.diff.read_text())
+
     def test_a_blob_that_does_not_match_its_id_is_refused(self):
         from adversary_gate.integrations import gitevidence
         with tempfile.TemporaryDirectory() as directory:

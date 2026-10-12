@@ -2296,3 +2296,13 @@ class TestBaselineNotApplicable(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
+
+class TestTheRepositoryRootIsNotATestFile(unittest.TestCase):
+    """G: ``--test-path .`` was reported as "escapes repository"; it is the
+    repository itself, and the message should ask for a test file."""
+
+    def test_dot_names_the_root_and_the_message_says_so(self):
+        with tempfile.TemporaryDirectory() as repo:
+            gate = make_gate()
+            error = gate.validate_claim(CriticClaim(".", "t"), Path(repo))
+            self.assertEqual(error, "test_path must name a test file, not the repository root")

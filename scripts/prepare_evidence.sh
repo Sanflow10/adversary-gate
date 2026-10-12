@@ -118,7 +118,16 @@ rm -rf "$BASE_INDEX_DIR"
 # was correct and the check against it was blind. CI never noticed because the
 # runner's default config does not impose the colour; the failure belonged to
 # the environment, not to the patch.
-git -C "$WORKSPACE" diff --no-ext-diff --no-color "$BASE_SHA...HEAD" > "$DIFF_FILE"
+# --text and --no-textconv: .gitattributes is the PR's to write. `-diff` or
+# `binary` on a Python file turns its hunks into "Binary files differ", and then
+# its changed lines are missing from the diff the coverage is judged on (C).
+# --text goes to the Python files only: on an image it writes the bytes out as
+# lines no test can run, and a patch whose code was all covered fell to 0.25.
+# (The MCP server's evidence code still passes --text for every file.)
+git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --no-color "$BASE_SHA...HEAD" \
+  -- ':(exclude,glob)**/*.py' > "$DIFF_FILE"
+git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --text --no-color "$BASE_SHA...HEAD" \
+  -- ':(glob)**/*.py' >> "$DIFF_FILE"
 if [ ! -s "$DIFF_FILE" ]; then
   echo "adversary-gate: warning: the diff is empty; the gate will see no changed lines" >&2
 fi

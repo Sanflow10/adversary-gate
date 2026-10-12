@@ -237,6 +237,9 @@ class Gate:
             if any(part.is_symlink() for part in (root, unresolved, *unresolved.parents)):
                 return "test_path traverses a symlink"
             candidate = unresolved.resolve()
+            if candidate == root:
+                # G: "." is the repository itself, not a test file inside it.
+                return "test_path must name a test file, not the repository root"
             if root not in candidate.parents:
                 return "test_path escapes repository"
             if not candidate.is_file():
@@ -694,18 +697,36 @@ class Gate:
         if not baseline_applicable:
             baseline_state = ExecState.NOT_APPLICABLE
 
-        run_outcome = ExecutionOutcome(
-            baseline_state,
-            patch_state,
-            baseline_failures=sum(1 for c in baseline_codes if c != 0),
-            patch_failures=sum(1 for c in patch_codes if c != 0),
-            run_count=policy.runs,
-            baseline_exit_codes=tuple(baseline_codes),
-            patch_exit_codes=tuple(patch_codes),
-            baseline_output=baseline_output,
-            patch_output=patch_output,
-        )
-        return self.classify(claim, run_outcome), (baseline_detail, patch_detail)
+        def outcome(b_state, b_codes, b_output) -> ExecutionOutcome:
+            return ExecutionOutcome(
+                b_state,
+                patch_state,
+                baseline_failures=sum(1 for c in b_codes if c != 0),
+                patch_failures=sum(1 for c in patch_codes if c != 0),
+                run_count=policy.runs,
+                baseline_exit_codes=tuple(b_codes),
+                patch_exit_codes=tuple(patch_codes),
+                baseline_output=b_output,
+                patch_output=patch_output,
+            )
+
+        verdict = self.classify(claim, outcome(baseline_state, baseline_codes, baseline_output))
+        if verdict.classification is FailureClass.FIXED and baseline_applicable and not self.config.serial_sides:
+            # AG-043 residue (#4): the two sides ran at once, so a baseline failure may
+            # be the other side's doing (a shared port, file or database). FIXED says
+            # the baseline fails on its own, so that is checked: rerun it without the
+            # patch side and classify the rerun. The full suite may still run alongside;
+            # --serial-sides takes that away too. The decision never depended on this
+            # label (both are VERIFIED); fix_proven did.
+            alone_codes, alone_output = self._runs(
+                baseline_dir, claim.test_path, claim.test_id, policy, limits
+            )
+            baseline_state, _, baseline_detail = self._resolve_side(
+                alone_codes, policy, label="baseline"
+            )
+            baseline_detail = f"{baseline_detail}; rerun without the patch side, exit codes {list(alone_codes)}"
+            verdict = self.classify(claim, outcome(baseline_state, alone_codes, alone_output))
+        return verdict, (baseline_detail, patch_detail)
 
     def _fail_to_pass(self, verdict: GateVerdict, claim, baseline_dir: Path, patch_dir: Path,
                       policy, limits) -> GateVerdict:
@@ -984,8 +1005,9 @@ class Gate:
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
-    def diff_coverage(self, diff_text: str, coverage_json: Path | dict) -> DiffCoverage:
-        return covered_diff_ratio(diff_text, coverage_json)
+    def diff_coverage(self, diff_text: str, coverage_json: Path | dict, *,
+                      source_root: Path | None = None) -> DiffCoverage:
+        return covered_diff_ratio(diff_text, coverage_json, source_root=source_root)
 
     def adjudicate_contestation(
         self,
