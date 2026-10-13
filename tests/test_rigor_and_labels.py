@@ -901,7 +901,7 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("a = 1\nb = 2\nc = 3\n", {2})
         self.assertEqual(out.split("\n")[:4],
-                         ["a = 1", "__adversary_probe__ = 0", "b = 2  # adversary-gate canary", "c = 3"])
+                         ["a = 1", "__adversary_probe__ = 0; del __adversary_probe__", "b = 2  # adversary-gate canary", "c = 3"])
 
     def test_a_probe_changes_the_tree_and_the_bytecode_but_not_the_result(self):
         import ast
@@ -918,12 +918,12 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
     def test_a_header_row_gets_its_probe_at_the_start_of_the_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("def f(a,\n      b):\n    return a + b\n", {1})
-        self.assertIn("    __adversary_probe__ = 0\n    return a + b", out)
+        self.assertIn("    __adversary_probe__ = 0; del __adversary_probe__\n    return a + b", out)
 
     def test_a_decorator_row_gets_its_probe_in_the_decorated_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("@staticmethod\ndef f():\n    return 1\n", {1})
-        self.assertIn("    __adversary_probe__ = 0\n    return 1", out)
+        self.assertIn("    __adversary_probe__ = 0; del __adversary_probe__\n    return 1", out)
 
     def test_a_statement_that_shares_its_line_is_probed_in_front_of_the_line(self):
         # It used to have no place, so nothing was measured; in front of the
@@ -931,7 +931,7 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         # has no place inside it (see TestTheProbeStaysNeutralWhereAStatementCannotGo).
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("x = 1; y = 2\n", {1})
-        self.assertTrue(out.startswith("__adversary_probe__ = 0\nx = 1; y = 2"), out)
+        self.assertTrue(out.startswith("__adversary_probe__ = 0; del __adversary_probe__\nx = 1; y = 2"), out)
 
     def test_no_canary_when_there_is_nothing_to_probe(self):
         from adversary_gate.verifiers.strength import canary_source
@@ -1023,7 +1023,9 @@ class TestAFileThePatchAddedIsMutated(unittest.TestCase):
                                   {"other.py": "def unrelated(a):\n    return a * 9\n", "newmod.py": self.NEW},
                                   self.STRONG)
         self.assertIsNone(detail["added_files"]["newmod.py"]["paired_with"])
-        self.assertEqual({m["line"] for m in detail["mutants"]}, {4, 9})
+        # Every line: the operators (4, 9) and, since 3.0.4, the lines no
+        # operator reaches (2 ``t = 0``, 3 the ``for``, 5 the ``return``).
+        self.assertEqual({m["line"] for m in detail["mutants"]}, {2, 3, 4, 5, 9})
 
 
 class TestTheUnmutatedRunDecides(unittest.TestCase):

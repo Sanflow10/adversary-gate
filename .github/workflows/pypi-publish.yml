@@ -2,20 +2,18 @@ name: Publish to PyPI
 
 # Two ways in, one way out to PyPI:
 #
-#   push of a vX.Y.Z tag  -> publishes that tag (a tag pushed by hand).
-#   Run workflow + tag    -> publishes a tag that already exists. This is the
-#                            route for a release the Release workflow made: its
-#                            tag is created by the workflow token, and events
-#                            from that token never start this workflow.
+#   push of a vX.Y.Z tag  -> publishes that tag (a tag pushed by hand: the
+#                            normal route, see release.yml).
+#   Run workflow + tag    -> publishes a tag that already exists, e.g. to
+#                            finish a run that stopped halfway.
 #
-# Authentication, in this order:
-#
-#   PYPI_API_TOKEN secret -> used when it exists.
-#   Trusted Publishing    -> used otherwise. Needs the publisher registered on
-#                            pypi.org (AG-008): owner Sanflow10, repository
-#                            adversary-gate, workflow pypi-publish.yml, no
-#                            environment. Registered once per PyPI project:
-#                            `adversary-gate` and `adversary-gate-mcp`.
+# Authentication: Trusted Publishing only. The publisher is registered on
+# pypi.org (AG-008) for both projects, `adversary-gate` and
+# `adversary-gate-mcp`: owner Sanflow10, repository adversary-gate, workflow
+# pypi-publish.yml, no environment. Every file goes up with a PyPI provenance
+# attestation tying it to this workflow. An API token used to take precedence
+# when the PYPI_API_TOKEN secret existed, and a token upload carries no
+# attestation (the core 3.0.1-3.0.3 files): the secret is no longer read.
 #
 # One tag, two distributions: the core and packaging/mcp (the MCP server as
 # its own package, for `uvx adversary-gate-mcp`). Both go up in one upload.
@@ -82,7 +80,13 @@ jobs:
           fi
 
       - name: Install build dependencies
-        run: python -m pip install build
+        run: python -m pip install build pytest
+
+      # The tag push runs this before the Release workflow, which used to be the
+      # only place the suite ran before a release: a build whose tests did not
+      # pass must not reach PyPI either.
+      - name: Refuse to publish an untested build
+        run: python -m pytest -q
 
       - name: Clean build output
         run: rm -rf dist/
@@ -104,7 +108,7 @@ jobs:
           fi
           python -m build packaging/mcp --outdir dist/
 
-      # An empty password makes the action use Trusted Publishing.
+      # No password: the action uses Trusted Publishing and attests each file.
       # skip-existing: a run that stopped halfway (2.9.0: the core wheel went
       # up, then the new project was refused) can be run again for the same
       # tag. PyPI never lets a file be replaced; this skips the files already
@@ -112,5 +116,4 @@ jobs:
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true

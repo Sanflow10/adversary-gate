@@ -123,7 +123,7 @@ rm -rf "$BASE_INDEX_DIR"
 # its changed lines are missing from the diff the coverage is judged on (C).
 # --text goes to the Python files only: on an image it writes the bytes out as
 # lines no test can run, and a patch whose code was all covered fell to 0.25.
-# (The MCP server's evidence code still passes --text for every file.)
+# The MCP server's evidence code splits the files the same way.
 git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --no-color "$BASE_SHA...HEAD" \
   -- ':(exclude,glob)**/*.py' > "$DIFF_FILE"
 git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --text --no-color "$BASE_SHA...HEAD" \
@@ -140,17 +140,16 @@ if [ "$SKIP_COVERAGE" -eq 0 ]; then
     # coverage.py writes its data file even when the suite fails; the gate runs
     # the tests itself and reads their real exit codes, so a failure here must
     # not suppress the measurement it just produced.
-    # A report-only rcfile: a suite that execs compile()d code (doctest
-    # runners, exec-based plugins) leaves frames whose filename names no file
-    # on disk, and `coverage json` refuses to write the whole report over one
-    # such frame. ignore_errors makes it a warning about that file. Only the
-    # report reads this file -- `coverage run` keeps the project's own config.
-    REPORT_RC="$COVERAGE_FILE.report-rc"
-    printf '[report]\nignore_errors = True\n' > "$REPORT_RC"
-    COVERAGE_CMD='coverage run -m pytest || true; coverage json --rcfile "$REPORT_RC" -o "$COVERAGE_JSON"'
+    # --ignore-errors: a suite that execs compile()d code (doctest runners,
+    # exec-based plugins) leaves frames whose filename names no file on disk,
+    # and `coverage json` refuses to write the whole report over one such
+    # frame; this makes it a warning about that file. A flag, not an rcfile:
+    # an --rcfile replaces the project's config for the report, so a project
+    # with its own [tool.coverage.run] data_file had `coverage run` write one
+    # file and the report read another -- "No data to report" (3.0.3).
+    COVERAGE_CMD='coverage run -m pytest || true; coverage json --ignore-errors -o "$COVERAGE_JSON"'
   fi
-  if ! ( cd "$WORKSPACE" && COVERAGE_JSON="$COVERAGE_FILE" REPORT_RC="${REPORT_RC:-}" \
-         bash -c "$COVERAGE_CMD" ); then
+  if ! ( cd "$WORKSPACE" && COVERAGE_JSON="$COVERAGE_FILE" bash -c "$COVERAGE_CMD" ); then
     die "$EXIT_ENV" "coverage-command failed in $WORKSPACE"
   fi
   if [ ! -s "$COVERAGE_FILE" ]; then

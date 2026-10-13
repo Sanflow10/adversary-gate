@@ -109,3 +109,54 @@ class TestMcpPackage(unittest.TestCase):
         """The registry reads ``mcp-name: <server name>`` from the package's PyPI description."""
         readme = (ROOT / "packaging" / "mcp" / "README.md").read_text()
         self.assertIn(f"mcp-name: {self.server['name']} ", readme)
+
+
+class TestOneRouteToPyPI(unittest.TestCase):
+    """Both packages, through Trusted Publishing, from a tag a person pushed.
+
+    3.0.2 and 3.0.3 went out through ``release.yml``: it created the tag with
+    the workflow token -- unsigned -- and uploaded the core alone with an API
+    token. Events from that token start no other workflow, so
+    ``pypi-publish.yml``, the only one that builds ``packaging/mcp``, never
+    ran: ``uvx adversary-gate-mcp`` kept serving 3.0.0, pinned to the core
+    3.0.0, under every fix 3.0.1 made, and the core files carried no
+    provenance attestation. Read as data, like the Action's contract.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        workflows = ROOT / ".github" / "workflows"
+        cls.release = (workflows / "release.yml").read_text()
+        cls.publish = (workflows / "pypi-publish.yml").read_text()
+
+    @staticmethod
+    def _code(text: str) -> str:
+        """The workflow without its comments: what runs, not what explains it."""
+        return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+    def test_the_release_workflow_never_uploads(self):
+        code = self._code(self.release)
+        self.assertNotIn("pypi-publish", code)
+        self.assertNotIn("PYPI_API_TOKEN", code)
+
+    def test_the_release_workflow_never_creates_the_tag(self):
+        code = self._code(self.release)
+        self.assertNotIn("--target", code)
+        self.assertIn("no tag $TAG yet", code)
+
+    def test_a_lightweight_tag_is_refused(self):
+        self.assertIn('git cat-file -t "refs/tags/$TAG"', self._code(self.release))
+
+    def test_no_release_page_before_both_packages_are_on_pypi(self):
+        code = self._code(self.release)
+        self.assertIn("for PROJECT in adversary-gate adversary-gate-mcp", code)
+        self.assertLess(code.index("adversary-gate-mcp"), code.index("gh release create"))
+
+    def test_the_publisher_reads_no_token(self):
+        code = self._code(self.publish)
+        self.assertNotIn("PYPI_API_TOKEN", code)
+        self.assertNotIn("password:", code)
+        self.assertIn("id-token: write", code)
+
+    def test_the_publisher_builds_both_packages(self):
+        self.assertIn("python -m build packaging/mcp --outdir dist/", self._code(self.publish))

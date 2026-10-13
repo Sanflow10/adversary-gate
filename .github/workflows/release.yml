@@ -1,16 +1,22 @@
 name: Release
 
-# A release route that does not need PyPI at all.
+# The GitHub Release for a tag a person already pushed.
 #
-# Deliberately `workflow_dispatch` instead of `on: push: tags: v*`:
+# The order is fixed, and only the first step is done by hand:
 #
-#   The tag is created *inside* this workflow, by the GITHUB_TOKEN, and events
-#   that token produces do not start other workflows. So publishing a release
-#   does not fire pypi-publish.yml and leave a red run behind every time --
-#   that failure is AG-008, it belongs to whoever holds the PyPI account, and
-#   it should not be normalised into the release process while it is
-#   unresolved. Push a `v*` tag by hand and it fires; press Run here and it
-#   does not.
+#   1. git tag -s vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z
+#      The push starts pypi-publish.yml, which uploads BOTH distributions --
+#      the core and packaging/mcp -- through Trusted Publishing, with PyPI
+#      provenance attestations.
+#   2. Actions -> Release -> Run workflow, here: tests, the wheel attached to
+#      the release, the floating major tag moved.
+#
+# This workflow used to create the tag itself, with the workflow token, and
+# upload the core to PyPI with an API token. Events made by that token start
+# no other workflow, so on 3.0.2 and 3.0.3 pypi-publish.yml never ran: the
+# MCP package stayed at 3.0.0 -- pinned to the core 3.0.0, under every fix
+# 3.0.1 made -- the core files went up with no attestation, and the tags were
+# not signed. It now refuses to run without the tag, and never uploads.
 #
 # What comes out is a wheel attached to a public, unauthenticated URL:
 #
@@ -20,25 +26,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # create the tag and the release, and move the floating major tag
+  contents: write # create the release and move the floating major tag
 
 jobs:
   release:
     name: Build, verify, publish a GitHub Release
     runs-on: ubuntu-latest
-    env:
-      # Optional. Present -> the build is also uploaded to PyPI by token, which
-      # is the only automated PyPI route while AG-008 (Trusted Publishing) is
-      # open. Absent -> the run says so out loud instead of leaving PyPI
-      # silently one version behind (AG-026).
-      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          # A `v*` tag may already be there -- it is pushed by hand on purpose,
-          # so that it is a person, not a token, who asks for a release. When
-          # it exists we have to build from its tree, and that needs the tags.
+          # The `v*` tag is pushed by hand on purpose, so that it is a person,
+          # not a token, who asks for a release. We build from its tree, and
+          # that needs the tags.
           fetch-depth: 0
 
       - name: Set up Python
@@ -54,10 +54,14 @@ jobs:
       # precisely the inconsistency AG-008 recorded, and taking it from one
       # source makes that mismatch unreachable rather than merely unlikely.
       #
-      # When that tag already exists, the build must come from the tag and not
-      # from whatever HEAD happens to be now -- otherwise the wheel would not
-      # be the tree the tag names, and `pip install <tag>` would not reproduce
-      # what is attached to the release.
+      # The build comes from the tag and not from whatever HEAD happens to be
+      # now -- otherwise the wheel would not be the tree the tag names, and
+      # `pip install <tag>` would not reproduce what is attached to the release.
+      #
+      # No tag, no release: a tag made here would be made by the workflow
+      # token, unsigned, and its push would not start pypi-publish.yml (3.0.2
+      # and 3.0.3). A lightweight tag is refused for the same reason -- a
+      # signed tag is an annotated one.
       - name: Resolve the release ref
         id: ref
         run: |
@@ -67,24 +71,24 @@ jobs:
           TAG="v$VERSION"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
-            git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-            git checkout --quiet "refs/tags/$TAG"
+          if ! git ls-remote --tags origin "refs/tags/$TAG" | grep -q .; then
+            echo "::error::no tag $TAG yet. Push it by hand first: git tag -s $TAG -m \"$VERSION\" && git push origin $TAG -- that push publishes both packages to PyPI with attestations; then run this workflow again"
+            exit 1
+          fi
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]; then
+            echo "::error::$TAG is a lightweight tag; a release needs an annotated, signed one (git tag -s)"
+            exit 1
+          fi
+          git checkout --quiet "refs/tags/$TAG"
 
-            TAGGED="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
-            if [ "$TAGGED" != "$VERSION" ]; then
-              echo "::error::tag $TAG carries version $TAGGED but pyproject says $VERSION"
-              exit 1
-            fi
-
-            echo "tag $TAG already exists -- building from its tree"
-            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no tag yet -- it will be created from HEAD"
-            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          TAGGED="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if [ "$TAGGED" != "$VERSION" ]; then
+            echo "::error::tag $TAG carries version $TAGGED but pyproject says $VERSION"
+            exit 1
           fi
 
-          echo "releasing $TAG"
+          echo "releasing $TAG from its own tree"
 
       # Fail-closed, same as the gate: a release only ever leaves a build whose
       # tests actually passed. Re-running them here rather than trusting the
@@ -101,45 +105,42 @@ jobs:
           python -m pip install dist/*.whl
           adversary-gate --help
 
+      # PyPI is pypi-publish.yml's job, started by the tag push. A release page
+      # that goes up while PyPI still lacks one of the two packages is the
+      # 3.0.2/3.0.3 state again: `uvx adversary-gate-mcp` serving an older
+      # version under a release that says otherwise.
+      - name: Refuse while PyPI lacks either package
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          for PROJECT in adversary-gate adversary-gate-mcp; do
+            if ! curl -fsS -o /dev/null "https://pypi.org/pypi/$PROJECT/$VERSION/json"; then
+              echo "::error::PyPI has no $PROJECT $VERSION yet. The push of $TAG runs Actions -> Publish to PyPI; check that run (or start it with tag $TAG), then run this workflow again"
+              exit 1
+            fi
+          done
+          echo "PyPI has adversary-gate $VERSION and adversary-gate-mcp $VERSION"
+
       - name: Create the release and attach the artefacts
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.ref.outputs.tag }}
-          TAG_EXISTS: ${{ steps.ref.outputs.tag_exists }}
         run: |
           set -euo pipefail
-
-          echo "releasing $TAG (tag_exists=$TAG_EXISTS)"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::release $TAG already exists -- bump version in pyproject.toml first"
             exit 1
           fi
 
-          # `gh release create` makes the tag only when it is missing -- but
-          # without --target it points that new tag at the tip of the default
-          # branch *at this moment*, not at the tree this job built from. Those
-          # are the same commit unless something lands on main during the
-          # minutes the suite and the build take, and when they differ the tag
-          # stops naming the artefact attached to it: anyone following
-          # SECURITY.md to verify a download against `vX.Y.Z` would be checking
-          # it against a different tree. So the new-tag path pins the target to
-          # the checked-out SHA -- the bytes that were actually built.
-          #
-          # When the tag already exists it is not ours to point anywhere, and
-          # the resolve step is already standing on its tree, so --target is
-          # deliberately omitted there.
-          if [ "$TAG_EXISTS" = "true" ]; then
-            echo "tag $TAG already points somewhere; the release stands on it"
-            gh release create "$TAG" dist/* \
-              --title "$TAG" \
-              --generate-notes
-          else
-            gh release create "$TAG" dist/* \
-              --target "$GITHUB_SHA" \
-              --title "$TAG" \
-              --generate-notes
-          fi
+          # The tag exists (the resolve step refuses otherwise) and is not
+          # ours to point anywhere; the resolve step is already standing on
+          # its tree, so the release stands on it and --target is not given.
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --generate-notes
 
           echo "published $TAG"
           ls -l dist/
@@ -169,17 +170,3 @@ jobs:
           git tag --force "$MAJOR" "refs/tags/${TAG}^{commit}"
           git push --force origin "refs/tags/$MAJOR"
           echo "$MAJOR now points at $TAG ($(git rev-parse --short "refs/tags/${TAG}^{commit}"))"
-
-      - name: Publish to PyPI (API-token route)
-        if: env.PYPI_API_TOKEN != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ env.PYPI_API_TOKEN }}
-          # Idempotent on re-run: the release step above refuses a second
-          # release of the same tag, so only this step can be repeated.
-          skip-existing: true
-
-      - name: Say what was not published
-        if: env.PYPI_API_TOKEN == ''
-        run: |
-          echo "::warning title=PyPI was NOT updated::No PYPI_API_TOKEN secret is set, so 'pip install adversary-gate' still serves the previous version. Publish this release with Actions -> Publish to PyPI -> Run workflow, tag ${{ steps.ref.outputs.tag }}. Re-running this workflow does not work: the release already exists."

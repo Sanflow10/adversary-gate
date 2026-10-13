@@ -540,7 +540,7 @@ class TestEvidenceArtefact(unittest.TestCase):
     def test_record_carries_executed_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "evidence.jsonl"
-            log = EvidenceLog(path, context={"model": "claude-opus-4", "commit": "abc123"})
+            log = EvidenceLog(path, context={"model": "model-a", "commit": "abc123"})
             outcome = ExecutionOutcome(
                 ExecState.PASS,
                 ExecState.FAIL,
@@ -564,7 +564,7 @@ class TestEvidenceArtefact(unittest.TestCase):
             self.assertEqual(record["patch_exit_codes"], [1, 1, 1])
             self.assertEqual(record["baseline_exit_codes"], [0, 0, 0])
             self.assertEqual(record["outcome"], "refuted")
-            self.assertEqual(record["ctx_model"], "claude-opus-4")
+            self.assertEqual(record["ctx_model"], "model-a")
             self.assertEqual(record["ctx_commit"], "abc123")
             self.assertEqual(record["rationale"], "r")
 
@@ -668,7 +668,7 @@ class TestMetrics(unittest.TestCase):
     def test_model_comparison_groups_by_context(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "e.jsonl"
-            log_a = EvidenceLog(path, context={"model": "claude"})
+            log_a = EvidenceLog(path, context={"model": "model-b"})
             log_a.append(
                 GateVerdict(
                     CriticClaim("t.py", "t1"), FailureClass.REGRESSION, Outcome.REFUTED, "r"
@@ -685,10 +685,10 @@ class TestMetrics(unittest.TestCase):
             )
             m = compute_metrics(EvidenceLog(path).read_all())
             comparison = compare_models(m)
-            self.assertIn("claude", comparison)
+            self.assertIn("model-b", comparison)
             self.assertIn("gpt", comparison)
             self.assertEqual(comparison["gpt"]["unverified"], 1)
-            self.assertEqual(comparison["claude"]["refuted"], 1)
+            self.assertEqual(comparison["model-b"]["refuted"], 1)
 
     def test_report_renders(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1057,10 +1057,10 @@ class TestCliExitCodes(unittest.TestCase):
             self._tree(root, break_patch=True)
             log_path = Path(directory) / "ev.jsonl"
             self._invoke(
-                root, ["--evidence-log", str(log_path), "--model", "claude", "--commit", "deadbeef"]
+                root, ["--evidence-log", str(log_path), "--model", "model-b", "--commit", "deadbeef"]
             )
             records = json.loads(log_path.read_text().splitlines()[0])
-            self.assertEqual(records["ctx_model"], "claude")
+            self.assertEqual(records["ctx_model"], "model-b")
             decision = json.loads(log_path.read_text().splitlines()[1])
             self.assertEqual(decision["kind"], "decision")
             self.assertIn(decision["decision"], ("merge", "block", "inconclusive"))

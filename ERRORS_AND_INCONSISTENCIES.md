@@ -6,12 +6,12 @@ Este documento registra erros, divergências de ambiente e inconsistências iden
 
 ## 1. Conflito de Diretórios do Repositório (`adversary-gate` vs `adversary_gate_v2`)
 
-* **Inconsistência**: Existência de dois diretórios locais: `/home/sa/adversary-gate` e `/home/sa/adversary_gate_v2`.
-* **Causa Raiz**: O diretório `/home/sa/adversary-gate` era um clone legado preso na branch `master` no commit `90d18ab` (v0.8.0), sem o remote do GitHub configurado (`git remote -v` vazio). O repositório real ativo conectado ao GitHub (`git@github.com:Sanflow10/adversary-gate.git`) estava em `/home/sa/adversary_gate_v2` na branch `main`.
+* **Inconsistência**: Existência de dois diretórios locais: `~/adversary-gate` e `~/adversary_gate_v2`.
+* **Causa Raiz**: O diretório `~/adversary-gate` era um clone legado preso na branch `master` no commit `90d18ab` (v0.8.0), sem o remote do GitHub configurado (`git remote -v` vazio). O repositório real ativo conectado ao GitHub (`git@github.com:Sanflow10/adversary-gate.git`) estava em `~/adversary_gate_v2` na branch `main`.
 * **Impacto**: Ao tentar executar `cd adversary-gate && git apply /tmp/opencode/adversary-gate-2.0.1-fix.patch`, o comando falhava com erros de patch rejeitado (`patch does not apply`), pois os arquivos esperados pelo patch (ex.: `src/verifiers/strength.py` e linhas de `README.md`) inexistiam naquela versão legada.
 * **Solução**:
   1. No repositório de trabalho ativo (`adversary_gate_v2`), o patch foi aplicado e validado.
-  2. No diretório legado (`/home/sa/adversary-gate`), configuramos o remote `origin` para `git@github.com:Sanflow10/adversary-gate.git` e realizamos o tracking da branch `main`, sincronizando o ambiente.
+  2. No diretório legado (`~/adversary-gate`), configuramos o remote `origin` para `git@github.com:Sanflow10/adversary-gate.git` e realizamos o tracking da branch `main`, sincronizando o ambiente.
 
 ---
 

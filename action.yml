@@ -377,7 +377,10 @@ runs:
           if [ "$AG_DISCOVER" = "true" ]; then
             AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --rcfile "$ADVERSARY_COVERAGE_RC" --show-contexts -o "$COVERAGE_JSON"'
           else
-            AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json --rcfile "$ADVERSARY_COVERAGE_RC" -o "$COVERAGE_JSON"'
+            # The project's own config on both sides; --ignore-errors instead of
+            # the Action's rcfile, which would replace it for the report only
+            # (a project data_file then had nothing to report, 3.0.3).
+            AG_COVERAGE_CMD='coverage run -m pytest || true; coverage json --ignore-errors -o "$COVERAGE_JSON"'
           fi
         fi
 

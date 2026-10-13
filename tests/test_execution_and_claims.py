@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import os
 import shutil
 import stat
@@ -609,19 +610,34 @@ class TestActionContract(unittest.TestCase):
         nothing. ``ignore_errors`` turns that one frame into a warning.
         """
         self.assertIn("ignore_errors = True", self.text)
-        # Both default report commands run through the Action's own rcfile.
-        self.assertEqual(
-            self.text.count('coverage json --rcfile "$ADVERSARY_COVERAGE_RC"'), 2,
-            "both default coverage commands must report through the Action's rcfile",
-        )
+        # discover: run and report both read the Action's rcfile, ignore_errors included.
+        self.assertIn('coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; '
+                      'coverage json --rcfile "$ADVERSARY_COVERAGE_RC" --show-contexts', self.text)
+        # Otherwise the run reads the project's config, and so must the report.
+        self.assertIn("coverage run -m pytest || true; coverage json --ignore-errors -o", self.text)
+
+    def test_the_report_reads_the_config_the_run_wrote_with(self):
+        """3.0.3 gave the report the Action's rcfile while the run kept the project's.
+
+        An explicit ``--rcfile`` replaces the project's config for that command,
+        so a project setting ``[tool.coverage.run] data_file`` had ``coverage run``
+        write one file and ``coverage json`` look for another: "No data to
+        report", and an honest patch ended INCONCLUSIVE where 3.0.0 measured it.
+        """
+        for command in re.findall(r"AG_COVERAGE_CMD='([^']*)'", self.text):
+            with self.subTest(command=command):
+                run_rc = "coverage run --rcfile" in command
+                report_rc = "coverage json --rcfile" in command
+                self.assertEqual(run_rc, report_rc, command)
 
 
 class TestPrepareEvidenceContract(unittest.TestCase):
     """scripts/prepare_evidence.sh, read as data: the same trap, one layer out.
 
-    The default coverage command here has no rcfile of its own, so the script
-    writes a report-only one -- ``coverage run`` still reads whatever config
-    the project already has.
+    The default coverage command keeps the project's config on both sides and
+    tells the report to ignore errors with a flag. 3.0.3 wrote a report-only
+    rcfile instead, and an rcfile replaces the project's config: a project
+    ``data_file`` left the report with nothing to read.
     """
 
     @classmethod
@@ -629,8 +645,10 @@ class TestPrepareEvidenceContract(unittest.TestCase):
         cls.text = (ROOT / "scripts" / "prepare_evidence.sh").read_text()
 
     def test_default_coverage_report_survives_a_frame_with_no_source(self):
-        self.assertIn("ignore_errors = True", self.text)
-        self.assertIn('coverage json --rcfile "$REPORT_RC"', self.text)
+        self.assertIn("COVERAGE_CMD='coverage run -m pytest || true; coverage json --ignore-errors -o", self.text)
+
+    def test_the_default_report_keeps_the_projects_config(self):
+        self.assertNotIn("coverage json --rcfile", self.text)
 
 
 if __name__ == "__main__":

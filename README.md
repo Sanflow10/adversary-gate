@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.3)
+# AdversaryGate (v3.0.4)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -105,23 +105,24 @@ A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)*
 
 ### How `suite_strength` is measured
 
-It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. It is not derived from coverage or from parsing pytest output.
+It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. Each claim meets the mutants with the copy of its test file that judged it: when the patch rewrote a test the baseline had, that is the baseline's copy (until 3.0.3 the mutants ran the patch's, and asserts the patch added to a rewritten test killed mutants the verdict never ran). It is not derived from coverage or from parsing pytest output.
 
-Three things must hold before a score exists, and each one that fails leaves the strength **not measured**. The claims must pass on the unmutated patch, the reference: if they do not, a mutant that fails the same way is not a kill (D). A Python file the patch adds that cannot be paired with a baseline file, because the baseline is over 400 files or 5000 lines, is never mutated (B). And every claim runs on a neutral copy of the patch: one comment per changed line, and one no-op assignment in the block of each changed statement (in front of it, or after a docstring or the `from __future__` imports, which must stay first). A claim that fails on that copy reads the code's text or structure instead of what it does (A). The copy catches a claim that reads the file, its whole tree or the bytecode of the changed function; one that reads a smaller piece of the tree, such as a single expression, can still pass. If that copy cannot be built for a changed file, nothing is measured either.
+Several things must hold before a score exists, and each one that fails leaves the strength **not measured**. The claims must pass on the unmutated patch, the reference: if they do not, a mutant that fails the same way is not a kill (D). A Python file the patch adds that cannot be paired with a baseline file, because the baseline is over 400 files or 5000 lines, is never mutated (B). Every changed Python file must be UTF-8: one that is not cannot be mutated, and it used to be skipped in silence while the other files' score stood for the patch. And every claim runs on a neutral copy of the patch: one comment per changed line, a space after each token a mutant would swap, and one no-op assignment — deleted on the same line, so it never shows in `locals()` or a class's `vars()` — in the block of each changed statement (in front of it, or after a docstring or the `from __future__` imports, which must stay first). A claim that fails on that copy reads the code's text or structure instead of what it does (A). The copy catches a claim that reads the file, a piece of a changed line, its whole tree or the bytecode of the changed function; one that reads a smaller piece of the tree, such as a single expression, or that normalizes the text before comparing, can still pass. If that copy cannot be built for a changed file, nothing is measured either.
 
 **`--census-min-mutants N` (experimental, off by default).** Below the mutant budget the gate breaks *every* mutable site of the change — a census, not a sample. With this flag, when the census covers the whole change (every changed executable line has a site; statement-level sites are added for lines with no operator), nothing was stillborn, **every mutant died**, and there are at least N, the exact ratio is judged instead of the Wilson lower bound. Off by default: "1 killed out of 1 is not strong" stays the rule unless you opt in. A first version let a real bug through (one surviving operator mutant diluted by easy statement-level kills); the ledger has the case.
 
 **`next_steps`.** Every answer that is not `MERGE` lists what would make it one, as actions a coding agent can take: `cover` (file, lines), `kill_mutant` (file, line, mutation), `add_test`, `fix_code`, `human_review_test_edit`, `raise_limit`, `see_reason`. It never suggests editing a baseline test, a harness file, a floor or the policy — those are the oracle.
 
 - Mutants are limited to lines the patch actually wrote; mutating untouched lines would let tests covering unrelated code inflate the score.
+- **A branch that shares its line with its guard gets a mutant of its own.** Coverage is per line, so `return 999 if x == 0 else x + 1` reads as covered when only the `else` ran — and the guard's operator mutant (`==` → `!=`) sends the tested input *into* the hidden arm, so the test kills it and the kill used to count as strength: on 3.0.3 that patch merged at 5/5 with `value(0)` changed from 1 to 999. Now a conditional expression is also replaced by each of its arms, an `and`/`or` loses its last operand, and an `if` or `case` whose body sits on the header's line is switched off. These mutants (`kind: "branch"`) come first on their line. One that **survives** means a branch on a changed line that no claim takes. It is listed in `mutation.blind_spots`, `suite_strength_unverified` turns `true` and the decision is `INCONCLUSIVE`, whatever the other mutants scored — the ratio itself stays what the operator mutants measured — and `next_steps` names the line. Killed, they do not enter the ratio, so they cannot pad it.
 - **Added, modified and deleted** source files all count as changes. A deleted file has nothing left to mutate, so it is reported separately as `mutation.deleted_files` and cannot contribute a score: whenever `deleted_files` is non-empty the patch lands on `INCONCLUSIVE`, never `MERGE`. That includes a *mixed* patch where the surviving file measured `1.0` — that score covered only what was left after the deletion, so `suite_strength_unverified` goes `true` rather than let one file's number authorise the change as a whole.
 - A mutant that no longer runs at all (syntax/collection error) is *stillborn* and excluded from both sides of the ratio rather than counted as a kill.
 - `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
 - If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
 - **The floor reads a confidence bound, not the ratio (AG-023).** A ratio from one mutant is `1.0` and evidence of almost nothing. The gate computes a two-sided **Wilson interval** around `killed / counted` and applies `--suite-strength-floor` to its **lower bound** (`--strength-confidence`, default `0.80`; `0` restores the raw ratio). At the default, **5 of 5** killed mutants clear 0.75 (lower bound 0.753) and 4 of 4 do not (0.709). The artefact records `suite_strength` (the ratio), `suite_strength_lower`, `mutation.interval` and `mutation.confidence`. Consequence, said plainly: a patch whose changed lines hold fewer than five mutable operators cannot reach `MERGE` at the default — it is `INCONCLUSIVE`, because the gate cannot tell a strong suite from a lucky one on that sample.
-- **Sites are spread across the change.** One mutant per changed line before any line gets a second, files and lines in order (deterministic). Sites used to be taken in file order until the budget ran out, so a first line with six operators was the whole sample. The budget (`--mutation-max`) defaults to **12**.
+- **Every changed line is broken at least once.** With its first operator site, or — on a line no operator reaches — with a statement-level mutant: a `return` gives `None`, a condition is negated, a loop iterates nothing, any other statement is deleted. A call on its own line (a log call, say) and an `assert` are not broken; they are listed in `mutation.unmutated_lines`, with `def`/`class` headers. A statement-level mutant that survives is a blind spot too, like a branch mutant; killed, it stays out of the ratio. `mutation.mutants_needed` records how many mutants breaking every line once took. The remaining sites fill the sample, one per line before any line gets a second, files and lines in order, up to **12** mutants. Until 3.0.3 the 12 were simply the first 12 changed lines: three untested boundary changes after twelve tested lines merged without ever being broken, and `return a` → `return b` merged beside a tested line. `--mutation-max` (default **60**) is the ceiling: a change that needs more mutants than that to break every line once is **not measured**, and the reason says how far to raise it.
 
-`--mutation-max N` bounds the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
+`--mutation-max N` is the ceiling on the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
 
 ---
 
@@ -302,11 +303,10 @@ pip install adversary-gate
 ```
 
 Check what PyPI is serving before you trust it — `pip index versions
-adversary-gate`. Anything **below `2.2.0` is missing the fixes for AG-018,
-AG-021 and AG-022**, two of which are fail-opens (a patch reaching `MERGE` it
-should not). PyPI gets a release through **Actions → Publish to PyPI → Run workflow**
-(Trusted Publishing, AG-008 closed) — `2.2.0` and `2.3.0` were never uploaded,
-so PyPI jumps from `2.1.0` to `2.4.0`. The GitHub Release below always gets it. Every other route works too, and **none of
+adversary-gate`. Versions before 3.0.4 are unsupported: each lacks fail-open
+fixes (a patch reaching `MERGE` it should not) that came after it. PyPI gets a
+release when a signed tag is pushed (Trusted Publishing, AG-008 closed), and
+the GitHub Release below gets the same build. Every other route works too, and **none of
 them needs PyPI**:
 
 ```bash
@@ -331,7 +331,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.3** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.4** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -340,66 +340,51 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.3 is there; older versions lack what the CHANGELOG lists after them
-# (2.14.0 has AG-043; everything before 2.14.1 has AG-044; 2.14.1 has AG-045 and
-# AG-046; 2.14.2 has every fix and is the last MIT release)
-pip install adversary-gate==3.0.3
+# PyPI -- 3.0.4. Versions before 3.0.4 are unsupported: each lacks fixes the
+# CHANGELOG lists after it.
+pip install adversary-gate==3.0.4
 ```
 
 ```bash
-# GitHub Release -- 3.0.3: every fix in this document.
+# GitHub Release -- 3.0.4: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.3/adversary_gate-3.0.3-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.4/adversary_gate-3.0.4-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.3` has not been published yet. (There is no `v2.1.1`: that
-version was written up and never released; its fixes are in `2.2.0`.) Releases
-are published from
-**Actions → Release → Run workflow**. That workflow:
+Release for `v3.0.4` has not been published yet. A release
+takes two steps, in this order, and only the first is done by hand:
 
-1. runs the full test suite and **refuses to publish if it fails** — a release
-   only ever leaves a build whose tests passed;
-2. builds the wheel and sdist and installs the wheel into a clean interpreter;
-3. reads the version from `pyproject.toml` rather than taking it as an input,
-   so a tag disagreeing with the package metadata (the inconsistency AG-008
-   recorded) is unreachable, not merely unlikely;
-4. refuses if that tag already exists, then creates the tag and attaches the
-   artefacts in one step.
-5. moves the floating tag of the release's major line (`v3`; `v2` for the 2.x
-   line) to the new release — only forward, so
-   re-releasing an old version does not drag it back — and uploads to PyPI when
-   a `PYPI_API_TOKEN` secret exists. Without that secret it says, as a
-   warning in the run, that PyPI was **not** updated.
+1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
+   `git push origin vX.Y.Z`. The push starts **Publish to PyPI**, which builds
+   the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
+   and uploads both through Trusted Publishing, so every file carries a PyPI
+   provenance attestation. It refuses a tag whose `pyproject.toml` names
+   another version, and it reads no API token.
+2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
+   with a lightweight (unsigned) one, and refuses while PyPI lacks either
+   package. Then it runs the full test suite and **refuses to publish if it
+   fails**, builds the wheel and sdist, installs the wheel into a clean
+   interpreter, attaches them to the release, and moves the floating tag of the
+   release's major line (`v3`; `v2` for the 2.x line) — only forward, so
+   re-releasing an old version does not drag it back.
 
-To send a release that already exists to PyPI, use **Actions → Publish to PyPI
-→ Run workflow** and give it the tag (`v3.0.3`). It builds from that tag's
-tree, refuses a tag whose `pyproject.toml` names another version, and
-authenticates with `PYPI_API_TOKEN` when the secret exists, or with Trusted
-Publishing when it does not.
+**Publish to PyPI → Run workflow** with a tag finishes a run that stopped
+halfway: files already on PyPI are skipped, never replaced.
 
-It is triggered by hand rather than by a `v*` tag on purpose: the tag is made
-by the workflow's own token, and events that token produces do not start other
-workflows — so releasing does **not** fire the PyPI publisher and leave a red
-run behind every time. Pushing a `v*` tag yourself still will.
+Until 3.0.3 the Release workflow created the tag itself, with the workflow's
+token, and uploaded the core alone with an API token. Events from that token
+start no other workflow, so for 3.0.2 and 3.0.3 the PyPI publisher never ran:
+`uvx adversary-gate-mcp` kept serving 3.0.0, the core files carry no
+attestation, and those tags are not signed. Like every version before 3.0.4,
+they are unsupported.
 
 ### PyPI
 
-`2.0.1` is the version the audit was run against, and it predates every fix in
-this document — which is why PyPI serving it was a problem at all:
-
-```console
-$ pip install adversary-gate==2.0.1
-$ adversary-gate --baseline b --patch p --diff changes.diff
-error: unrecognized arguments: --diff changes.diff
-```
-
-`--diff` and `--coverage-json` did not exist yet (AG-002), and on that version
-the gate returns `decision: merge` with `diff_coverage_ratio: null` — coverage
-simply was not a question. Running it against a patch that changed only
-`calculator.cpp` (rewriting `a - b` to `a * b`) merges on the strength of a
-Python test whose only assertion is `assert True`.
+Versions before 3.0.4 are unsupported. The audit this project grew from was run
+against `2.0.1`, which predates every fix in this document: `--diff` and
+`--coverage-json` did not exist yet (AG-002).
 
 **AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
 project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
@@ -604,12 +589,9 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.3` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.4` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
-> release. `v2` follows the 2.x line, which ends at `v2.14.2`: the same fixes,
-> under MIT. `v2.14.1` lacks AG-045 and AG-046; `v2.14.0` lacks AG-043 (its default counted a run another run broke
-> as a killed mutant) and AG-044; `v2.1.0` lacks AG-018, AG-021 and AG-022; `v2.0.0` and `v2.0.1` point
-> at the audited version with the bugs. `@main` follows `main` and picks up whatever lands
+> release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
 > anything that matters, pin the full commit SHA instead
 > (`uses: Sanflow10/adversary-gate@<full-sha>`), which cannot be moved under
@@ -669,7 +651,7 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 
 Two integrations, one rule: **nothing an integration says can make the gate more lenient.**
 
-### An agent that cannot grade itself — MCP server (Hermes, Claude Code, any MCP client)
+### An agent that cannot grade itself — MCP server (Hermes, any MCP client)
 
 ```bash
 pip install "adversary-gate[mcp]"          # in an environment the agent cannot write to
@@ -747,6 +729,11 @@ Two limits that no runner setting closes, written down so nobody has to discover
 - **Code can detect that it is under test.** `if "pytest" in sys.modules:` (or a check on the environment, the call stack, the clock) lets a module behave in the test run and misbehave in production. Mutation testing does not help when the branch that matters is the one the tests never take.
 
 Both are deliberate deception, not accidents, and both are reasons `MERGE` means *"permission for a human to look"*, never *"ship it"*.
+
+Two more that the branch mutants narrow but do not close, measured on the case they were built for:
+
+- **A special case kept in data, not in syntax.** `return {0: 999}.get(x, x + 1)` has no conditional for a branch mutant to remove, and the gate never changes a literal. If no claim passes `0`, nothing the gate does reaches the `999`: next to honest, tested changes that bring the sample to five kills, it merges.
+- **A hidden branch whose body has its own line, with an operator on it.** Coverage sees that body — it counts against the ratio — and the default floor (`--coverage-floor 0.80`) tolerates up to one changed line in five that no claim executed. A body with no operator (`return 999`) is broken outright and blocks; one with an operator (`return x + 998`) is a single surviving operator mutant in the ratio, which enough honest kills elsewhere can outweigh (eleven against one, at the defaults). `--coverage-floor 1.0` refuses any changed line that never ran.
 
 ---
 

@@ -474,7 +474,7 @@ reproduzíveis:
 - **Funcionar no primeiro uso:** `uvx adversary-gate`/`pipx run`, uma Action
   que funcione com o Python e as dependências do projeto (AG-025), e um
   repositório de exemplo com o fluxo completo.
-- **Entrar no ciclo do agente, não só da CI:** o README cita Claude Code, Cursor
+- **Entrar no ciclo do agente, não só da CI:** o README cita agentes de código, Cursor
   e Codex. Expor o gate como **servidor MCP** (`verify_patch`) e como hook de
   fim de tarefa do agente permite que o agente receba o `INCONCLUSIVE` e o
   corrija *antes* de abrir o PR. É aí que está a dor do dev hoje.

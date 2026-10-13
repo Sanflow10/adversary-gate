@@ -11,26 +11,17 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
    release, e este projeto já sofreu com README dizendo uma coisa e pacote
    dizendo outra (ver [`docs/AUDITORIA_CONFRONTO_v2.0.2.md`](docs/AUDITORIA_CONFRONTO_v2.0.2.md)).
 
-Estado das tags hoje: **`v2.0.0`, `v2.0.1`, `v2.1.0`, `v2.2.0`, `v2.3.0`, `v2.4.0`, `v2.5.0`, `v2.6.0`, `v2.7.0`, `v2.8.0`, `v2.9.0`, `v2.10.0`, `v2.11.0`, `v2.12.0`, `v2.13.0`, `v2.14.0`, `v2.14.1`, `v2.14.2`, `v3.0.0`, `v3.0.1` e `v3.0.2`**, mais as
-flutuantes `v2` e `v3`. A `2.1.1` chegou a ter
-seção aqui e nunca virou tag nem Release (AG-026): o trabalho dela entrou na
-`2.2.0`, do mesmo jeito que o da `2.0.2` entrou na `2.1.0`. A `2.14.1` é
-publicada pelo workflow **Release** (*Actions → Release → Run workflow*) a
-partir do commit que a contém — se `v2.14.1` não aparece em *Releases*, o
-workflow ainda não rodou, e esta seção ainda é uma promessa.
+Versions before 3.0.4 are unsupported; their sections below are history.
 
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
 no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
 environment) e a `2.4.0` subiu por OIDC, com atestados de proveniência. A
 `2.2.0` e a `2.3.0` nunca chegaram ao PyPI: lá a sequência é `2.1.0` → `2.4.0`.
 
-Rotas de publicação até aqui: `2.0.0`, `2.0.1` e `2.1.0` subiram ao PyPI **por
-upload com API token**, não por OIDC. A partir da `2.2.0` o workflow Release
-envia ao PyPI sozinho quando o segredo `PYPI_API_TOKEN` existe, e avisa na run
-quando não existe. Hoje o PyPI tem a mesma versão que o Release; uma versão
-antiga lá continua com os achados corrigidos depois dela (a `2.14.0` tem o
-AG-043; todas antes da `2.14.1` têm o AG-044) — confira com
-`pip index versions adversary-gate`.
+From 3.0.4 a release is a signed tag pushed by hand, which publishes both
+packages through Trusted Publishing (see the README's release steps). Until
+then the routes varied: `2.0.0`, `2.0.1` and `2.1.0` went up by API token, and
+the Release workflow uploaded by token whenever `PYPI_API_TOKEN` existed.
 
 ---
 
@@ -39,6 +30,100 @@ AG-043; todas antes da `2.14.1` têm o AG-044) — confira com
 A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
+
+---
+
+## [3.0.4] — 2026-10-13
+
+From here on this file is written in English.
+
+Closes six ways to get a `MERGE` the evidence did not earn and two false
+`INCONCLUSIVE`s, found by an audit of 3.0.3, and the release route that left
+`uvx adversary-gate-mcp` on 3.0.0. Each code fix has a test that fails on
+3.0.3.
+
+### Changed
+
+- Documents and comments no longer carry local paths (`/home/...`); MCP
+  client lists read "any MCP client", and test fixtures use neutral model
+  labels.
+
+### Fixed
+
+- **A branch that shares its line with its guard is measured.** On 3.0.3, with
+  default flags, a patch that turned `return x + 1` into
+  `return 999 if x == 0 else x + 1`, next to two honest and tested refactors,
+  reached `MERGE` — 5/5 mutants killed, lower bound 0.753, diff coverage 1.0 —
+  while `value(0)` went from 1 to 999. Coverage is per line and the line ran,
+  through the `else`; the guard's only operator mutant (`==` → `!=`) sends the
+  tested input into the hidden arm, so the test killed it and the kill counted
+  as strength. The same held for `x == 0 and 999 or x + 1`, for the ternary
+  split over two lines, and for `if x == 0: return 999` with the body on the
+  header's line. A conditional expression is now also replaced by each of its
+  arms, an `and`/`or` loses its last operand, and an `if` or `case` whose body
+  sits on the header's line is switched off (`kind: "branch"`, first on its
+  line). A survivor means a branch on a changed line that no claim takes: it is
+  listed in `mutation.blind_spots`, `suite_strength_unverified` is `true` and
+  the decision is INCONCLUSIVE, whatever the other mutants scored (the ratio
+  stays what the operator mutants measured); `next_steps` names the line.
+  Killed, these mutants stay out of the ratio, so they cannot pad it. Two shapes stay open and are written down in the README:
+  a special case kept in data (`{0: 999}.get(x, x + 1)`), and a body on its own
+  line with an operator on it, inside the coverage floor's tolerance and
+  outnumbered by honest kills. Tests: `test_hidden_branches.py`;
+  each fails on 3.0.3.
+- **Every changed line is broken at least once.** The 12 mutants were the
+  first 12 changed lines in file order, and nothing said which lines were left
+  out: twelve whitespace-only, tested changes followed by three untested
+  boundary changes (`>=` → `>`) merged at 12/12. A line no operator reaches
+  was never broken either: `return a` → `return b` merged beside a tested
+  line, with `fix_proven`. Now each changed line gets its first operator site
+  or a statement-level mutant (a call on its own line and an `assert` are
+  listed in `mutation.unmutated_lines` instead), the sample is filled to 12,
+  and `--mutation-max` (default 60, was 12) is a ceiling: a change that needs
+  more to break every line once is not measured, and the reason says how far
+  to raise it (`mutation.mutants_needed`). A statement-level survivor is a
+  blind spot too, like a branch one.
+- **A rewritten claim test meets the mutants as it was judged.** The verdict
+  read a test the patch rewrote from the baseline's copy, but the mutants ran
+  the patch's: asserts the patch added to `test_total` killed 6/6 while the
+  baseline's copy called none of the changed functions -> `MERGE`. Claims
+  judged with the baseline's copy now run in the oracle tree (the patch's code,
+  the baseline's tests), the rest in the patch's tree; a mutant is killed when
+  either side fails.
+- **A changed file that is not UTF-8 is not skipped.** A
+  `# -*- coding: latin-1 -*-` module changing `>=` to `>` was never read by the
+  mutation engine, and the other files' 6/6 stood for the patch -> `MERGE`. The
+  strength is now not measured, and the reason names the file.
+- **The canary breaks a piece of the changed line, too.** It only appended a
+  comment, so a new test asserting `"return a + b * a - b + a * b" in source`
+  passed it and "killed" every mutant -> `MERGE` with `fix_proven`. The copy
+  now also puts a space after each token a mutant would swap. A claim that
+  normalizes the text before comparing can still pass; README says so.
+- **The canary's probe no longer shows in `locals()`.** 3.0.1's
+  `__adversary_probe__ = 0` stayed bound, so an honest test of
+  `return locals()` failed on the copy and the patch was INCONCLUSIVE as
+  "reading the code". The probe is deleted on the same line.
+- **The coverage report reads the project's config again.** 3.0.3 reported
+  through the Action's rcfile (or a report-only one in
+  `prepare_evidence.sh`), which replaces the project's config: with
+  `[tool.coverage.run] data_file = "cov/data.db"` the run wrote one file and
+  the report looked for another, "No data to report", INCONCLUSIVE. The
+  default commands use `coverage json --ignore-errors`; the discover path,
+  whose run also uses the Action's rcfile, is unchanged.
+- **One route to PyPI, from a signed tag.** 3.0.2 and 3.0.3 were released by
+  the Release workflow, which created the tag itself with the workflow token
+  and uploaded the core alone with an API token. Events from that token start
+  no other workflow, so Publish to PyPI — the only workflow that builds the
+  MCP package — never ran: `uvx adversary-gate-mcp` and the MCP registry kept
+  serving 3.0.0, pinned to the core 3.0.0 and missing every fix of 3.0.1. The
+  core files of 3.0.1–3.0.3 carry no provenance attestation, and the tags
+  `v3.0.2` and `v3.0.3` are not signed. Now a person pushes a signed tag, the
+  push publishes both packages through Trusted Publishing, and the Release
+  workflow refuses to run without that annotated tag or while PyPI lacks
+  either package; neither workflow reads an API token, and Publish to PyPI
+  runs the suite before it builds. SECURITY.md states the
+  attestation gap. Tests: `TestOneRouteToPyPI` in
+  `test_release_consistency.py`; five of its six fail on 3.0.3.
 
 ---
 
@@ -495,7 +580,7 @@ uvx adversary-gate-mcp
 
 ## [2.8.0] — 2026-10-04
 
-Integrações com agentes: o gate como servidor MCP (Hermes, Claude Code) e
+Integrações com agentes: o gate como servidor MCP (Hermes, qualquer cliente MCP) e
 triagem de risco com o Jev (TypeSafe AI). Nenhuma das duas pode afrouxar uma
 decisão.
 

@@ -59,7 +59,7 @@ import tempfile
 import time
 import tokenize
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from statistics import NormalDist
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -132,7 +132,15 @@ DEFAULT_CONFIDENCE = 0.80
 
 #: Enough mutants for the default confidence to be reachable with room to
 #: spare (5 is the minimum at 80 %); was 6, which made one survivor fatal.
-DEFAULT_MAX_MUTANTS = 12
+#: The sample is filled up to this many when the change has sites to spare.
+MIN_SAMPLE = 12
+
+#: The ceiling. Every changed line is broken at least once, whatever the
+#: sample: until 3.0.3 the 12 mutants were simply the first 12 changed lines
+#: in file order, and three untested boundary changes after them merged. A
+#: change that needs more than this to be broken once per line is not
+#: measured, and the reason says how far to raise ``--mutation-max``.
+DEFAULT_MAX_MUTANTS = 60
 
 
 def wilson_interval(killed: int, total: int, confidence: float = DEFAULT_CONFIDENCE) -> Tuple[float, float]:
@@ -167,10 +175,13 @@ class SuiteStrength:
     lower: float = 0.0
     upper: float = 0.0
     confidence: float = DEFAULT_CONFIDENCE
+    #: Branch or statement-level mutants that survived: parts of the change no
+    #: claim checks. The ratio stays what it measured; it is not strong.
+    blind_spots: int = 0
 
     @property
     def is_strong(self) -> bool:
-        return self.lower >= 0.75 if self.is_measured else False
+        return self.lower >= 0.75 and not self.blind_spots if self.is_measured else False
 
 
 def calculate_mutation_score(
@@ -493,9 +504,11 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
 _CANARY = "  # adversary-gate canary"
 #: The statement the canary adds after (or before) code the patch wrote. Assigning
 #: it changes the tree and the bytecode of the function that holds it, and nothing
-#: the code computes. The name ends in ``__``, so a class does not mangle it.
+#: the code computes. The name ends in ``__``, so a class does not mangle it. It is
+#: deleted on the same line: left bound, it showed up in ``locals()`` and in a
+#: class's ``vars()``, and an honest test of either failed on the copy (3.0.1).
 _PROBE = "__adversary_probe__"
-_PROBE_LINE = f"{_PROBE} = 0"
+_PROBE_LINE = f"{_PROBE} = 0; del {_PROBE}"
 _SIMPLE = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Return, ast.Raise,
            ast.Assert, ast.Pass, ast.Delete, ast.Import, ast.ImportFrom, ast.Global,
            ast.Nonlocal, ast.Break, ast.Continue)
@@ -506,7 +519,7 @@ class CanaryUnavailable(Exception):
 
 
 def _is_probe(node: ast.AST) -> bool:
-    return (isinstance(node, ast.Assign) and len(node.targets) == 1
+    return (isinstance(node, (ast.Assign, ast.Delete)) and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name) and node.targets[0].id == _PROBE)
 
 
@@ -655,20 +668,42 @@ def _probe_site(tree: ast.AST, lines: List[str], row: int, parents: dict, head: 
         return _before(node, row, lines, parents, head)
 
 
+def _fstring_spans(source: str) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    """Outermost f-strings as ``(start, end)`` positions; Python 3.12+ tokenizes inside them."""
+    start_type = getattr(tokenize, "FSTRING_START", None)
+    if start_type is None:
+        return []  # one STRING token each: no operator inside is a token of its own
+    spans, stack = [], []
+    for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+        if tok.type == start_type:
+            stack.append(tok.start)
+        elif tok.type == tokenize.FSTRING_END and stack:
+            begin = stack.pop()
+            if not stack:
+                spans.append((begin, tok.end))
+    return spans
+
+
 def canary_source(source: str, edited: set) -> Optional[str]:
     """``source`` with a neutral change after every logical line that holds an edited row.
 
-    Two kinds of change, both invisible to what the code computes:
+    Three kinds of change, all invisible to what the code computes:
 
     - a comment at the end of each such logical line, which changes the text of
       the code (a claim that hashes the file or reads it with
       ``inspect.getsource`` fails on it);
-    - an assignment to ``__adversary_probe__`` after each statement the patch
-      wrote (or at the start of the block that follows a header), which changes
-      the tree and the bytecode (a claim that hashes ``ast.dump`` or
-      ``__code__.co_code`` fails on it). Comments alone do not change those.
+    - a space after each token on an edited row that a mutant would swap, which
+      changes the text *inside* the line (a claim that looks for a piece of it,
+      like ``"a + b" in source``, fails on it -- the comment leaves that intact);
+    - an assignment to ``__adversary_probe__``, deleted on the same line, after
+      each statement the patch wrote (or at the start of the block that follows
+      a header), which changes the tree and the bytecode (a claim that hashes
+      ``ast.dump`` or ``__code__.co_code`` fails on it). Text alone does not.
 
     A claim that fails on this copy reads the code, not what it does (AG-046).
+    One that normalizes the text before comparing, or reads one expression of
+    the tree, can still pass: the copy narrows what a reading claim can do, it
+    does not prove a claim is not one.
     The copy is returned only when removing the probes gives back the patch's
     own tree, so it differs from the patch by the probes and nothing else.
     ``None`` when the patch wrote no code line at all: nothing to probe.
@@ -711,9 +746,19 @@ def canary_source(source: str, edited: set) -> Optional[str]:
     inserts = []
     for side, at in sites:
         inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _PROBE_LINE))
-    for row, col in sorted(cuts, reverse=True):
-        text = lines[row - 1]
-        lines[row - 1] = text[:col] + _CANARY + text[col:]
+    # A claim can read a *piece* of a changed line, too: every mutant swaps a
+    # token inside it, so a substring that spans one fails on every mutant and
+    # scores 1.0 while checking nothing -- the comment at the end of the line
+    # left that substring intact (3.0.3). A space after each token a mutant
+    # would swap breaks it, and changes nothing the code computes. Inside an
+    # f-string a space could change what ``{x=}`` prints: those are left alone.
+    spans = _fstring_spans(source)
+    edits = [(row, col, _CANARY) for row, col in cuts]
+    edits += [(site[1][0], site[1][1], " ") for site in _mutants_in(source, 10_000)
+              if site[0][0] in edited and not any(a <= site[0] < b for a, b in spans)]
+    for row, col, text in sorted(edits, key=lambda edit: (edit[0], edit[1]), reverse=True):
+        line = lines[row - 1]
+        lines[row - 1] = line[:col] + text + line[col:]
     for index, text in sorted(inserts, reverse=True):
         lines.insert(index, text)
     result = "\n".join(lines)
@@ -822,8 +867,9 @@ _COMPOUND = (ast.If, ast.While, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, 
 _INERT = (ast.Pass, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)
 
 
-def _statement_sites(source: str, edited: set, operator_rows: set) -> Tuple[Dict[int, List[Mutation]], List[int]]:
-    """Census support: a site for every changed statement that has no operator site.
+def _statement_sites(source: str, edited: set, operator_rows: set,
+                     skip: Tuple[type, ...] = ()) -> Tuple[Dict[int, List[Mutation]], List[int]]:
+    """A site for every changed statement that has no operator site.
 
     Returns ``(sites by line, uncovered lines)``. A changed statement -- the
     lines it spans, or a compound statement's header -- needs at least one
@@ -835,11 +881,24 @@ def _statement_sites(source: str, edited: set, operator_rows: set) -> Tuple[Dict
     such mutation: their lines come back as *uncovered*, and a census that
     leaves a changed line uncovered is not one. Docstrings, ``pass`` and
     imports carry nothing to break and need no site.
+
+    Outside a census the same sites break the lines no operator reaches: on
+    3.0.3 ``return a`` -> ``return b`` merged beside a tested line, unmutated.
+    ``skip`` leaves out the statements whose deletion no test should be asked
+    to notice -- a call on its own line, such as a log call, and an ``assert``;
+    their lines come back as uncovered. Columns are characters (``ast`` counts
+    UTF-8 bytes), so a line with an accent is broken where it should be.
     """
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
         return {}, sorted(edited)
+    lines = source.split("\n")
+
+    def where(node: ast.AST) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        return ((node.lineno, _char_col(lines, node.lineno, node.col_offset)),
+                (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset)))
+
     sites: Dict[int, List[Mutation]] = {}
     uncovered: List[int] = []
     for node in ast.walk(tree):
@@ -855,27 +914,110 @@ def _statement_sites(source: str, edited: set, operator_rows: set) -> Tuple[Dict
             span = set(range(node.lineno, (node.end_lineno or node.lineno) + 1))
         if not (span & edited) or (span & operator_rows):
             continue
+        if isinstance(node, skip):
+            uncovered.extend(sorted(span & edited))
+            continue
         mutation: Optional[Mutation] = None
         if isinstance(node, (ast.If, ast.While)):
             text = ast.get_source_segment(source, node.test)
             if text is not None:
-                mutation = ((node.test.lineno, node.test.col_offset),
-                            (node.test.end_lineno, node.test.end_col_offset), f"not ({text})")
+                mutation = (*where(node.test), f"not ({text})")
         elif isinstance(node, (ast.For, ast.AsyncFor)):
-            mutation = ((node.iter.lineno, node.iter.col_offset),
-                        (node.iter.end_lineno, node.iter.end_col_offset), "()")
+            mutation = (*where(node.iter), "()")
         elif isinstance(node, ast.Return) and node.value is not None and not (
             isinstance(node.value, ast.Constant) and node.value.value is None
         ):
-            mutation = ((node.value.lineno, node.value.col_offset),
-                        (node.value.end_lineno, node.value.end_col_offset), "None")
+            mutation = (*where(node.value), "None")
         elif not isinstance(node, _COMPOUND) and not isinstance(node, ast.Return):
-            mutation = ((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset), "pass")
+            mutation = (*where(node), "pass")
         if mutation is None:
             uncovered.extend(sorted(span & edited))
         else:
             sites.setdefault(mutation[0][0], []).append(mutation)
     return sites, sorted(set(uncovered))
+
+
+def _char_col(lines: List[str], row: int, byte_col: int) -> int:
+    """``ast`` columns count UTF-8 bytes; :func:`_apply` splices characters."""
+    return len(lines[row - 1].encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+
+
+def _branch_sites(source: str, edited: set) -> Dict[int, List[Mutation]]:
+    """Sites that take away a branch line coverage cannot see.
+
+    Coverage is measured per line, and a line counts as run when any part of
+    it ran. A conditional expression, an ``and``/``or`` operand after a
+    short-circuit, and an ``if`` or ``case`` whose body sits on the header's
+    line can all carry a branch no test takes while the line reads as
+    covered -- and the operator mutants of the guard send the tested input
+    *into* that branch, so the tests kill them and the kills count as
+    strength. On 3.0.3, ``return 999 if x == 0 else x + 1`` next to two honest
+    refactors merged at 5/5 with ``value(0)`` changed from 1 to 999.
+
+    These sites remove the branch the tests may not take: a conditional
+    expression is replaced by each of its arms, an ``and``/``or`` loses its
+    last operand, and a one-line ``if`` or ``case`` is switched off. Each
+    survives exactly when no claim takes that branch. An ``if`` whose body has
+    a line of its own needs none: coverage already sees the body. Inner
+    constructs come first on their line -- in ``x == 0 and 999 or x + 1`` it
+    is the inner ``and`` that hides the 999 -- and a site whose mutant would
+    not parse is dropped.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return {}
+    lines = source.split("\n")
+    found: List[Tuple[int, Mutation]] = []
+
+    def where(node: ast.AST) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        return ((node.lineno, _char_col(lines, node.lineno, node.col_offset)),
+                (node.end_lineno, _char_col(lines, node.end_lineno, node.end_col_offset)))
+
+    def text(first: ast.AST, last: ast.AST) -> str:
+        (row, col), _ = where(first)
+        _, (end_row, end_col) = where(last)
+        if row == end_row:
+            return lines[row - 1][col:end_col]
+        return "\n".join([lines[row - 1][col:], *lines[row:end_row - 1], lines[end_row - 1][:end_col]])
+
+    def add(depth: int, start: Tuple[int, int], end: Tuple[int, int], replacement: str) -> None:
+        try:
+            ast.parse("\n".join(_apply(lines, start, end, replacement)))
+        except (SyntaxError, ValueError):
+            return
+        found.append((depth, (start, end, replacement)))
+
+    def visit(node: ast.AST, depth: int) -> None:
+        if isinstance(node, (ast.IfExp, ast.BoolOp)) and set(
+            range(node.lineno, node.end_lineno + 1)
+        ) & edited:
+            start, end = where(node)
+            if isinstance(node, ast.IfExp):
+                for kept in (node.orelse, node.body):
+                    add(depth, start, end, f"({text(kept, kept)})")
+            else:
+                add(depth, start, end, f"({text(node.values[0], node.values[-2])})")
+        elif isinstance(node, ast.If) and node.body and node.body[0].lineno == node.test.end_lineno:
+            if {node.lineno, node.test.end_lineno} & edited:
+                add(depth, *where(node.test), "False")
+        elif isinstance(node, ast.match_case) and node.body:
+            header_end = (node.guard or node.pattern).end_lineno
+            if node.body[0].lineno == header_end and {node.pattern.lineno, header_end} & edited:
+                if node.guard is not None:
+                    add(depth, *where(node.guard), "False")
+                else:
+                    _, end = where(node.pattern)
+                    add(depth, end, end, " if False")
+        for child in ast.iter_child_nodes(node):
+            visit(child, depth + 1)
+
+    visit(tree, 0)
+    sites: Dict[int, List[Mutation]] = {}
+    # Innermost first on each line; ties keep source order (the sort is stable).
+    for _depth, site in sorted(found, key=lambda item: (item[1][0][0], -item[0])):
+        sites.setdefault(site[0][0], []).append(site)
+    return sites
 
 
 def _spread(by_line: Mapping[Tuple[str, int], List[Mutation]], limit: int) -> List[Tuple[str, Mutation]]:
@@ -898,6 +1040,34 @@ def _spread(by_line: Mapping[Tuple[str, int], List[Mutation]], limit: int) -> Li
                     break
         depth += 1
     return plan
+
+
+def _plan(by_line: Mapping[Tuple[str, int], List[Mutation]], required: set,
+          limit: int) -> Tuple[List[Tuple[str, Mutation]], int]:
+    """``(plan, needed)``: every changed line broken once, then a sample.
+
+    ``needed`` is what breaking every line once takes: each site in
+    ``required`` (the branch sites, ``(rel, site)``) and the first other site
+    of each line. Until 3.0.3 the plan was :func:`_spread` alone, capped at 12:
+    on a change with more lines than that, the lines after the twelfth (in
+    file order) were never broken, and nothing said so -- an attacker chooses
+    that order. When ``needed`` passes ``limit`` the plan is empty and nothing
+    runs: the change cannot be measured under that ceiling. Otherwise the
+    remaining sites fill a round robin up to ``MIN_SAMPLE`` mutants in all.
+    """
+    first: List[Tuple[str, Mutation]] = []
+    rest: Dict[Tuple[str, int], List[Mutation]] = {}
+    for (rel, line), sites in sorted(by_line.items()):
+        first += [(rel, site) for site in sites if (rel, site) in required]
+        others = [site for site in sites if (rel, site) not in required]
+        if others:
+            first.append((rel, others[0]))
+            if others[1:]:
+                rest[(rel, line)] = others[1:]
+    needed = len(first)
+    if needed > limit:
+        return [], needed
+    return first + _spread(rest, min(limit, max(MIN_SAMPLE, needed)) - needed), needed
 
 
 def _apply(lines: List[str], start: Tuple[int, int], end: Tuple[int, int], repl: str) -> List[str]:
@@ -935,6 +1105,8 @@ def measure_mutation_score(
     census_min: int = 0,
     alongside: Optional[Future] = None,
     parallel: int = 1,
+    oracle_dir: Optional[Path] = None,
+    oracle_targets: Optional[Sequence[str]] = None,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -957,6 +1129,15 @@ def measure_mutation_score(
     ``census_min`` of them, the score is the exact ratio, not a Wilson lower
     bound: an interval bounds a sample, and this was not one. Line-level
     sites (``_statement_sites``) are generated only then.
+
+    ``oracle_targets`` are claims the verdict judged with the baseline's copy of
+    their test file, because the patch rewrote it; they run against every
+    mutant in ``oracle_dir`` -- the patch's code with the baseline's tests put
+    back -- and the other ``targets`` in the patch's own tree. Until 3.0.3 every
+    claim ran in the patch's tree, so the asserts a patch added to a test it
+    rewrote killed the mutants while the verdict never ran them: 6/6 -> MERGE
+    for a claim whose baseline copy called none of the changed functions. With
+    an oracle tree the mutants run one at a time.
 
     Returns the score plus a detail dict for the evidence artefact, because a
     strength number with no survivor list cannot be audited: the previous
@@ -998,6 +1179,9 @@ def measure_mutation_score(
         "source_sensitive_claims": False,
         "canary": {"files": [], "exit_code": None},
         "added_files": {},
+        "mutants_needed": 0,
+        "unmutated_lines": [],
+        "blind_spots": [],
     }
     changed = list(detail["changed_files"])  # type: ignore[arg-type]
     foreign = list(detail["foreign_changed_files"])  # type: ignore[arg-type]
@@ -1038,18 +1222,32 @@ def measure_mutation_score(
     edited_rows: Dict[str, set] = {}
     by_line: Dict[Tuple[str, int], List[Mutation]] = {}
     uncovered_lines: List[str] = []
-    #: Statement-level sites (census only). They prove a census covers the
-    #: change; they never count toward a sample -- deleting a statement is an
-    #: easy kill, and counted it diluted the one operator mutant that looked
-    #: like the real bug (more-itertools d71c4ad: 4/5 -> MERGE on a real bug).
+    #: Statement-level sites. They break the lines no operator reaches, and
+    #: prove a census covers the change; they never count toward a sample --
+    #: deleting a statement is an easy kill, and counted it diluted the one
+    #: operator mutant that looked like the real bug (more-itertools d71c4ad:
+    #: 4/5 -> MERGE on a real bug). One that survives is a veto instead.
     coarse: set = set()
+    #: Branch sites (:func:`_branch_sites`): real mutants, labelled apart.
+    branchy: set = set()
+    #: Changed files that are not UTF-8 on either side. They were skipped in
+    #: silence, so their change was never mutated and the score of the other
+    #: files stood for the whole patch: a ``# -*- coding: latin-1 -*-`` module
+    #: changing ``>=`` to ``>`` merged next to a tested file (3.0.3).
+    undecodable: List[str] = []
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue  # deleted by the patch (or unreadable): nothing left to mutate
+        except UnicodeDecodeError:
+            undecodable.append(rel)
+            continue
+        except OSError:
+            continue  # deleted by the patch: nothing left to mutate
         try:
             before = (Path(baseline_dir) / rel).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            undecodable.append(rel)
+            continue
         except FileNotFoundError:
             # Added by the patch. Mutated against the baseline file it was
             # moved or copied from, or in every line when it resembles none.
@@ -1073,15 +1271,26 @@ def measure_mutation_score(
             if site[0][0] in edited:
                 by_line.setdefault((rel, site[0][0]), []).append(site)
                 operator_rows.add(site[0][0])
-        if census_min > 0:
-            extra, missing = _statement_sites(source, edited, operator_rows)
-            for row, sites in extra.items():
-                by_line.setdefault((rel, row), []).extend(sites)
-                coarse.update((rel, site) for site in sites)
-            uncovered_lines.extend(f"{rel}:{n}" for n in missing)
+        # A branch line coverage cannot see goes first on its line, and every
+        # branch site runs (see :func:`_plan`): nothing else can tell (3.0.3).
+        for row, sites in _branch_sites(source, edited).items():
+            by_line[(rel, row)] = sites + by_line.get((rel, row), [])
+            branchy.update((rel, site) for site in sites)
+            operator_rows.add(row)
+        # Every changed line gets broken: a line no operator reaches gets a
+        # statement-level site. Outside a census, a call on its own line and an
+        # ``assert`` are left out (see :func:`_statement_sites`).
+        extra, missing = _statement_sites(source, edited, operator_rows,
+                                          skip=() if census_min > 0 else (ast.Expr, ast.Assert))
+        for row, sites in extra.items():
+            by_line.setdefault((rel, row), []).extend(sites)
+            coarse.update((rel, site) for site in sites)
+        uncovered_lines.extend(f"{rel}:{n}" for n in missing)
     total_sites = sum(len(v) for v in by_line.values())
-    plan = _spread(by_line, max_mutants)
+    plan, needed = _plan(by_line, branchy, max_mutants)
     detail["added_files"] = pairing
+    detail["mutants_needed"] = needed
+    detail["unmutated_lines"] = sorted(uncovered_lines)
     # Fail closed: an added module that could not be paired with the baseline
     # was never mutated, so its code is unjudged. Scoring the rest of the patch
     # would present that number as the strength of the whole patch (a mixed
@@ -1094,6 +1303,25 @@ def measure_mutation_score(
             SuiteStrength(0, 0, 0.0, is_measured=False),
             f"added file(s) too large to pair with the baseline, so their code was "
             f"never mutated and nothing about the patch can be measured: {shown}{more}",
+        )
+    if undecodable:
+        shown = ", ".join(sorted(undecodable)[:5])
+        more = f" (+{len(undecodable) - 5} more)" if len(undecodable) > 5 else ""
+        return finish(
+            SuiteStrength(0, 0, 0.0, is_measured=False),
+            f"changed file(s) that are not UTF-8 cannot be mutated, so their change was never "
+            f"broken and nothing about the patch can be measured: {shown}{more}",
+        )
+    if needed > max_mutants:
+        detail["census"] = {"exact": False, "sites": total_sites, "minimum": census_min,
+                            "why_not": (f"budget cut the sample: {needed} mutants break every changed "
+                                        f"line once, --mutation-max is {max_mutants}")
+                            if census_min > 0 else "off (--census-min-mutants 0)"}
+        return finish(
+            SuiteStrength(0, 0, 0.0, is_measured=False),
+            f"breaking every changed line once takes {needed} mutants, more than "
+            f"--mutation-max ({max_mutants}): raise it to at least {needed}; under the "
+            "ceiling, the lines past it would go unjudged",
         )
 
     if not plan:
@@ -1112,8 +1340,24 @@ def measure_mutation_score(
     with tempfile.TemporaryDirectory(prefix="adversary-mutant-") as tmp:
         work = Path(tmp) / "repo"
         shutil.copytree(patch_dir, work, ignore=_IGNORE)
+        twin: Optional[Path] = None
+        if oracle_dir is not None and oracle_targets:
+            twin = Path(tmp) / "oracle"
+            shutil.copytree(oracle_dir, twin, ignore=_IGNORE)
 
         def _run(directory: Path = work):
+            if twin is None:
+                return _run_in(directory, targets)
+            # Each claim against the copy of its test file that judged it: a
+            # failure on either side is the mutant noticed.
+            runs = [_run_in(twin, list(oracle_targets or ()))]
+            if targets:
+                runs.insert(0, _run_in(directory, targets))
+            failed = [r for r in runs if r.exit_code == PYTEST_TESTS_FAILED]
+            odd = [r for r in runs if r.exit_code != PYTEST_OK]
+            return (failed or odd or runs)[0]
+
+        def _run_in(directory: Path, targets: Optional[Sequence[str]]):
             return run_test(
                 directory, test_path, test_id,
                 timeout_seconds=timeout_seconds, cpu_seconds=cpu_seconds,
@@ -1190,9 +1434,11 @@ def measure_mutation_score(
                 canary_files[rel] = neutral
         # The unmutated claims passed (checked above), so a claim that fails on
         # the neutral copy is reading the code, not running it.
+        trees = [work] if twin is None else [work, twin]
         if canary_files:
             for rel, neutral in canary_files.items():
-                (work / rel).write_text(neutral, encoding="utf-8")
+                for tree in trees:
+                    (tree / rel).write_text(neutral, encoding="utf-8")
             try:
                 probe = _run()
                 if probe.exit_code != PYTEST_OK:
@@ -1201,7 +1447,8 @@ def measure_mutation_score(
                     probe = _run()
             finally:
                 for rel in canary_files:
-                    (work / rel).write_text(originals[rel], encoding="utf-8")
+                    for tree in trees:
+                        (tree / rel).write_text(originals[rel], encoding="utf-8")
             detail["canary"] = {"files": sorted(canary_files), "exit_code": probe.exit_code}
             if probe.exit_code != PYTEST_OK:
                 sensitive = probe.exit_code == PYTEST_TESTS_FAILED
@@ -1235,7 +1482,8 @@ def measure_mutation_score(
                 "file": rel,
                 "line": start[0],
                 "replaces": replacement or "<deleted>",
-                "kind": "statement" if (rel, (start, end, replacement)) in coarse else "operator",
+                "kind": ("statement" if (rel, (start, end, replacement)) in coarse
+                         else "branch" if (rel, (start, end, replacement)) in branchy else "operator"),
             }
             detail["mutants"].append(entry)  # type: ignore[union-attr]
             if mutant_source == original:
@@ -1246,19 +1494,22 @@ def measure_mutation_score(
         def _attempt(directory: Path, job) -> Any:
             """One run of one mutant in ``directory``: the outcome, or the exception."""
             _entry, rel, mutant_source, original = job
-            target = directory / rel
+            # The oracle twin breaks with the tree it pairs with (one at a time).
+            targets_ = [directory / rel] + ([twin / rel] if twin is not None else [])
             try:
-                target.write_text(mutant_source, encoding="utf-8")
+                for target in targets_:
+                    target.write_text(mutant_source, encoding="utf-8")
                 return _run(directory)
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
                 return exc
             finally:
-                if target.exists():
-                    target.write_text(original, encoding="utf-8")
+                for target in targets_:
+                    if target.exists():
+                        target.write_text(original, encoding="utf-8")
 
         # (outcome, contended): contended runs had a neighbour.
         outcomes: List[Tuple[Any, bool]] = []
-        workers = max(1, min(parallel, len(jobs)))
+        workers = 1 if twin is not None else max(1, min(parallel, len(jobs)))
         if workers == 1:
             outcomes = [(_attempt(work, job), False) for job in jobs]
         else:
@@ -1345,6 +1596,27 @@ def measure_mutation_score(
     detail["census"] = {"exact": exact, "sites": total_sites, "minimum": census_min,
                         **({} if exact else {"why_not": why_not})}
     result = calculate_mutation_score(counted, killed, 0.0 if exact else confidence)
+    # A branch or statement-level mutant that survived is not sampling noise:
+    # it took a branch away from a line the patch wrote, or broke a line no
+    # operator reaches, and no claim noticed -- while line coverage counted the
+    # line as run. No number of other kills speaks for it (3.0.3: 5/5 -> MERGE
+    # with ``value(0)`` changed; ``return a`` -> ``return b`` merged beside a
+    # tested line). The ratio stays what the operator mutants measured -- these
+    # never enter it, so they cannot pad it -- and it is not strong.
+    hidden = [m for m in entries if m.get("kind") in ("branch", "statement")  # type: ignore[union-attr]
+              and m.get("result") == "survived"]
+    if hidden:
+        detail["blind_spots"] = [f"{m['file']}:{m['line']} -> {m['replaces']}" for m in hidden]
+        shown = ", ".join(detail["blind_spots"][:5])  # type: ignore[index]
+        more = f" (+{len(hidden) - 5} more)" if len(hidden) > 5 else ""
+        branch = any(m.get("kind") == "branch" for m in hidden)
+        return finish(
+            replace(result, blind_spots=len(hidden)),
+            ("a branch on a line the patch wrote is taken by no claim" if branch else
+             "a line the patch wrote is checked by no claim")
+            + f": breaking it changed nothing ({shown}{more}). Line coverage counts that "
+            "line as run, so no other mutant speaks for it",
+        )
     if result.is_measured:
         note = ""
         if foreign:

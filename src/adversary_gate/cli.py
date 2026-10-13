@@ -763,7 +763,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAX_MUTANTS,
         metavar="N",
-        help="max mutants to execute when measuring suite strength (0 disables the measurement)",
+        help="ceiling on the mutants run to measure suite strength (default %(default)s). Every "
+        "changed line is broken at least once, and the sample is filled up to 12; a change "
+        "that needs more than N mutants to break every line once is not measured. 0 "
+        "disables the measurement",
     )
     parser.add_argument(
         "--full-suite-path",
@@ -1215,11 +1218,23 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # how many mutants we were allowed.
                 strength_unverified = True
         else:
+            # Each claim's mutants run against the copy of its test file that
+            # judged it: a claim the verdict read from the baseline (the patch
+            # rewrote its file) runs in the oracle tree, not in the patch's.
+            node = lambda c: f"{c.test_path}::{c.test_id}" if c.test_id else c.test_path  # noqa: E731
+            by_baseline = sorted({node(v.claim) for v in verdicts if v.oracle == "baseline"})
+            oracle_scratch = (tempfile.TemporaryDirectory(prefix="adversary-mutant-oracle-")
+                              if by_baseline else None)
+            if oracle_scratch is not None:
+                background.append(oracle_scratch)
             strength_obj, mutation_detail = measure_mutation_score(
                 Path(args.baseline),
                 Path(args.patch),
                 test_files[0],
                 test_id="",
+                oracle_dir=(transplant_tree(Path(args.baseline), Path(args.patch), Path(oracle_scratch.name))
+                            if oracle_scratch is not None else None),
+                oracle_targets=by_baseline,
                 max_mutants=args.mutation_max,
                 confidence=args.strength_confidence,
                 changed_paths=changed_paths,
@@ -1229,10 +1244,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # killed, and a 25 s file under the per-test limits made every
                 # mutant stillborn. Fewer tests per mutant can only lower the
                 # score -- the fail-closed direction.
-                targets=sorted({
-                    f"{claim.test_path}::{claim.test_id}" if claim.test_id else claim.test_path
-                    for claim in claims
-                }),
+                targets=sorted({node(claim) for claim in claims} - set(by_baseline)),
                 run_kwargs=run_options,
                 census_min=max(0, args.census_min_mutants),
                 alongside=suite_future,
@@ -1262,6 +1274,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     # it modified alone (AG-018): a deleted file has no lines
                     # left to mutate, so it never lowered the one number that
                     # authorised the decision and rode underneath it instead.
+                    strength_unverified = True
+                elif mutation_detail.get("blind_spots"):
+                    # A branch or a line no claim checks (see strength.py): the
+                    # ratio may clear the floor, the change as a whole does not.
                     strength_unverified = True
                 elif not strength_obj.is_measured and mutation_detail.get("changed_files"):
                     # There was code to judge, every claim executed and came

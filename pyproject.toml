@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adversary-gate"
-version = "3.0.3"
+version = "3.0.4"
 description = "Evidence-based verification gate for AI coding agents (fail-closed)"
 readme = "README.md"
 authors = [
@@ -23,7 +23,7 @@ Repository = "https://github.com/Sanflow10/adversary-gate.git"
 Issues = "https://github.com/Sanflow10/adversary-gate/issues"
 
 [project.optional-dependencies]
-# The MCP server for coding agents (Hermes, Claude Code, ...). coverage is what
+# The MCP server for coding agents (Hermes, any MCP client). coverage is what
 # lets it derive the evidence from a git working tree on its own. 1.14 is the
 # oldest SDK measured to register both tools (1.9.4, 1.12 and 1.13 fail in tool()).
 mcp = ["mcp>=1.14", "coverage>=7"]
