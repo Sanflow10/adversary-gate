@@ -31,6 +31,17 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Added
+
+- **MCP: a pinned baseline can be made mandatory.** Unpinned, `verify_repo`
+  judged against the `base_ref` the agent passed and only labelled the answer
+  `"baseline_chosen_by": "agent"`, and whoever picks the baseline picks the
+  oracle. With `ADVERSARY_GATE_REQUIRE_PINNED_BASE=1` and no
+  `ADVERSARY_GATE_BASE_REF`, it answers `inconclusive` and runs nothing;
+  `gate_policy` reports `baseline_pin_required` and stops listing `base_ref`
+  among the agent's controls. Off by default: a server that relies on
+  `base_ref` keeps working. Tests: three in `TestVerifyRepoTool`.
+
 ---
 
 ## [3.0.6] — 2026-10-14
