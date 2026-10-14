@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from adversary_gate.verifiers.coverage import validate_diff
-from adversary_gate.verifiers.testpaths import is_test_path
+from adversary_gate.verifiers.testpaths import is_test_rel, production_imported_tests
 
 #: Directories that never hold the tests under judgement.
 _SKIP_DIRS = frozenset({
@@ -53,12 +53,13 @@ class NoTestContexts(ValueError):
 
 def _test_files(root: Path) -> List[str]:
     found: List[str] = []
+    disguised = production_imported_tests(root)
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root)
         if any(part in _SKIP_DIRS or part.endswith(".egg-info") for part in rel.parts[:-1]):
             continue
         posix = rel.as_posix()
-        if path.is_file() and is_test_path(posix):
+        if path.is_file() and is_test_rel(posix, disguised):
             found.append(posix)
     return found
 
@@ -233,7 +234,9 @@ def discover_claims(
         )
 
     changed = validate_diff(diff_text)
-    source_lines = {path: lines for path, lines in changed.items() if not is_test_path(path)}
+    disguised = production_imported_tests(Path(patch_dir))
+    source_lines = {path: lines for path, lines in changed.items()
+                    if not is_test_rel(path, disguised)}
 
     contexts: Set[str] = set()
     for path, lines in source_lines.items():

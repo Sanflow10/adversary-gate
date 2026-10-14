@@ -33,6 +33,30 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.6] — 2026-10-14
+
+A fail-open an audit raised against the test-file classification: a product
+module that wears a test's name was judged as a test and never measured. It is
+not reproduced here as an end-to-end attack; the fix is verified by tests at the
+mechanism level.
+
+### Security
+
+- **A test file's name is confirmed against who imports it.** The gate decided a
+  file was a test by its path alone -- a `test_*`/`*_test.py` name or a `tests`
+  directory. A product module wearing one of those names, imported by the code
+  under test, was kept out of coverage and mutation and reverted to the baseline
+  by the oracle, so a change to it was never judged -- a route, the audit noted,
+  to `MERGE` behind a bent assertion. Now a test-pathed Python module that a
+  non-test module imports is treated as source: measured, mutated and judged,
+  not reverted. A helper imported only by other tests stays a test;
+  `conftest.py` and `--test-support` are never reclassified. The detection reads
+  imports from the AST, so a module reached only through a path the resolver
+  does not match, or through a dynamic import, is not caught; SECURITY.md says
+  so. Tests: `test_testpaths_content.py`.
+
+---
+
 ## [3.0.5] — 2026-10-14
 
 Two false `INCONCLUSIVE`s and one Android default. Nothing here lets a patch

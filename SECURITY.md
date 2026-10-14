@@ -62,6 +62,14 @@ them produces a `MERGE` it should not:
 - **Only pytest and `--test-command` are executed.** There is no mutation
   adapter yet, so non-Python stacks cannot reach `MERGE` at all — that is a
   missing feature, not a bypass.
+- **A product module disguised under a test path is caught by its imports.**
+  From `3.0.6`, a Python module that wears a test's name (`test_*`/`*_test.py`,
+  or a `tests` directory) but that the code under test imports is judged as
+  source, not reverted to the baseline as a test (before `3.0.6` it was not, a
+  fail-open an audit raised). The detection reads imports from the AST: a module
+  reached only through an import path the resolver does not match, or through a
+  dynamic import (`importlib`, `__import__`), is not caught. Declare a real test
+  helper with `--test-support`; do not place product code under a test path.
 - **Releases are not signed with a project key.** PyPI uploads go through
   Trusted Publishing (AG-008 closed) and carry PyPI provenance attestations
   tying each file to `pypi-publish.yml` in this repository — from `2.4.0`,

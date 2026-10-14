@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from adversary_gate.verifiers.testpaths import is_test_path
+from adversary_gate.verifiers.testpaths import is_test_rel, production_imported_tests
 
 
 class UnparseableDiff(ValueError):
@@ -293,8 +293,11 @@ def _judge(diff_text: str, coverage_json: Path | Mapping, source_root: Path | No
     excluded_files: list[str] = []
     excluded_docs: list[str] = []
     non_code = _non_code_added_lines(diff_text)
+    # A module that wears a test's name but the code under test imports is source:
+    # it stays in the denominator so an untested change to it is counted.
+    disguised = production_imported_tests(source_root)
     for filename, lines in changed.items():
-        if is_test_path(filename):
+        if is_test_rel(filename, disguised):
             excluded_lines += len(lines)
             excluded_files.append(filename)
             continue
@@ -339,8 +342,9 @@ def covered_diff_ratio(diff_text: str, coverage_json: Path | Mapping, *,
     # is a protected path.
     from adversary_gate.verifiers.strength import _is_non_source  # noqa: PLC0415 -- the one list
 
+    disguised = production_imported_tests(source_root)
     unmeasured = total == 0 and any(
-        _is_non_source(name) and not is_test_path(name) for name in changed
+        _is_non_source(name) and not is_test_rel(name, disguised) for name in changed
     )
     return DiffCoverage(
         total,

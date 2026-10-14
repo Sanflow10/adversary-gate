@@ -67,6 +67,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from adversary_gate.core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED
 from adversary_gate.sandbox.runner import DEFAULT_PROCESSES, run_test
 from adversary_gate.verifiers.testpaths import is_test_path as _is_test_path
+from adversary_gate.verifiers.testpaths import is_test_rel as _is_test_rel
+from adversary_gate.verifiers.testpaths import production_imported_tests as _production_imported_tests
 
 #: Directories never worth copying or mutating.
 _IGNORE = shutil.ignore_patterns(
@@ -341,11 +343,12 @@ def _is_scan_noise(rel: str) -> bool:
 def _python_files(root: Path) -> List[Path]:
     if not root.is_dir():
         return []
+    disguised = _production_imported_tests(root)
     return sorted(
         p
         for p in root.rglob("*.py")
-        if p.is_file() and "__pycache__" not in p.parts and not _is_test_path(
-            p.relative_to(root).as_posix()
+        if p.is_file() and "__pycache__" not in p.parts and not _is_test_rel(
+            p.relative_to(root).as_posix(), disguised
         )
     )
 

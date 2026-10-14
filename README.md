@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.5)
+# AdversaryGate (v3.0.6)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -237,6 +237,17 @@ Two sources are unioned, so either alone being wrong cannot open a hole:
 
 A documentation-only patch is still unaffected, because `.md` is on the list.
 
+**A test's name is confirmed against who imports it (from 3.0.6).** Tests are
+left out of coverage and mutation, and the oracle puts them back from the
+baseline, so a product module under a test path — a `test_*`/`*_test.py` name,
+or a `tests` directory — used to be invisible: a change to it was never judged.
+Now a test-pathed Python module that a **non-test** module imports is judged as
+source. A helper imported only by other tests stays a test; `conftest.py` and
+`--test-support` are never reclassified. The detection reads imports from the
+AST, so a module reached only through an import path it cannot match, or a
+dynamic import, is not caught (SECURITY.md); declare a real helper with
+`--test-support`, and never put product code under a test path.
+
 ### What shipped, and what still requires
 
 **1. Execution on any stack — `--test-command` (shipped).**
@@ -331,7 +342,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.5** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.6** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -340,20 +351,20 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.5. Versions before 3.0.4 are unsupported: each lacks fixes the
+# PyPI -- 3.0.6. Versions before 3.0.4 are unsupported: each lacks fixes the
 # CHANGELOG lists after it.
-pip install adversary-gate==3.0.5
+pip install adversary-gate==3.0.6
 ```
 
 ```bash
-# GitHub Release -- 3.0.5: every fix in this document.
+# GitHub Release -- 3.0.6: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.5/adversary_gate-3.0.5-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.6/adversary_gate-3.0.6-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.5` has not been published yet. A release
+Release for `v3.0.6` has not been published yet. A release
 takes two steps, in this order, and only the first is done by hand:
 
 1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
@@ -589,7 +600,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.5` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.6` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For

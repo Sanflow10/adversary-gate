@@ -57,7 +57,7 @@ from adversary_gate.core.types import (
 from adversary_gate.sandbox.runner import SandboxResult, run_test
 from adversary_gate.verifiers.coverage import DiffCoverage, covered_diff_ratio
 from adversary_gate.verifiers.stability import StabilityPolicy, policy_for
-from adversary_gate.verifiers.testpaths import is_test_path
+from adversary_gate.verifiers.testpaths import is_test_rel, production_imported_tests
 
 
 def _bytes_differ(before: Path, after: Path) -> bool:
@@ -116,12 +116,16 @@ def _defines_test(test_file: Path, test_id: str) -> Optional[bool]:
 
 def _baseline_test_files(baseline_dir: Path):
     base = Path(baseline_dir)
+    # A baseline module that wears a test's name but the code under test imports
+    # is product code. Reverting it to the baseline would hide a change the patch
+    # made to it, so it is left to be judged as source. Scanned once.
+    disguised = production_imported_tests(base)
     for current, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if d not in _TREE_SKIP and not (Path(current) / d / "pyvenv.cfg").is_file()]
         for name in files:
             source = Path(current) / name
             rel = source.relative_to(base).as_posix()
-            if not source.is_symlink() and is_test_path(rel):
+            if not source.is_symlink() and is_test_rel(rel, disguised):
                 yield rel, source
 
 
