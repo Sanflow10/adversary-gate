@@ -31,6 +31,21 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Security
+
+- **A release tag's signature is checked, not assumed.** "A person pushes a
+  signed tag" was a convention: `pypi-publish.yml` checked the tag's name and
+  version and nothing else, so a lightweight or unsigned `vX.Y.Z` tag went to
+  PyPI with full attestations, and `release.yml` refused a lightweight tag but
+  passed an annotated one with no signature (`git tag -a`). Both now run
+  `git verify-tag` against the key in the repository variable
+  `RELEASE_ALLOWED_SIGNERS`, kept outside the tree so a push cannot bring its
+  own key; with no variable, nothing is published. SECURITY.md carries the
+  release key. Tests: `TestOneRouteToPyPI` (static) and
+  `TestTheTagSignatureStepRuns`, which runs the publisher's step as written
+  against tags signed by the release key, by another key, unsigned and
+  lightweight.
+
 ---
 
 ## [3.0.6] — 2026-10-14
