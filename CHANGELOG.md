@@ -72,14 +72,18 @@ quando esta seção vira uma com versão e data.
   a recipe for running a hostile patch: no network, no capabilities, a
   read-only root, a throwaway copy of the repository.
 
-- **`--sandbox bwrap` unshares more and keeps no capability.** IPC and the
-  hostname were shared with the host, so a guest could reach the host's
-  System V shared memory and message queues. bwrap now also gets
-  `--unshare-ipc`, `--unshare-uts`, `--unshare-user-try` (a user namespace
-  where the kernel allows one) and `--cap-drop ALL`. Still no seccomp, and
-  still not a defence against code built to escape: README says so. Tests:
-  `TestBwrapNamespacesAndCapabilities` in `test_runner.py`, which check the
-  argv without needing bwrap installed.
+### Tests
+
+- **The 3.0.6 fail-open, end to end.** 3.0.6 was verified at the mechanism
+  level only. Now reproduced through the CLI: `calc.py` imports `rate` from
+  `test_rules.py`, and the patch changes `rate()` from 2 to 3 next to an
+  honest, covered edit. Measured on 3.0.5: the claim was judged with the
+  baseline's `test_rules.py` put back and read `no_regression`; the
+  collateral suite still caught it (BLOCK), and with it off
+  (`--full-suite-path ""`) the answer was **MERGE, exit 0**. On 3.0.6 the
+  claim itself fails on the patch (`regression`, oracle `patch`): BLOCK with
+  or without the suite. Tests: `TestTheDisguisedModuleEndToEnd` in
+  `test_testpaths_content.py`.
 
 ---
 

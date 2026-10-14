@@ -10,6 +10,9 @@ it is source. A helper imported only by other tests stays a test.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -17,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from adversary_gate.cli import EXIT_BLOCK, EXIT_MERGE, main
 from adversary_gate.verifiers.coverage import covered_diff_ratio
 from adversary_gate.verifiers.testpaths import (
     declared_test_support,
@@ -135,6 +139,67 @@ class TestTheCoverageDenominatorCountsADisguisedModule(unittest.TestCase):
             )
             result = covered_diff_ratio(diff, {"files": {}}, source_root=root)
             self.assertEqual(result.excluded_test_files, ("tests/test_app.py",))
+
+
+class TestTheDisguisedModuleEndToEnd(unittest.TestCase):
+    """The 3.0.6 case through the CLI, as a patch would bring it.
+
+    ``calc.py`` imports ``rate`` from ``test_rules.py`` -- product code with a
+    test's name. The patch makes an honest, covered edit to ``calc.py`` and
+    changes ``rate()`` from 2 to 3, so ``price(3)`` goes from 6 to 9 while the
+    claim still asserts 6.
+
+    Measured on 3.0.5: the claim was judged with the baseline's
+    ``test_rules.py`` put back as a test file, read ``no_regression`` and
+    passed. With the collateral suite on, the suite caught the change and the
+    answer was BLOCK; with it off (``--full-suite-path ""``) the answer was
+    MERGE, exit 0. On 3.0.6 the claim itself fails on the patch: the module is
+    source, never put back.
+    """
+
+    CALC = {"baseline": "    return x * rate()\n", "patch": "    return rate() * x\n"}
+    RATE = {"baseline": "    return 2\n", "patch": "    return 3\n"}
+
+    def _run(self, *extra):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                _tree(root / side, {
+                    "calc.py": "from test_rules import rate\n\n\ndef price(x):\n" + self.CALC[side],
+                    "test_rules.py": "def rate():\n" + self.RATE[side],
+                    "tests/test_calc.py": "from calc import price\n\n\n"
+                                          "def test_price():\n    assert price(3) == 6\n",
+                })
+            (root / "change.diff").write_text(
+                "--- a/calc.py\n+++ b/calc.py\n@@ -5,1 +5,1 @@\n"
+                "-    return x * rate()\n+    return rate() * x\n"
+                "--- a/test_rules.py\n+++ b/test_rules.py\n@@ -2,1 +2,1 @@\n"
+                "-    return 2\n+    return 3\n")
+            (root / "cov.json").write_text(json.dumps({"files": {
+                "calc.py": {"executed_lines": [1, 4, 5]},
+                "test_rules.py": {"executed_lines": [1, 2]},
+            }}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "tests/test_calc.py::test_price",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--mutation-max", "0", *extra,
+                ])
+            return code, json.loads(out.getvalue())
+
+    def test_without_the_collateral_suite_it_is_not_a_merge(self):
+        code, payload = self._run("--full-suite-path", "")
+        self.assertNotEqual(code, EXIT_MERGE, payload["reason"])
+        self.assertEqual(code, EXIT_BLOCK, payload["reason"])
+
+    def test_the_claim_itself_catches_it_not_only_the_suite(self):
+        code, payload = self._run()
+        self.assertEqual(code, EXIT_BLOCK, payload["reason"])
+        claim = payload["claims"][0]
+        self.assertEqual(claim["classification"], "regression", claim)
+        self.assertEqual(claim["oracle"], "patch", claim)
 
 
 if __name__ == "__main__":
