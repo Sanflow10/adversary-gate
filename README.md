@@ -722,13 +722,15 @@ Wraps every claim run and the collateral suite in [bubblewrap](https://github.co
 | --- | --- |
 | `--unshare-net` | no network at all — exfiltration has nowhere to go |
 | `--unshare-pid` | the guest cannot see or signal host processes |
+| `--unshare-ipc`, `--unshare-uts` | no shared memory or message queues with the host, its own hostname |
+| `--unshare-user-try`, `--cap-drop ALL` | a user namespace where the kernel allows one, and no capability inside it |
 | `--tmpfs /tmp` + `HOME=/tmp` | nothing persists between runs, nothing lands in the repo |
 | system tree read-only | `/usr`, `/bin`, `/lib`, `/etc` cannot be written |
 | only the repo is writable | a test cannot touch anything outside the patch |
 
 If `bwrap` is missing the gate **refuses to start** (exit 3) rather than quietly running unsandboxed — asking for isolation and not getting it is the failure mode the flag exists to prevent.
 
-**What it is still not.** There is no seccomp profile, no privilege drop, no unprivileged user, and the repository's parent directory is not hidden. It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
+**What it is still not.** There is no seccomp profile, the repository itself is writable, and the kernel is the host's: a kernel bug is reachable from inside. Outside the repository, the guest sees only the read-only system tree and the interpreter's prefix. It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
 
 `--require-network-isolation` now has something real to point at: under `--sandbox bwrap` the network genuinely is gone, so `ADVERSARY_NETWORK_ISOLATED=1` becomes a statement you can make honestly instead of a wish. Outside bwrap it remains a **declaration, not a mechanism** — an assertion by *you* about *your* environment, which the tool cannot verify about itself.
 

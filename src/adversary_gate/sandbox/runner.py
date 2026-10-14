@@ -106,11 +106,12 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
 
     This is *optional defence in depth* over the resource limits, not a
     replacement for them: it denies network (``--unshare-net``), hides the
-    host's processes (``--unshare-pid``), makes the system tree read-only and
-    gives the guest a private ``/tmp``. What it still does not do is make
-    hostile code safe -- there is no seccomp profile, no user drop and no
-    read-only view of the repository's own parent, so treat it as "the casual
-    damage is contained", which is a different promise from "this is a VM".
+    host's processes (``--unshare-pid``), IPC and hostname, drops every
+    capability, makes the system tree read-only and gives the guest a private
+    ``/tmp``. What it still does not do is make hostile code safe -- there is
+    no seccomp profile, the repository is writable and the kernel is the
+    host's, so treat it as "the casual damage is contained", which is a
+    different promise from "this is a VM".
 
     Raises ``ValueError`` when ``bwrap`` is missing, so a caller who asked for
     isolation learns that rather than silently getting none.
@@ -126,6 +127,15 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
         "bwrap",
         "--unshare-net",
         "--unshare-pid",
+        # IPC and hostname are shared with the host by default: a guest could
+        # reach the host's System V shared memory and message queues. A user
+        # namespace where the kernel allows one (``-try``: a setuid bwrap on a
+        # kernel that refuses it still runs, without it), and no capability
+        # inside, whatever bwrap would otherwise keep.
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-user-try",
+        "--cap-drop", "ALL",
         "--die-with-parent",
         "--new-session",
         # The guest gets its own /tmp so a test cannot leave files behind for
