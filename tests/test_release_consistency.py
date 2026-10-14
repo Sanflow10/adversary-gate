@@ -252,8 +252,7 @@ class TestTheTagSignatureStepRuns(unittest.TestCase):
         self._git(self.work, "push", "-q", "origin", f"refs/tags/{name}")
 
     def _run(self, tag, allowed):
-        runner_temp = self.tmp / f"rt-{tag}"
-        runner_temp.mkdir()
+        runner_temp = Path(tempfile.mkdtemp(prefix=f"rt-{tag}-", dir=self.tmp))
         env = dict(os.environ, TAG=tag, ALLOWED_SIGNERS=allowed, RUNNER_TEMP=str(runner_temp))
         return subprocess.run(["bash", "-c", self.script], cwd=self.work, env=env,
                               capture_output=True, text=True)
