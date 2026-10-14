@@ -383,7 +383,7 @@ takes two steps, in this order, and only the first is done by hand:
    package. Then it runs the full test suite and **refuses to publish if it
    fails**, builds the wheel and sdist, installs the wheel into a clean
    interpreter, attaches them to the release, and moves the floating tag of the
-   release's major line (`v3`; `v2` for the 2.x line) — only forward, so
+   release's major line (`v3`) — only forward, so
    re-releasing an old version does not drag it back.
 
 **Publish to PyPI → Run workflow** with a tag finishes a run that stopped
@@ -866,6 +866,6 @@ is a usage error, always.
 
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
-Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, which still applies to it — each of those tags carries its own `LICENSE`.
+Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Only the latest release is distributed: the tags, GitHub Releases and PyPI files of earlier versions are no longer published.
 
 For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.
