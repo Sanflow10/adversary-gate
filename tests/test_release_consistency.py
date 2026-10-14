@@ -9,7 +9,12 @@ was a checklist item. A checklist item is a promise; this is the measurement.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -158,5 +163,132 @@ class TestOneRouteToPyPI(unittest.TestCase):
         self.assertNotIn("password:", code)
         self.assertIn("id-token: write", code)
 
+    def test_the_publisher_verifies_the_tag_signature_before_it_builds(self):
+        # Until here the publisher checked the tag's name only: a lightweight
+        # or unsigned vX.Y.Z tag reached PyPI with full attestations.
+        code = self._code(self.publish)
+        self.assertIn("verify-tag", code)
+        self.assertIn("gpg.format=ssh", code)
+        self.assertIn('git cat-file -t "refs/tags/$TAG"', code)
+        self.assertLess(code.index("verify-tag"), code.index("python -m build"))
+
+    def test_the_release_workflow_verifies_the_tag_signature(self):
+        # Annotated is not signed: `git tag -a` passed the lightweight check.
+        code = self._code(self.release)
+        self.assertIn("verify-tag", code)
+        self.assertLess(code.index("verify-tag"), code.index("gh release create"))
+
+    def test_the_release_key_comes_from_outside_the_tree(self):
+        # A key read from the tagged tree would let a push bring its own key.
+        for name, text in (("pypi-publish.yml", self.publish), ("release.yml", self.release)):
+            code = self._code(text)
+            with self.subTest(workflow=name):
+                self.assertIn("${{ vars.RELEASE_ALLOWED_SIGNERS }}", code)
+                self.assertIn('if [ -z "${ALLOWED_SIGNERS//[[:space:]]/}" ]; then', code)
+                self.assertIn('allowedSignersFile="$RUNNER_TEMP/allowed_signers"', code)
+
     def test_the_publisher_builds_both_packages(self):
         self.assertIn("python -m build packaging/mcp --outdir dist/", self._code(self.publish))
+
+
+def _step_script(workflow: str, step_name: str) -> str:
+    """The ``run: |`` block of one named step, dedented: what the runner executes."""
+    lines = workflow.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}")
+    run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "run: |")
+    indent = len(lines[run]) - len(lines[run].lstrip())
+    body = []
+    for line in lines[run + 1:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line)
+    return textwrap.dedent("\n".join(body)) + "\n"
+
+
+@unittest.skipUnless(shutil.which("ssh-keygen") and shutil.which("git"), "needs ssh-keygen and git")
+class TestTheTagSignatureStepRuns(unittest.TestCase):
+    """The publisher's signature step, run as written against real tags.
+
+    A static check says the words are there; this says a tag without the
+    release key's signature stops the step, and one with it passes.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.script = _step_script(
+            (ROOT / ".github" / "workflows" / "pypi-publish.yml").read_text(),
+            "The tag is signed by a release key",
+        )
+        self.keys = {}
+        for who in ("release", "stranger"):
+            key = self.tmp / who
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", who, "-f", str(key)],
+                           check=True)
+            self.keys[who] = key
+        origin = self.tmp / "origin.git"
+        self.work = self.tmp / "work"
+        self._git(self.tmp, "init", "-q", "--bare", str(origin))
+        self._git(self.tmp, "init", "-q", str(self.work))
+        self._git(self.work, "remote", "add", "origin", str(origin))
+        (self.work / "f").write_text("x\n")
+        self._git(self.work, "add", "f")
+        self._git(self.work, "commit", "-q", "-m", "c")
+        self.origin = origin
+
+    def _git(self, cwd, *args):
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True,
+                              capture_output=True, text=True)
+
+    def _tag(self, name, signer=None):
+        if signer is None:
+            self._git(self.work, "tag", "-a", name, "-m", name)
+        else:
+            self._git(self.work, "-c", "gpg.format=ssh",
+                      "-c", f"user.signingkey={self.keys[signer]}.pub",
+                      "tag", "-s", name, "-m", name)
+        self._git(self.work, "push", "-q", "origin", f"refs/tags/{name}")
+
+    def _run(self, tag, allowed):
+        runner_temp = Path(tempfile.mkdtemp(prefix=f"rt-{tag}-", dir=self.tmp))
+        env = dict(os.environ, TAG=tag, ALLOWED_SIGNERS=allowed, RUNNER_TEMP=str(runner_temp))
+        return subprocess.run(["bash", "-c", self.script], cwd=self.work, env=env,
+                              capture_output=True, text=True)
+
+    def _allowed(self, who):
+        """One allowed_signers line: principal, key type, key."""
+        key_type, key = Path(f"{self.keys[who]}.pub").read_text().split()[:2]
+        return f"{who} {key_type} {key}"
+
+    def test_a_tag_signed_by_the_release_key_passes(self):
+        self._tag("v9.9.1", signer="release")
+        result = self._run("v9.9.1", self._allowed("release"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_tag_signed_by_another_key_is_refused(self):
+        self._tag("v9.9.2", signer="stranger")
+        result = self._run("v9.9.2", self._allowed("release"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not signed by a key in RELEASE_ALLOWED_SIGNERS", result.stdout)
+
+    def test_an_annotated_unsigned_tag_is_refused(self):
+        self._tag("v9.9.3")
+        result = self._run("v9.9.3", self._allowed("release"))
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_a_lightweight_tag_is_refused(self):
+        self._git(self.work, "tag", "v9.9.4")
+        self._git(self.work, "push", "-q", "origin", "refs/tags/v9.9.4")
+        result = self._run("v9.9.4", self._allowed("release"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("lightweight", result.stdout)
+
+    def test_no_variable_publishes_nothing(self):
+        self._tag("v9.9.5", signer="release")
+        for allowed in ("", "  \n"):
+            with self.subTest(allowed=repr(allowed)):
+                result = self._run("v9.9.5", allowed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("RELEASE_ALLOWED_SIGNERS is not set", result.stdout)
