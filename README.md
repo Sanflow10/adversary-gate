@@ -18,7 +18,7 @@ pip install adversary-gate
 | --- | --- |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
 | 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
-| 📋 **[Findings AG-001…AG-044](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
+| 📋 **[Findings AG-001…AG-046 and the 3.0.x fixes](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
 
 ---
 
@@ -372,13 +372,18 @@ takes two steps, in this order, and only the first is done by hand:
    the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
    and uploads both through Trusted Publishing, so every file carries a PyPI
    provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token.
+   another version, and it reads no API token. Before it builds anything it
+   checks the tag's signature with `git verify-tag` against the key in the
+   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
+   kept outside the tree so a push cannot bring its own key): a lightweight
+   tag, an annotated tag with no signature, a signature from another key, or
+   no variable at all, and nothing is published.
 2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with a lightweight (unsigned) one, and refuses while PyPI lacks either
+   with one the same signature check refuses, and refuses while PyPI lacks either
    package. Then it runs the full test suite and **refuses to publish if it
    fails**, builds the wheel and sdist, installs the wheel into a clean
    interpreter, attaches them to the release, and moves the floating tag of the
-   release's major line (`v3`; `v2` for the 2.x line) — only forward, so
+   release's major line (`v3`) — only forward, so
    re-releasing an old version does not drag it back.
 
 **Publish to PyPI → Run workflow** with a tag finishes a run that stopped
@@ -681,6 +686,7 @@ Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`
 | `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused. |
 | `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the answer says `"baseline_chosen_by": "agent"`. Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
 | `ADVERSARY_GATE_PYTHON` | the interpreter's site-packages are harness too — a plugin installed there runs inside pytest. Use one the agent cannot write to. |
+| `ADVERSARY_GATE_REQUIRE_PINNED_BASE` | `1` makes the pin above mandatory: without `ADVERSARY_GATE_BASE_REF`, `verify_repo` answers `inconclusive` and runs nothing, rather than judge against a baseline the agent named. Off by default, so servers that rely on `base_ref` keep working; `gate_policy` reports it as `baseline_pin_required`. |
 
 `pytest_args` accepts test paths only; an option (`-p evil`) is refused. The shipped Hermes skill tells the agent to call the gate before saying "done", to fix code rather than tests on `block`, to never report `inconclusive` as success, and to promote a self-written skill only on `merge`.
 
@@ -731,6 +737,29 @@ If `bwrap` is missing the gate **refuses to start** (exit 3) rather than quietly
 Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged user, or any restriction on what the test code may do *by design*. The test code runs arbitrary code from the repository, with whatever privileges you gave the process.
 
 **Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
+
+The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root. Your project's dependencies are not in it, so extend it:
+
+```dockerfile
+FROM adversary-gate-mcp            # docker build -t adversary-gate-mcp .
+USER root
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+USER 10001
+```
+
+Then run the gate with no network, no capabilities, a read-only root and a **throwaway copy** of the repository (a fresh clone, never your working tree: the tests write into it):
+
+```bash
+docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp:rw,exec --tmpfs /home/gate:rw \
+  --pids-limit 512 --memory 4g \
+  -v "$PWD/throwaway":/work --entrypoint adversary-gate my-project-gate \
+  --baseline /work/baseline --patch /work/patch \
+  --diff /work/changes.diff --coverage-json /work/coverage.json --discover-claims
+```
+
+`--network none` is the boundary `--require-network-isolation` asks you to vouch for; inside it the declaration is true. A container shares the host's kernel: for code known to be hostile, a VM is the stronger boundary.
 
 ### What a test cannot see, by construction
 
@@ -860,6 +889,6 @@ is a usage error, always.
 
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
-Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, which still applies to it — each of those tags carries its own `LICENSE`.
+Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Only the latest release is distributed: the tags, GitHub Releases and PyPI files of earlier versions are no longer published.
 
 For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.

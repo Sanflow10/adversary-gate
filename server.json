@@ -25,6 +25,10 @@
           "description": "Baseline git ref (e.g. origin/main). Unset, the agent may pick it, and whoever picks the baseline picks the oracle"
         },
         {
+          "name": "ADVERSARY_GATE_REQUIRE_PINNED_BASE",
+          "description": "Set to 1 to refuse any run without ADVERSARY_GATE_BASE_REF, so the agent can never choose the baseline (the oracle)"
+        },
+        {
           "name": "ADVERSARY_GATE_PYTHON",
           "description": "Interpreter that runs the tests; must be one the agent cannot write to"
         },

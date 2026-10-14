@@ -1,6 +1,6 @@
 # Registro de Erros e Inconsistências (AdversaryGate)
 
-Este documento registra erros, divergências de ambiente e inconsistências identificadas e tratadas durante o desenvolvimento, revisão e correção cirúrgica do **AdversaryGate v2.0.1**.
+Este documento registra erros, divergências de ambiente e inconsistências identificadas e tratadas durante o desenvolvimento, revisão e correção cirúrgica do **AdversaryGate**, da v2.0.1 à linha 3.0.x (seções 20 e 21).
 
 ---
 
@@ -470,3 +470,43 @@ comparado com o mais parecido, para que renomear ou copiar um módulo não faça
 código que ninguém mexeu contar como medido; senão, todas as linhas. O artefato
 diz o pareamento, e se o arquivo foi mutado, em `mutation.added_files`. Testes:
 `TestAFileThePatchAddedIsMutated` (5; sem a mudança os 5 falham).
+
+---
+
+## 20. AG-045 — o baseline do MCP era o que o git entregava, não o que o commit contém (2026-10-09)
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-045** | Alta — oráculo | O servidor MCP montava o baseline a partir de um `ref` resolvido pelo git, com a substituição de objetos (`git replace`) ligada e sem conferir os blobs: um repositório com um objeto substituído entregava ao gate um baseline diferente do que o id do commit nomeia, e o oráculo do baseline (AG-021) julgava o patch contra esse baseline. O `ref` também podia ser resolvido mais de uma vez na mesma execução. | **Corrigido na `3.0.0` e na `2.14.2`** — o baseline é lido objeto a objeto (`ls-tree` + `cat-file`) com a substituição de objetos desligada, e cada blob é conferido contra o id que a árvore cita; o `ref` é resolvido uma vez por execução e o diff roda contra esse id. `verify_repo` devolve `baseline_sha`, e `gate_policy` diz se o pin do operador é um id de commit ou um nome de ref. **Aberto (fronteira documentada):** um agente que executa código com o mesmo usuário ainda alcança a pasta temporária do gate. |
+
+---
+
+## 21. A linha 3.0.x — correções de 2026-10-12 a 2026-10-14
+
+As correções da linha 3.0.x foram registradas no [CHANGELOG](CHANGELOG.md) com
+letras (A–G) e números de relatório em vez de ids AG. Esta seção as reúne
+aqui, com a direção de cada falha, para que o ledger diga o que mudou desde o
+AG-046. O texto completo e os testes de cada uma estão na seção da versão no
+CHANGELOG.
+
+| Versão | Achado | Direção | Estado |
+|---|---|---|---|
+| 3.0.1 (B) | Arquivo novo que não podia ser pareado com o baseline (acima de 400 arquivos ou 5000 linhas) não era mutado, e a força saía medida sobre o resto | fail-open | Corrigido — força não medida |
+| 3.0.1 (D) | Sem `--timeout`, a referência sem mutação era pulada: um mutante que falha como as claims já falhavam contava como morte | fail-open | Corrigido — a referência tem que passar |
+| 3.0.1 (A) | Claim que lê o arquivo, a árvore inteira ou o bytecode da função alterada passava no canário de comentário (MERGE com força 1,0) | fail-open | Corrigido em parte — uma claim que lê um pedaço menor da árvore ainda passa (documentado) |
+| 3.0.1 (C) | `.py` marcado como binário no `.gitattributes` sumia da diff de cobertura | fail-open | Corrigido — `validate_diff` recusa (exit 3) |
+| 3.0.1 (E) | Documento contava como código: apagar uma linha do README media cobertura 1,0; a segunda linha de uma instrução contava sempre como não coberta | fail-open / falso INCONCLUSIVE | Corrigido |
+| 3.0.1 | MCP parava com `UnicodeDecodeError` em binário ou `.py` latin-1 alterado | quebra | Corrigido |
+| 3.0.1 (#4) | Rótulo `fixed` aceito sem reexecutar a baseline sozinha (resíduo do AG-043) | rótulo | Corrigido |
+| 3.0.4 | Ramo na mesma linha do guarda (`return 999 if x == 0 else x + 1`) chegava a MERGE com 5/5 mutantes | fail-open | Corrigido — mutantes de ramo; sobrevivente vira `blind_spots` e INCONCLUSIVE. **Aberto:** caso especial em dados e corpo com operador em linha própria (documentados no README) |
+| 3.0.4 | Os 12 mutantes eram as 12 primeiras linhas alteradas: mudanças sem teste depois delas nunca eram quebradas | fail-open | Corrigido — toda linha alterada é quebrada ao menos uma vez; `--mutation-max` 60 é teto |
+| 3.0.4 | Teste reescrito era julgado pela cópia do baseline, mas os mutantes rodavam a cópia do patch | fail-open | Corrigido — claims do oráculo enfrentam os mutantes na árvore do oráculo |
+| 3.0.4 | Arquivo alterado que não é UTF-8 era pulado em silêncio pela mutação | fail-open | Corrigido — força não medida |
+| 3.0.4 | Claim que compara um pedaço do texto da linha passava no canário | fail-open | Corrigido em parte — normalizar o texto antes de comparar ainda passa (documentado) |
+| 3.0.4 | Sonda do canário aparecia em `locals()` e tornava INCONCLUSIVE um teste honesto | falso INCONCLUSIVE | Corrigido |
+| 3.0.4 | Relatório de coverage ignorava a config do projeto (`data_file`) | falso INCONCLUSIVE | Corrigido |
+| 3.0.4 | 3.0.2 e 3.0.3 saíram por token: o pacote MCP ficou na 3.0.0 e os arquivos do core sem atestado | distribuição | Corrigido — uma rota, tag assinada e Trusted Publishing |
+| 3.0.5 | O marcador `\ No newline at end of file` contava como linha e deslocava a numeração | falso INCONCLUSIVE | Corrigido |
+| 3.0.5 | Limite de tempo do `verify_repo` (900 s) menor que o próprio gate | falso INCONCLUSIVE | Corrigido — 3600 s e `raise_limit` |
+| 3.0.5 (#4) | `RLIMIT_AS` aborta todo processo no Android com os limites padrão | plataforma | Corrigido — sem limite de espaço de endereçamento por padrão no Android |
+| 3.0.6 | Módulo de produção com nome de teste, importado pelo código, ficava fora de cobertura e mutação e era revertido ao baseline | fail-open (não reproduzido de ponta a ponta) | Corrigido — detecção pelos imports na AST. **Aberto:** import dinâmico (`importlib`, `__import__`) não é detectado (SECURITY.md) |
