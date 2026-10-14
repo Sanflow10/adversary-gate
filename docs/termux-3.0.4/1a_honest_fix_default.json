@@ -1,0 +1,167 @@
+{
+  "classification": "fixed",
+  "outcome": "verified",
+  "decision": "inconclusive",
+  "reason": "every claim held and the fix is proven, but suite strength's lower bound is 0.38, below the 0.75 floor (1/1 mutants killed)",
+  "next_steps": [
+    {
+      "action": "see_reason",
+      "why": "off (--census-min-mutants 0)"
+    }
+  ],
+  "duration_seconds": 17.421623,
+  "claims_total": 2,
+  "claims_fixed": 2,
+  "fix_proven": true,
+  "claims": [
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add",
+      "classification": "fixed",
+      "outcome": "verified",
+      "reason": "test fails on baseline and passes on patch: the patch fixes what this test checks",
+      "oracle": "patch",
+      "duration_seconds": 8.601421,
+      "evidence": {
+        "baseline": "fail",
+        "patch": "pass",
+        "baseline_exit_codes": [
+          1,
+          1,
+          1
+        ],
+        "patch_exit_codes": [
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add_negative",
+      "classification": "fixed",
+      "outcome": "verified",
+      "reason": "test fails on baseline and passes on patch: the patch fixes what this test checks",
+      "oracle": "patch",
+      "duration_seconds": 8.820201,
+      "evidence": {
+        "baseline": "fail",
+        "patch": "pass",
+        "baseline_exit_codes": [
+          1,
+          1,
+          1
+        ],
+        "patch_exit_codes": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "suite_strength": 1.0,
+  "suite_strength_unverified": false,
+  "suite_strength_floor": 0.75,
+  "suite_strength_lower": 0.3784,
+  "suite_strength_confidence": 0.8,
+  "mutation": {
+    "measured": true,
+    "reason": "",
+    "changed_files": [
+      "calculator.py"
+    ],
+    "foreign_changed_files": [],
+    "deleted_files": [],
+    "mutants": [
+      {
+        "file": "calculator.py",
+        "line": 2,
+        "replaces": "-",
+        "kind": "operator",
+        "result": "killed"
+      }
+    ],
+    "survivors": [],
+    "mutants_counted": 1,
+    "stillborn": 0,
+    "census": {
+      "exact": false,
+      "sites": 1,
+      "minimum": 0,
+      "why_not": "off (--census-min-mutants 0)"
+    },
+    "reference_run": {
+      "exit_code": 0,
+      "seconds": 1.423,
+      "hang_counts_as_kill": true
+    },
+    "source_sensitive_claims": false,
+    "canary": {
+      "files": [
+        "calculator.py"
+      ],
+      "exit_code": 0
+    },
+    "added_files": {},
+    "mutants_needed": 1,
+    "unmutated_lines": [],
+    "blind_spots": [],
+    "mutants_killed": 1,
+    "score": 1.0,
+    "confidence": 0.8,
+    "interval": [
+      0.3784,
+      1.0
+    ]
+  },
+  "diff_coverage_ratio": 1.0,
+  "diff_coverage_source": "computed",
+  "diff_coverage": {
+    "source": "computed",
+    "ratio": 1.0,
+    "changed_lines": 1,
+    "covered_lines": 1,
+    "documents_excluded": [],
+    "test_lines_excluded": 0,
+    "test_files_excluded": [],
+    "diff_sha256": "96fb3d6026f825c3550f5531b919a5c2c5d5f637b4b1006ade848c30d5428c0c",
+    "coverage_json_sha256": "22c9e2765ab632548824fff42d86059ae7d26976f44b161032f7a00bb168ff03"
+  },
+  "full_suite_ran": true,
+  "full_suite_oracle": null,
+  "measurement_seconds": 5.706678,
+  "execution": {
+    "python": "/data/data/com.termux/files/home/agtest-venv/bin/python",
+    "timeout_seconds": 30,
+    "cpu_seconds": 10,
+    "memory_bytes": null,
+    "full_suite_timeout_seconds": 900,
+    "full_suite_cpu_seconds": null,
+    "full_suite_memory_bytes": null,
+    "sandbox": "none",
+    "serial_sides": true,
+    "env_passed": [],
+    "env_passed_missing": [],
+    "env_set": [],
+    "test_support": [],
+    "triage": null,
+    "full_suite_alongside": false,
+    "mutation_workers": 1
+  },
+  "evidence": {
+    "baseline": "fail",
+    "patch": "pass",
+    "baseline_exit_codes": [
+      1,
+      1,
+      1
+    ],
+    "patch_exit_codes": [
+      0,
+      0,
+      0
+    ]
+  }
+}

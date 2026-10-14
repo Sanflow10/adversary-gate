@@ -1,0 +1,170 @@
+{
+  "classification": "regression",
+  "outcome": "refuted",
+  "decision": "block",
+  "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): test passes on baseline and fails on patch. If this behaviour change is intended, the edit to the baseline's test is the thing to review: a human approves it, the gate cannot tell it from a test bent to hide a bug",
+  "next_steps": [
+    {
+      "action": "human_review_test_edit",
+      "file": "tests/test_addition.py",
+      "why": "the patch changed what a baseline test checks; only a human can accept that"
+    },
+    {
+      "action": "human_review_test_edit",
+      "file": "tests/test_addition.py",
+      "why": "the patch changed what a baseline test checks; only a human can accept that"
+    }
+  ],
+  "duration_seconds": 17.602903,
+  "claims_total": 2,
+  "claims_fixed": 0,
+  "fix_proven": false,
+  "claims": [
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add",
+      "classification": "regression",
+      "outcome": "refuted",
+      "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): test passes on baseline and fails on patch. If this behaviour change is intended, the edit to the baseline's test is the thing to review: a human approves it, the gate cannot tell it from a test bent to hide a bug",
+      "oracle": "baseline",
+      "duration_seconds": 8.792694,
+      "evidence": {
+        "baseline": "pass",
+        "patch": "fail",
+        "baseline_exit_codes": [
+          0,
+          0,
+          0
+        ],
+        "patch_exit_codes": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add_negative",
+      "classification": "regression",
+      "outcome": "refuted",
+      "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): test passes on baseline and fails on patch. If this behaviour change is intended, the edit to the baseline's test is the thing to review: a human approves it, the gate cannot tell it from a test bent to hide a bug",
+      "oracle": "baseline",
+      "duration_seconds": 8.810209,
+      "evidence": {
+        "baseline": "pass",
+        "patch": "fail",
+        "baseline_exit_codes": [
+          0,
+          0,
+          0
+        ],
+        "patch_exit_codes": [
+          1,
+          1,
+          1
+        ]
+      }
+    }
+  ],
+  "suite_strength": null,
+  "suite_strength_unverified": false,
+  "suite_strength_floor": 0.75,
+  "suite_strength_lower": null,
+  "suite_strength_confidence": 0.8,
+  "mutation": {
+    "measured": false,
+    "reason": "the claims did not pass on the unmutated patch (exit 1): a mutant that fails the same way is not a kill, so suite strength is not measured",
+    "changed_files": [
+      "calculator.py"
+    ],
+    "foreign_changed_files": [],
+    "deleted_files": [],
+    "mutants": [],
+    "survivors": [],
+    "mutants_counted": 0,
+    "stillborn": 0,
+    "census": {
+      "exact": false,
+      "why_not": "off (--census-min-mutants 0)"
+    },
+    "reference_run": {
+      "exit_code": 1,
+      "seconds": 1.468,
+      "hang_counts_as_kill": false
+    },
+    "source_sensitive_claims": false,
+    "canary": {
+      "files": [],
+      "exit_code": null
+    },
+    "added_files": {},
+    "mutants_needed": 1,
+    "unmutated_lines": [],
+    "blind_spots": [],
+    "mutants_killed": 0,
+    "score": null,
+    "confidence": 0.8,
+    "interval": null
+  },
+  "diff_coverage_ratio": 1.0,
+  "diff_coverage_source": "computed",
+  "diff_coverage": {
+    "source": "computed",
+    "ratio": 1.0,
+    "changed_lines": 1,
+    "covered_lines": 1,
+    "documents_excluded": [],
+    "test_lines_excluded": 2,
+    "test_files_excluded": [
+      "tests/test_addition.py"
+    ],
+    "diff_sha256": "c61b9d630536b9682f269725037b84acd3792d47c65098eeed551086e0285fab",
+    "coverage_json_sha256": "720dc0e429b9e11c586fd1b3cc03627d0421bb59d4dd445632e12d8969b838f2"
+  },
+  "full_suite_ran": true,
+  "full_suite_oracle": {
+    "source": "baseline",
+    "rewritten_test_files": [
+      "tests/test_addition.py"
+    ],
+    "exit_code": 1
+  },
+  "measurement_seconds": 5.776434,
+  "execution": {
+    "python": "/data/data/com.termux/files/home/agtest-venv/bin/python",
+    "timeout_seconds": 30,
+    "cpu_seconds": 10,
+    "memory_bytes": null,
+    "full_suite_timeout_seconds": 900,
+    "full_suite_cpu_seconds": null,
+    "full_suite_memory_bytes": null,
+    "sandbox": "none",
+    "serial_sides": true,
+    "env_passed": [],
+    "env_passed_missing": [],
+    "env_set": [],
+    "test_support": [],
+    "triage": null,
+    "full_suite_alongside": false,
+    "mutation_workers": 1
+  },
+  "full_suite_exit_codes": [
+    0,
+    1
+  ],
+  "evidence": {
+    "baseline": "pass",
+    "patch": "fail",
+    "baseline_exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "patch_exit_codes": [
+      1,
+      1,
+      1
+    ]
+  }
+}

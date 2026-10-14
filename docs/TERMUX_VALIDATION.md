@@ -1,5 +1,7 @@
 # AdversaryGate on Android / Termux
 
+> This page tested 3.0.0. Versions before 3.0.4 are unsupported; for 3.0.4 on the same platform, see [TERMUX_VALIDATION_3.0.4.md](TERMUX_VALIDATION_3.0.4.md).
+
 **Platform:** Android 14 (aarch64), Termux, Bionic libc
 **Python:** 3.14 · **pytest:** 9.1.1 · **AdversaryGate:** 3.0.0 (PyPI)
 **Date:** 2026-10-11

@@ -1,0 +1,165 @@
+{
+  "classification": "invalid",
+  "outcome": "unverified",
+  "decision": "inconclusive",
+  "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): incomplete-fix claims require a valid cited acceptance criterion [baseline: failed 3/3; patch: failed 3/3]",
+  "next_steps": [
+    {
+      "action": "see_reason",
+      "test": "tests/test_addition.py::test_add",
+      "why": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): incomplete-fix claims require a valid cited acceptance criterion [baseline: failed 3/3; patch: failed 3/3]"
+    },
+    {
+      "action": "see_reason",
+      "test": "tests/test_addition.py::test_add_negative",
+      "why": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): incomplete-fix claims require a valid cited acceptance criterion [baseline: failed 3/3; patch: failed 3/3]"
+    }
+  ],
+  "duration_seconds": 17.733196,
+  "claims_total": 2,
+  "claims_fixed": 0,
+  "fix_proven": false,
+  "claims": [
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add",
+      "classification": "invalid",
+      "outcome": "unverified",
+      "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): incomplete-fix claims require a valid cited acceptance criterion [baseline: failed 3/3; patch: failed 3/3]",
+      "oracle": "baseline",
+      "duration_seconds": 8.856326,
+      "evidence": {
+        "baseline": "fail",
+        "patch": "fail",
+        "baseline_exit_codes": [
+          1,
+          1,
+          1
+        ],
+        "patch_exit_codes": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "test_path": "tests/test_addition.py",
+      "test_id": "test_add_negative",
+      "classification": "invalid",
+      "outcome": "unverified",
+      "reason": "judged by the baseline's version of tests/test_addition.py and its test files (the patch rewrote tests/test_addition.py): incomplete-fix claims require a valid cited acceptance criterion [baseline: failed 3/3; patch: failed 3/3]",
+      "oracle": "baseline",
+      "duration_seconds": 8.87687,
+      "evidence": {
+        "baseline": "fail",
+        "patch": "fail",
+        "baseline_exit_codes": [
+          1,
+          1,
+          1
+        ],
+        "patch_exit_codes": [
+          1,
+          1,
+          1
+        ]
+      }
+    }
+  ],
+  "suite_strength": null,
+  "suite_strength_unverified": false,
+  "suite_strength_floor": 0.75,
+  "suite_strength_lower": null,
+  "suite_strength_confidence": 0.8,
+  "mutation": {
+    "measured": false,
+    "reason": "no source file changed between baseline and patch",
+    "changed_files": [],
+    "foreign_changed_files": [],
+    "deleted_files": [],
+    "mutants": [],
+    "survivors": [],
+    "mutants_counted": 0,
+    "stillborn": 0,
+    "census": {
+      "exact": false,
+      "why_not": "off (--census-min-mutants 0)"
+    },
+    "reference_run": null,
+    "source_sensitive_claims": false,
+    "canary": {
+      "files": [],
+      "exit_code": null
+    },
+    "added_files": {},
+    "mutants_needed": 0,
+    "unmutated_lines": [],
+    "blind_spots": [],
+    "mutants_killed": 0,
+    "score": null,
+    "confidence": 0.8,
+    "interval": null
+  },
+  "diff_coverage_ratio": 1.0,
+  "diff_coverage_source": "computed",
+  "diff_coverage": {
+    "source": "computed",
+    "ratio": 1.0,
+    "changed_lines": 0,
+    "covered_lines": 0,
+    "documents_excluded": [],
+    "test_lines_excluded": 2,
+    "test_files_excluded": [
+      "tests/test_addition.py"
+    ],
+    "diff_sha256": "4d4fba7c58f3ffb8afa2708a18d5e7f636b690dcbb09f8bcd5e9eb5de9b5e240",
+    "coverage_json_sha256": "a5479392e1b9fd9b9389c327293b3fe4db89d5a30e3f6e54fe47cb1e1e5dbe20",
+    "note": "the diff adds only test lines; there is no source line to cover, so the ratio is vacuously 1.0"
+  },
+  "full_suite_ran": true,
+  "full_suite_oracle": {
+    "source": "baseline",
+    "rewritten_test_files": [
+      "tests/test_addition.py"
+    ],
+    "exit_code": 1
+  },
+  "measurement_seconds": 4.40538,
+  "execution": {
+    "python": "/data/data/com.termux/files/home/agtest-venv/bin/python",
+    "timeout_seconds": 30,
+    "cpu_seconds": 10,
+    "memory_bytes": null,
+    "full_suite_timeout_seconds": 900,
+    "full_suite_cpu_seconds": null,
+    "full_suite_memory_bytes": null,
+    "sandbox": "none",
+    "serial_sides": true,
+    "env_passed": [],
+    "env_passed_missing": [],
+    "env_set": [],
+    "test_support": [],
+    "triage": null,
+    "full_suite_alongside": false,
+    "mutation_workers": 1
+  },
+  "full_suite_exit_codes": [
+    1,
+    1
+  ],
+  "evidence": {
+    "baseline": "fail",
+    "patch": "fail",
+    "baseline_exit_codes": [
+      1,
+      1,
+      1
+    ],
+    "patch_exit_codes": [
+      1,
+      1,
+      1
+    ]
+  }
+}
