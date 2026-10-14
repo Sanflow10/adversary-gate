@@ -113,6 +113,12 @@ def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
         elif current is not None and line.startswith("+") and not line.startswith("+++"):
             files[current].add(new_line)
             new_line += 1
+        elif line.startswith("\\"):
+            # "\ No newline at end of file" describes the line above it; it is
+            # not a line of either file. Counted as context, it moved every
+            # added line after it one row down: a fully tested patch measured
+            # 1/2 and named a row past the end of the file as not run.
+            continue
         elif current is not None and not line.startswith("-"):
             new_line += 1
     return files

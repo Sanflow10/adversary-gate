@@ -33,6 +33,43 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.5] — 2026-10-14
+
+Two false `INCONCLUSIVE`s and one Android default. Nothing here lets a patch
+reach `MERGE` on less evidence than before. Each change has a test that fails
+on 3.0.4.
+
+### Fixed
+
+- **`\ No newline at end of file` is not a line.** The diff parser counted
+  git's marker as a context line, so every line the patch added after it was
+  numbered one row too far down. When the old file ended without a newline, a
+  patch that rewrote its last line and added more measured 1/2 although every
+  new line ran — `INCONCLUSIVE` — and `next_steps` named a line past the end
+  of the file. The marker is skipped. Tests: `TestNoNewlineMarkerIsNotALine`
+  in `test_gate.py`.
+- **The MCP tool's time limit leaves room for the gate it runs.**
+  `verify_repo` defaulted to 900 s, the gate's own limit for one full-suite
+  run alone, before the claims and up to 60 mutants; a run past it came back
+  `inconclusive` with only the exception's text. The default is 3600 s. A run
+  past the limit says so, with a `raise_limit` next step naming
+  `timeout_seconds`, and the Hermes example's client timeout (3700 s) no
+  longer cuts the gate short. Tests: `TestVerifyRepoTimeLimit` in
+  `test_integrations.py`.
+
+### Changed
+
+- **Android: no address-space limit by default (#4).** `RLIMIT_AS` aborts
+  every test process on Android, so with the defaults every run there was
+  unrunnable until the operator passed `--memory none --full-suite-memory
+  none`. On Android (`sys.platform == "android"`, or `sys.getandroidapilevel`
+  present) both now default to none; a limit that is asked for still applies,
+  and the artefact records `execution.android`. Elsewhere the defaults stay
+  512M and 4G. Tests: `TestAndroidHasNoAddressSpaceLimitByDefault` in
+  `test_execution_and_claims.py`.
+
+---
+
 ## [3.0.4] — 2026-10-13
 
 From here on this file is written in English.

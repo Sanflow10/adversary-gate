@@ -559,6 +559,56 @@ class TestExecutionOptions(unittest.TestCase):
                 self.assertEqual(code, EXIT_USAGE)
 
 
+class TestAndroidHasNoAddressSpaceLimitByDefault(unittest.TestCase):
+    """#4: on Android an address-space limit (RLIMIT_AS) aborts every test
+    process, so with the default --memory and --full-suite-memory every run
+    there ended unrunnable (-6) until the operator passed 'none' for both."""
+
+    def setUp(self):
+        self.root = _fixture()
+        self.base = ["--test-path", "test_calc.py", "--test-id", "test_sub", "--coverage-floor", "0"]
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _run(self, android: bool, *extra: str):
+        with mock.patch("adversary_gate.cli._on_android", return_value=android):
+            return _run_cli(self.root, *self.base, *extra)
+
+    def test_on_android_both_limits_default_to_none(self):
+        code, payload = self._run(True)
+        self.assertEqual(code, EXIT_MERGE, payload)
+        execution = payload["execution"]
+        self.assertIsNone(execution["memory_bytes"])
+        self.assertIsNone(execution["full_suite_memory_bytes"])
+        self.assertTrue(execution["android"])
+
+    def test_on_android_a_limit_that_is_asked_for_is_kept(self):
+        code, payload = self._run(True, "--memory", "1G")
+        self.assertEqual(code, EXIT_MERGE, payload)
+        self.assertEqual(payload["execution"]["memory_bytes"], 1024 ** 3)
+        self.assertIsNone(payload["execution"]["full_suite_memory_bytes"])
+
+    def test_elsewhere_the_defaults_stand(self):
+        code, payload = self._run(False)
+        self.assertEqual(code, EXIT_MERGE, payload)
+        execution = payload["execution"]
+        self.assertEqual(execution["memory_bytes"], 512 * 1024 ** 2)
+        self.assertEqual(execution["full_suite_memory_bytes"], 4 * 1024 ** 3)
+        self.assertFalse(execution["android"])
+
+    def test_android_is_recognised_by_either_sign(self):
+        from adversary_gate.cli import _on_android
+        with mock.patch.object(sys, "platform", "android"):
+            self.assertTrue(_on_android())
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(sys, "getandroidapilevel", lambda: 34, create=True):
+            self.assertTrue(_on_android())
+        if not hasattr(sys, "getandroidapilevel"):
+            with mock.patch.object(sys, "platform", "linux"):
+                self.assertFalse(_on_android())
+
+
 class TestActionContract(unittest.TestCase):
     """action.yml, read as data: the AG-025 fix and the icon are not regressions-in-waiting."""
 

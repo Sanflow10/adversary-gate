@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.4)
+# AdversaryGate (v3.0.5)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -331,7 +331,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.4** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.5** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -340,20 +340,20 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.4. Versions before 3.0.4 are unsupported: each lacks fixes the
+# PyPI -- 3.0.5. Versions before 3.0.4 are unsupported: each lacks fixes the
 # CHANGELOG lists after it.
-pip install adversary-gate==3.0.4
+pip install adversary-gate==3.0.5
 ```
 
 ```bash
-# GitHub Release -- 3.0.4: every fix in this document.
+# GitHub Release -- 3.0.5: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.4/adversary_gate-3.0.4-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.5/adversary_gate-3.0.5-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.4` has not been published yet. A release
+Release for `v3.0.5` has not been published yet. A release
 takes two steps, in this order, and only the first is done by hand:
 
 1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
@@ -462,8 +462,8 @@ adversary-gate ... --python .venv/bin/python \
 | `--cpu-seconds` | `10` | CPU seconds per claim or mutant run; `none` removes it |
 | `--full-suite-timeout` | `900` | wall-clock seconds for the collateral full-suite run |
 | `--full-suite-cpu-seconds` | none | CPU seconds for the collateral full-suite run |
-| `--full-suite-memory` | `4G` | address space for the collateral full-suite run |
-| `--memory` | `512M` | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
+| `--full-suite-memory` | `4G`; `none` on Android | address space for the collateral full-suite run |
+| `--memory` | `512M`; `none` on Android | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
 | `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
 | `--env NAME=VALUE` | — | set one |
 | `--serial-sides` | off | run the baseline and patch sides of a check one after the other instead of together, and the full suite after the claims and mutants instead of alongside the claims; forces `--mutation-workers 1` (small machines; tests that share a fixed `/tmp` path or a port). The mutants never run beside the suite either way (AG-043) |
@@ -589,7 +589,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.4` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.5` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -691,7 +691,7 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
 
 `src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
 
-**Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space. Use `--memory none` and `--full-suite-memory none` there. The other limits still apply, and in the runs reported in issue #4, no finite address-space limit worked on Android.
+**Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space; in the runs reported in issue #4, no finite address-space limit worked there. Since 3.0.5 neither limit is set on Android unless you pass one: the gate recognises it (`sys.platform == "android"`, or `sys.getandroidapilevel` present) and the artefact records `execution.android`. The other limits still apply.
 
 ### `--sandbox bwrap` — opt-in, and what it honestly buys
 

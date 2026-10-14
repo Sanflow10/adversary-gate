@@ -116,7 +116,7 @@ def verify_repo(
     base_ref: str = "HEAD",
     claims: Optional[List[str]] = None,
     pytest_args: Optional[List[str]] = None,
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 3600,
 ) -> Dict[str, Any]:
     """Judge the working tree of a git repository against a baseline, by running its tests.
 
@@ -136,7 +136,9 @@ def verify_repo(
     do whatever they do when you run pytest yourself. The coverage run uses the
     repository as working directory; the gate's own files go to a temporary
     directory that is removed afterwards. It can take minutes. A run longer
-    than ``timeout_seconds`` returns inconclusive, never a pass.
+    than ``timeout_seconds`` (default 3600: the gate's own full-suite run may
+    take 900 alone) returns inconclusive, never a pass, and its
+    ``next_steps`` names ``timeout_seconds`` as the limit to raise.
 
     Arguments: ``repo`` is a path inside the git repository. ``claims`` are
     pytest node ids (``path::test``) to verify; empty -> discovered from the
@@ -176,7 +178,10 @@ def verify_repo(
                 argv += ["--claim", claim]
             if not claims:
                 argv.append("--discover-claims")
-            summary = _summary(_run_gate(argv + policy, timeout_seconds))
+            try:
+                summary = _summary(_run_gate(argv + policy, timeout_seconds))
+            except subprocess.TimeoutExpired:
+                return _too_slow(timeout_seconds)
             summary["untracked_files_judged"] = evidence.untracked
             summary["baseline"] = base
             summary["baseline_sha"] = evidence.baseline_sha
@@ -185,6 +190,23 @@ def verify_repo(
     except (EvidenceError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
                 "reason": f"the gate could not run: {exc}", "claims": []}
+
+
+def _too_slow(timeout_seconds: int) -> Dict[str, Any]:
+    """The gate ran past ``timeout_seconds``: nothing is known, so not a pass.
+
+    Until 3.0.4 the default was 900 s, the gate's own limit for one full-suite
+    run alone, and the answer carried only the exception's text: an agent had
+    no way to tell a slow change from a broken one, or what to change.
+    """
+    return {
+        "decision": "inconclusive", "exit_code": None, "mergeable": False,
+        "reason": (f"the gate did not finish within timeout_seconds={timeout_seconds}: "
+                   "nothing was measured, so nothing is known about this change"),
+        "claims": [],
+        "next_steps": [{"action": "raise_limit", "argument": "timeout_seconds",
+                        "why": "call verify_repo again with a higher timeout_seconds"}],
+    }
 
 
 def _pin_kind(pinned: Optional[str]) -> str:

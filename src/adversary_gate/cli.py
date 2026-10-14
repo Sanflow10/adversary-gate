@@ -174,6 +174,15 @@ def _size(text: str) -> Optional[int]:
     return value
 
 
+def _on_android() -> bool:
+    """Android, where an address-space limit aborts every process started under it (#4).
+
+    CPython 3.13+ says so in ``sys.platform``; Termux's builds also expose
+    ``sys.getandroidapilevel``.
+    """
+    return sys.platform == "android" or hasattr(sys, "getandroidapilevel")
+
+
 def _run_environment(args: argparse.Namespace) -> Tuple[Dict[str, str], Dict[str, Any]]:
     """What the test process may see beyond the minimal default (AG-024).
 
@@ -618,6 +627,9 @@ def _summary(verdicts, mutation: Dict[str, Any]) -> Dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="adversary-gate")
+    # #4: on Android RLIMIT_AS aborts every test process, so no address-space
+    # limit is the default there; a limit that is asked for still applies.
+    android = _on_android()
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--patch", required=True)
@@ -805,11 +817,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--full-suite-memory",
         type=_size,
-        default=4 * 1024**3,
+        default=None if android else 4 * 1024**3,
         metavar="SIZE|none",
         help="address-space limit (RLIMIT_AS) for the collateral full-suite run only "
-        "(default 4G; --memory governs the claims). Measured: more-itertools' suite dies "
-        "with MemoryError under 2G of address space and completes under 4G (AG-033). "
+        "(default 4G, none on Android; --memory governs the claims). Measured: more-itertools' "
+        "suite dies with MemoryError under 2G of address space and completes under 4G (AG-033). "
         "A kill by SIGABRT or SIGSEGV is usually this limit.",
     )
     parser.add_argument(
@@ -862,11 +874,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--memory",
         type=_size,
-        default=512 * 1024**2,
+        default=None if android else 512 * 1024**2,
         metavar="SIZE|none",
         help="address-space limit (RLIMIT_AS) for each claim's test run, e.g. 512M or 4G "
         "(default 512M). The JVM and Node cannot start under one: use 'none' for them. "
-        "Android/Termux aborts some processes under it too (PF-1): use 'none' there. "
+        "Android aborts every process under one (#4), so there the default is none. "
         "The collateral full-suite run has its own limit, --full-suite-memory.",
     )
     parser.add_argument(
@@ -981,6 +993,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "full_suite_timeout_seconds": args.full_suite_timeout,
             "full_suite_cpu_seconds": args.full_suite_cpu_seconds,
             "full_suite_memory_bytes": args.full_suite_memory,
+            # Why both may be null without a flag: no address-space limit is
+            # the default on Android (#4).
+            "android": _on_android(),
             "sandbox": args.sandbox,
             # Whether the two sides of each check overlapped: it changes how
             # likely a wall-clock limit is to fire, so it belongs with them.

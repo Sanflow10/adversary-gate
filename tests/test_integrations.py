@@ -13,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,7 +31,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, main
+from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, build_parser, main
 from adversary_gate.integrations import jev
 from adversary_gate.integrations.gitevidence import EvidenceError, prepare
 from adversary_gate.integrations import mcp_server
@@ -518,6 +520,49 @@ class TestToolMetadata(unittest.TestCase):
         )
         for tool in tools.values():
             self.assertIn("When to call", tool.description)
+
+
+class TestVerifyRepoTimeLimit(unittest.TestCase):
+    """``verify_repo``'s own limit must leave room for the gate it runs.
+
+    Until 3.0.4 it was 900 s: the gate's default for one full-suite run alone,
+    before the claims and up to 60 mutants. A change that needed longer came
+    back inconclusive with the exception's text and nothing to do about it.
+    """
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        for name in ("ADVERSARY_GATE_POLICY", "ADVERSARY_GATE_BASE_REF", "ADVERSARY_GATE_PYTHON"):
+            os.environ.pop(name, None)
+
+    @staticmethod
+    def _default() -> int:
+        return inspect.signature(mcp_server.verify_repo).parameters["timeout_seconds"].default
+
+    def test_the_default_leaves_room_for_a_full_suite_run(self):
+        self.assertGreater(self._default(), build_parser().get_default("full_suite_timeout"))
+
+    def test_the_hermes_example_does_not_cut_the_gate_short(self):
+        text = (ROOT / "src" / "adversary_gate" / "integrations" / "hermes"
+                / "config.example.yaml").read_text()
+        client = int(re.search(r"^\s*timeout:\s*(\d+)", text, re.M).group(1))
+        self.assertGreater(client, self._default())
+
+    def test_a_run_past_the_limit_names_the_argument_to_raise(self):
+        evidence = mock.Mock(baseline=Path("b"), patch=Path("p"), diff=Path("d"),
+                             coverage=Path("c"), untracked=[], baseline_sha="0" * 40)
+        late = subprocess.TimeoutExpired(cmd="adversary_gate", timeout=5)
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(mcp_server, "prepare", return_value=evidence), \
+                mock.patch.object(mcp_server, "_run_gate", side_effect=late):
+            result = mcp_server.verify_repo(directory, timeout_seconds=5)
+        self.assertEqual(result["decision"], "inconclusive")
+        self.assertFalse(result["mergeable"])
+        self.assertIn("timeout_seconds=5", result["reason"])
+        self.assertEqual([(s["action"], s.get("argument")) for s in result["next_steps"]],
+                         [("raise_limit", "timeout_seconds")])
 
 
 class TestHermesFiles(unittest.TestCase):

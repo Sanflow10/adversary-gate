@@ -50,7 +50,12 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, build_target
-from adversary_gate.verifiers.coverage import UnparseableDiff, covered_diff_ratio, validate_diff
+from adversary_gate.verifiers.coverage import (
+    UnparseableDiff,
+    covered_diff_ratio,
+    uncovered_lines,
+    validate_diff,
+)
 from adversary_gate.verifiers.stability import policy_for
 from adversary_gate.verifiers.strength import (
     _is_test_path,
@@ -2244,6 +2249,55 @@ class TestAg012ResidualPaths(unittest.TestCase):
     def _decision(log_path: Path) -> dict:
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         return [r for r in records if r.get("kind") == "decision"][-1]
+
+
+class TestNoNewlineMarkerIsNotALine(unittest.TestCase):
+    """``\\ No newline at end of file`` is a note about the line above it, not a line.
+
+    Counted as a context line, it moved every added line after it one row
+    down: an honest, fully tested patch to a file whose old version had no
+    final newline measured 1/2 and named a line past the end of the file as
+    not run.
+    """
+
+    # What `git diff` writes when the old file ends without a newline and the
+    # patch rewrites its last line and adds two more, the last one blank.
+    DIFF = (
+        "diff --git a/m.py b/m.py\n"
+        "index 1c33a26..329e3ba 100644\n"
+        "--- a/m.py\n"
+        "+++ b/m.py\n"
+        "@@ -1,3 +1,5 @@\n"
+        " def f(x):\n"
+        "     if x:\n"
+        "-        return 1\n"
+        "\\ No newline at end of file\n"
+        "+        return 2\n"
+        "+    return 3\n"
+        "+\n"
+    )
+
+    def test_added_lines_keep_their_numbers(self):
+        self.assertEqual(validate_diff(self.DIFF), {"m.py": {3, 4, 5}})
+
+    def test_a_fully_run_patch_measures_whole(self):
+        cov = {"files": {"m.py": {"executed_lines": [1, 2, 3, 4]}}}
+        result = covered_diff_ratio(self.DIFF, cov)
+        self.assertEqual((result.changed_lines, result.covered_lines), (2, 2))
+        self.assertEqual(result.ratio, 1.0)
+        self.assertEqual(uncovered_lines(self.DIFF, cov), {})
+
+    def test_the_line_that_did_not_run_is_the_one_named(self):
+        cov = {"files": {"m.py": {"executed_lines": [1, 2, 4]}}}
+        self.assertEqual(uncovered_lines(self.DIFF, cov), {"m.py": [3]})
+
+    def test_a_marker_after_the_last_added_line_changes_nothing(self):
+        diff = (
+            "--- a/m.py\n+++ b/m.py\n@@ -1,2 +1,2 @@\n"
+            " def f(x):\n-    return 1\n+    return 2\n"
+            "\\ No newline at end of file\n"
+        )
+        self.assertEqual(validate_diff(diff), {"m.py": {2}})
 
 
 class TestBaselineNotApplicable(unittest.TestCase):
