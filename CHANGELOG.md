@@ -31,6 +31,19 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Tests
+
+- **The 3.0.6 fail-open, end to end.** 3.0.6 was verified at the mechanism
+  level only. Now reproduced through the CLI: `calc.py` imports `rate` from
+  `test_rules.py`, and the patch changes `rate()` from 2 to 3 next to an
+  honest, covered edit. Measured on 3.0.5: the claim was judged with the
+  baseline's `test_rules.py` put back and read `no_regression`; the
+  collateral suite still caught it (BLOCK), and with it off
+  (`--full-suite-path ""`) the answer was **MERGE, exit 0**. On 3.0.6 the
+  claim itself fails on the patch (`regression`, oracle `patch`): BLOCK with
+  or without the suite. Tests: `TestTheDisguisedModuleEndToEnd` in
+  `test_testpaths_content.py`.
+
 ---
 
 ## [3.0.6] — 2026-10-14
