@@ -372,9 +372,14 @@ takes two steps, in this order, and only the first is done by hand:
    the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
    and uploads both through Trusted Publishing, so every file carries a PyPI
    provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token.
+   another version, and it reads no API token. Before it builds anything it
+   checks the tag's signature with `git verify-tag` against the key in the
+   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
+   kept outside the tree so a push cannot bring its own key): a lightweight
+   tag, an annotated tag with no signature, a signature from another key, or
+   no variable at all, and nothing is published.
 2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with a lightweight (unsigned) one, and refuses while PyPI lacks either
+   with one the same signature check refuses, and refuses while PyPI lacks either
    package. Then it runs the full test suite and **refuses to publish if it
    fails**, builds the wheel and sdist, installs the wheel into a clean
    interpreter, attaches them to the release, and moves the floating tag of the
