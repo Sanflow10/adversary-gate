@@ -62,6 +62,16 @@ quando esta seção vira uma com versão e data.
   among the agent's controls. Off by default: a server that relies on
   `base_ref` keeps working. Tests: three in `TestVerifyRepoTool`.
 
+### Changed
+
+- **The Docker image runs as an unprivileged user.** It ran as root, so the
+  tests it ran -- the patch's code -- ran as root inside the container. It now
+  runs as uid 10001, and CI fails if the image ever runs as root again. git's
+  ownership check is switched off inside the image, because a mounted
+  repository belongs to another uid. The README's *Execution boundary* gains
+  a recipe for running a hostile patch: no network, no capabilities, a
+  read-only root, a throwaway copy of the repository.
+
 ---
 
 ## [3.0.6] — 2026-10-14

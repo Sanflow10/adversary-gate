@@ -738,6 +738,29 @@ Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged us
 
 **Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
 
+The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root. Your project's dependencies are not in it, so extend it:
+
+```dockerfile
+FROM adversary-gate-mcp            # docker build -t adversary-gate-mcp .
+USER root
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+USER 10001
+```
+
+Then run the gate with no network, no capabilities, a read-only root and a **throwaway copy** of the repository (a fresh clone, never your working tree: the tests write into it):
+
+```bash
+docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp:rw,exec --tmpfs /home/gate:rw \
+  --pids-limit 512 --memory 4g \
+  -v "$PWD/throwaway":/work --entrypoint adversary-gate my-project-gate \
+  --baseline /work/baseline --patch /work/patch \
+  --diff /work/changes.diff --coverage-json /work/coverage.json --discover-claims
+```
+
+`--network none` is the boundary `--require-network-isolation` asks you to vouch for; inside it the declaration is true. A container shares the host's kernel: for code known to be hostile, a VM is the stronger boundary.
+
 ### What a test cannot see, by construction
 
 Two limits that no runner setting closes, written down so nobody has to discover them:

@@ -434,6 +434,12 @@ jobs:
       - name: Build the image
         run: docker build -t adversary-gate-mcp:ci .
 
+      - name: The image does not run as root
+        run: |
+          uid="$(docker run --rm --entrypoint id adversary-gate-mcp:ci -u)"
+          echo "uid in the image: $uid"
+          if [ "$uid" = "0" ]; then echo "::error::the image runs as root"; exit 1; fi
+
       - name: Set up Python for the MCP client
         uses: actions/setup-python@v5
         with:
