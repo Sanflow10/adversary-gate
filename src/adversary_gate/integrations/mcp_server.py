@@ -20,6 +20,10 @@ environment the operator sets in the agent's MCP configuration:
   says ``"baseline_chosen_by": "agent"``. Pinning names the baseline; it is
   not a defence against an agent that can write the repository's ``.git``
   (refs, objects, configuration) -- run such an agent where it cannot;
+* ``ADVERSARY_GATE_REQUIRE_PINNED_BASE`` ``1`` makes the pin mandatory: with
+  no ``ADVERSARY_GATE_BASE_REF``, ``verify_repo`` answers ``inconclusive``
+  without running anything, instead of letting the agent pick its own oracle.
+  Off by default, so a server that relies on ``base_ref`` keeps working;
 * ``ADVERSARY_GATE_PYTHON``   the interpreter. Its site-packages are harness
   too -- a plugin installed there runs inside pytest -- so it must be one the
   agent cannot write to.
@@ -161,6 +165,13 @@ def verify_repo(
         policy = policy_args()
         interpreter = os.environ.get("ADVERSARY_GATE_PYTHON") or sys.executable
         pinned = os.environ.get("ADVERSARY_GATE_BASE_REF")
+        if not pinned and _pin_required():
+            return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
+                    "reason": "the operator requires a pinned baseline "
+                              "(ADVERSARY_GATE_REQUIRE_PINNED_BASE) and ADVERSARY_GATE_BASE_REF "
+                              "is not set: a baseline the caller chooses is an oracle the caller "
+                              "chooses, so nothing was run",
+                    "claims": [], "baseline_chosen_by": None}
         base = pinned or base_ref
         options = [a for a in (pytest_args or []) if a.startswith("-")]
         if options:
@@ -219,6 +230,11 @@ def _pin_kind(pinned: Optional[str]) -> str:
     return "ref name (resolved at the start of each run; a commit id never moves)"
 
 
+def _pin_required() -> bool:
+    """The operator asked that no run happen without ``ADVERSARY_GATE_BASE_REF``."""
+    return os.environ.get("ADVERSARY_GATE_REQUIRE_PINNED_BASE", "").strip().lower() in ("1", "true", "yes")
+
+
 def gate_policy() -> Dict[str, Any]:
     """Show the verification policy this server enforces: floors, baseline, interpreter, and what the caller may set.
 
@@ -246,9 +262,10 @@ def gate_policy() -> Dict[str, Any]:
                     "baseline oracle on rewritten tests; fail-closed",
         "baseline": os.environ.get("ADVERSARY_GATE_BASE_REF") or "chosen by the agent (not pinned)",
         "baseline_pin": _pin_kind(os.environ.get("ADVERSARY_GATE_BASE_REF")),
+        "baseline_pin_required": _pin_required(),
         "python": os.environ.get("ADVERSARY_GATE_PYTHON") or sys.executable,
         "agent_controls": ["repo", "claims", "pytest_args (paths only)"]
-        + ([] if os.environ.get("ADVERSARY_GATE_BASE_REF") else ["base_ref"]),
+        + ([] if os.environ.get("ADVERSARY_GATE_BASE_REF") or _pin_required() else ["base_ref"]),
     }
 
 

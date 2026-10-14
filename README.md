@@ -372,9 +372,14 @@ takes two steps, in this order, and only the first is done by hand:
    the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
    and uploads both through Trusted Publishing, so every file carries a PyPI
    provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token.
+   another version, and it reads no API token. Before it builds anything it
+   checks the tag's signature with `git verify-tag` against the key in the
+   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
+   kept outside the tree so a push cannot bring its own key): a lightweight
+   tag, an annotated tag with no signature, a signature from another key, or
+   no variable at all, and nothing is published.
 2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with a lightweight (unsigned) one, and refuses while PyPI lacks either
+   with one the same signature check refuses, and refuses while PyPI lacks either
    package. Then it runs the full test suite and **refuses to publish if it
    fails**, builds the wheel and sdist, installs the wheel into a clean
    interpreter, attaches them to the release, and moves the floating tag of the
@@ -681,6 +686,7 @@ Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`
 | `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused. |
 | `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the answer says `"baseline_chosen_by": "agent"`. Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
 | `ADVERSARY_GATE_PYTHON` | the interpreter's site-packages are harness too — a plugin installed there runs inside pytest. Use one the agent cannot write to. |
+| `ADVERSARY_GATE_REQUIRE_PINNED_BASE` | `1` makes the pin above mandatory: without `ADVERSARY_GATE_BASE_REF`, `verify_repo` answers `inconclusive` and runs nothing, rather than judge against a baseline the agent named. Off by default, so servers that rely on `base_ref` keep working; `gate_policy` reports it as `baseline_pin_required`. |
 
 `pytest_args` accepts test paths only; an option (`-p evil`) is refused. The shipped Hermes skill tells the agent to call the gate before saying "done", to fix code rather than tests on `block`, to never report `inconclusive` as success, and to promote a self-written skill only on `merge`.
 

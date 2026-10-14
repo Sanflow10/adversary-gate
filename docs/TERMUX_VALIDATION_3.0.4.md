@@ -125,4 +125,4 @@ adversary-gate --baseline BASELINE_DIR --patch PATCH_DIR \
 
 Run 1b adds `--census-min-mutants 1`.
 
-The script that built the fixtures and ran the four scenarios was written with an AI assistant and is not attached. The runs and the artefacts are the operator's.
+The script that built the fixtures and ran the four scenarios is not attached. The runs and the artefacts are the operator's.

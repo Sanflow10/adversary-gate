@@ -77,6 +77,17 @@ them produces a `MERGE` it should not:
   API token and carry **no attestation** (that route is gone; see the
   README's release steps). Versions before 3.0.4 are unsupported. The GitHub
   Release artefacts carry no signature either. Verify them against the tag.
+  Release tags are SSH-signed, and both release workflows refuse a tag that is
+  not signed by the key in the repository variable `RELEASE_ALLOWED_SIGNERS`
+  (before this, a tag's name was all `pypi-publish.yml` checked). The release
+  key is:
+
+  ```
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM9vCvqwQR4opVWnagKysacyO0pWZFt5Qk4b+HcV30jq
+  ```
+
+  To check a tag yourself: put `release <that line>` in a file and run
+  `git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=<file> verify-tag vX.Y.Z`.
 
 ## Reporting a vulnerability
 
