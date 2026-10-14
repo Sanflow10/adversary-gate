@@ -13,6 +13,11 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
 
 Versions before 3.0.4 are unsupported; their sections below are history.
 
+Only the latest release is distributed. The tags, GitHub Releases and PyPI
+files of earlier versions are no longer published, so the routes the sections
+below name for them (`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a
+release wheel URL) no longer resolve.
+
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
 no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
 environment) e a `2.4.0` subiu por OIDC, com atestados de proveniência. A
@@ -31,7 +36,41 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Security
+
+- **A release tag's signature is checked, not assumed.** "A person pushes a
+  signed tag" was a convention: `pypi-publish.yml` checked the tag's name and
+  version and nothing else, so a lightweight or unsigned `vX.Y.Z` tag went to
+  PyPI with full attestations, and `release.yml` refused a lightweight tag but
+  passed an annotated one with no signature (`git tag -a`). Both now run
+  `git verify-tag` against the key in the repository variable
+  `RELEASE_ALLOWED_SIGNERS`, kept outside the tree so a push cannot bring its
+  own key; with no variable, nothing is published. SECURITY.md carries the
+  release key. Tests: `TestOneRouteToPyPI` (static) and
+  `TestTheTagSignatureStepRuns`, which runs the publisher's step as written
+  against tags signed by the release key, by another key, unsigned and
+  lightweight.
+
+### Added
+
+- **MCP: a pinned baseline can be made mandatory.** Unpinned, `verify_repo`
+  judged against the `base_ref` the agent passed and only labelled the answer
+  `"baseline_chosen_by": "agent"`, and whoever picks the baseline picks the
+  oracle. With `ADVERSARY_GATE_REQUIRE_PINNED_BASE=1` and no
+  `ADVERSARY_GATE_BASE_REF`, it answers `inconclusive` and runs nothing;
+  `gate_policy` reports `baseline_pin_required` and stops listing `base_ref`
+  among the agent's controls. Off by default: a server that relies on
+  `base_ref` keeps working. Tests: three in `TestVerifyRepoTool`.
+
 ### Changed
+
+- **The Docker image runs as an unprivileged user.** It ran as root, so the
+  tests it ran -- the patch's code -- ran as root inside the container. It now
+  runs as uid 10001, and CI fails if the image ever runs as root again. git's
+  ownership check is switched off inside the image, because a mounted
+  repository belongs to another uid. The README's *Execution boundary* gains
+  a recipe for running a hostile patch: no network, no capabilities, a
+  read-only root, a throwaway copy of the repository.
 
 - **`--sandbox bwrap` unshares more and keeps no capability.** IPC and the
   hostname were shared with the host, so a guest could reach the host's
@@ -340,12 +379,12 @@ flutuante `v3` nasce aqui; a `v2` continua na linha 2.x.
   `NOTICE` traz os termos que a seção 7 da AGPL permite: manter os avisos de
   autoria, marcar a versão modificada, não usar os nomes Sanflow/Sanflow10 para
   promover derivados e nenhum direito à marca AdversaryGate. A linha 2.x, até a
-  `2.14.2`, foi publicada sob MIT e continua sob MIT (cada tag carrega o seu
-  `LICENSE`). Licença comercial, sem as obrigações da AGPL, sob consulta.
+  `2.14.2`, foi publicada sob MIT e continua sob MIT para quem a obteve. Licença comercial, sem as obrigações da AGPL, sob consulta.
 - **Versão major por causa da licença.** Nenhum contrato da ferramenta mudou;
   o número muda para que a troca de licença não chegue em silêncio a quem segue
   `@v2` ou instala `adversary-gate` sem limite de versão. Para ficar no MIT:
   `@v2` ou `adversary-gate<3`, que recebem as mesmas correções na `2.14.2`.
+  (Essas rotas não existem mais: ver o topo deste arquivo.)
 
 ---
 

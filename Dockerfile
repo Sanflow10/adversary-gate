@@ -12,6 +12,15 @@ COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[mcp]"
 
+# The tests the gate runs are the patch's code: they run as an unprivileged
+# user, never as root. A repository mounted from the host belongs to another
+# uid, which git refuses as "dubious ownership" -- inside this throwaway
+# container that check guards nothing, so it is switched off for git only.
+RUN useradd --system --uid 10001 --home-dir /home/gate --create-home gate \
+    && git config --system --add safe.directory '*'
+USER 10001
+ENV HOME=/home/gate
+
 # Policy belongs to whoever runs the container, never to the agent calling it:
 #   -e ADVERSARY_GATE_BASE_REF=origin/main -e ADVERSARY_GATE_POLICY="--sandbox bwrap"
 # Mount the repository to judge, e.g. -v "$PWD":/work, and pass repo=/work.

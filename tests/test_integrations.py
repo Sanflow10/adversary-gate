@@ -417,7 +417,8 @@ class TestVerifyRepoTool(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {"PYTHONPATH": str(ROOT / "src")})
         self.env.start()
         self.addCleanup(self.env.stop)
-        for name in ("ADVERSARY_GATE_POLICY", "ADVERSARY_GATE_BASE_REF", "ADVERSARY_GATE_PYTHON"):
+        for name in ("ADVERSARY_GATE_POLICY", "ADVERSARY_GATE_BASE_REF", "ADVERSARY_GATE_PYTHON",
+                     "ADVERSARY_GATE_REQUIRE_PINNED_BASE"):
             os.environ.pop(name, None)
 
     def test_clean_change_merges_and_names_who_chose_the_baseline(self):
@@ -459,6 +460,40 @@ class TestVerifyRepoTool(unittest.TestCase):
         self.assertEqual(result["baseline_chosen_by"], "operator")
         self.assertEqual(result["decision"], "merge", result["reason"])
         self.assertNotIn("base_ref", policy["agent_controls"])
+
+    def test_a_required_pin_that_is_missing_runs_nothing(self):
+        """With the pin required, an agent's own base_ref is not an oracle."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_REQUIRE_PINNED_BASE": "1"}), \
+                    mock.patch.object(mcp_server, "prepare") as prepare_:
+                result = mcp_server.verify_repo(str(repo), base_ref="HEAD")
+                policy = mcp_server.gate_policy()
+        prepare_.assert_not_called()
+        self.assertEqual(result["decision"], "inconclusive")
+        self.assertFalse(result["mergeable"])
+        self.assertIn("ADVERSARY_GATE_BASE_REF", result["reason"])
+        self.assertTrue(policy["baseline_pin_required"])
+        self.assertNotIn("base_ref", policy["agent_controls"])
+
+    def test_a_required_pin_that_is_set_runs_as_before(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_REQUIRE_PINNED_BASE": "1",
+                                              "ADVERSARY_GATE_BASE_REF": "HEAD"}):
+                result = mcp_server.verify_repo(str(repo), base_ref="no-such-ref")
+        self.assertEqual(result["decision"], "merge", result["reason"])
+        self.assertEqual(result["baseline_chosen_by"], "operator")
+
+    def test_the_pin_is_not_required_by_default(self):
+        for value in ("", "0", "no"):
+            with self.subTest(value=value), \
+                    mock.patch.dict(os.environ, {"ADVERSARY_GATE_REQUIRE_PINNED_BASE": value}):
+                policy = mcp_server.gate_policy()
+                self.assertFalse(policy["baseline_pin_required"])
+                self.assertIn("base_ref", policy["agent_controls"])
 
 
 @unittest.skipUnless(HAS_GIT and HAS_COVERAGE and HAS_MCP, "needs git, coverage and the MCP SDK")
