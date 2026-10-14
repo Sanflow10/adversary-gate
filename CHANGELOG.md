@@ -13,6 +13,11 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
 
 Versions before 3.0.4 are unsupported; their sections below are history.
 
+Only the latest release is distributed. The tags, GitHub Releases and PyPI
+files of earlier versions are no longer published, so the routes the sections
+below name for them (`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a
+release wheel URL) no longer resolve.
+
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
 no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
 environment) e a `2.4.0` subiu por OIDC, com atestados de proveniência. A
@@ -329,12 +334,12 @@ flutuante `v3` nasce aqui; a `v2` continua na linha 2.x.
   `NOTICE` traz os termos que a seção 7 da AGPL permite: manter os avisos de
   autoria, marcar a versão modificada, não usar os nomes Sanflow/Sanflow10 para
   promover derivados e nenhum direito à marca AdversaryGate. A linha 2.x, até a
-  `2.14.2`, foi publicada sob MIT e continua sob MIT (cada tag carrega o seu
-  `LICENSE`). Licença comercial, sem as obrigações da AGPL, sob consulta.
+  `2.14.2`, foi publicada sob MIT e continua sob MIT para quem a obteve. Licença comercial, sem as obrigações da AGPL, sob consulta.
 - **Versão major por causa da licença.** Nenhum contrato da ferramenta mudou;
   o número muda para que a troca de licença não chegue em silêncio a quem segue
   `@v2` ou instala `adversary-gate` sem limite de versão. Para ficar no MIT:
   `@v2` ou `adversary-gate<3`, que recebem as mesmas correções na `2.14.2`.
+  (Essas rotas não existem mais: ver o topo deste arquivo.)
 
 ---
 
