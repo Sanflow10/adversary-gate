@@ -64,6 +64,8 @@ jobs:
       # signed tag is an annotated one.
       - name: Resolve the release ref
         id: ref
+        env:
+          ALLOWED_SIGNERS: ${{ vars.RELEASE_ALLOWED_SIGNERS }}
         run: |
           set -euo pipefail
 
@@ -78,6 +80,18 @@ jobs:
           git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
           if [ "$(git cat-file -t "refs/tags/$TAG")" != "tag" ]; then
             echo "::error::$TAG is a lightweight tag; a release needs an annotated, signed one (git tag -s)"
+            exit 1
+          fi
+          # Annotated is not signed: `git tag -a` passes the check above. The
+          # signature is checked against the same key pypi-publish.yml uses.
+          if [ -z "${ALLOWED_SIGNERS//[[:space:]]/}" ]; then
+            echo "::error::the repository variable RELEASE_ALLOWED_SIGNERS is not set: nothing to verify $TAG against"
+            exit 1
+          fi
+          printf '%s\n' "$ALLOWED_SIGNERS" > "$RUNNER_TEMP/allowed_signers"
+          if ! git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$RUNNER_TEMP/allowed_signers" \
+                verify-tag "refs/tags/$TAG"; then
+            echo "::error::$TAG is not signed by a key in RELEASE_ALLOWED_SIGNERS"
             exit 1
           fi
           git checkout --quiet "refs/tags/$TAG"
