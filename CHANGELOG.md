@@ -72,6 +72,15 @@ quando esta seção vira uma com versão e data.
   a recipe for running a hostile patch: no network, no capabilities, a
   read-only root, a throwaway copy of the repository.
 
+- **`--sandbox bwrap` unshares more and keeps no capability.** IPC and the
+  hostname were shared with the host, so a guest could reach the host's
+  System V shared memory and message queues. bwrap now also gets
+  `--unshare-ipc`, `--unshare-uts`, `--unshare-user-try` (a user namespace
+  where the kernel allows one) and `--cap-drop ALL`. Still no seccomp, and
+  still not a defence against code built to escape: README says so. Tests:
+  `TestBwrapNamespacesAndCapabilities` in `test_runner.py`, which check the
+  argv without needing bwrap installed.
+
 ---
 
 ## [3.0.6] — 2026-10-14

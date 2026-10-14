@@ -596,3 +596,36 @@ class TestSandboxResult(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBwrapNamespacesAndCapabilities(unittest.TestCase):
+    """The wrapper's argv, checked where bwrap is not installed too.
+
+    The structural tests above skip without bwrap, which is every CI runner
+    that cannot create a namespace; these patch the availability check so the
+    shape of the argv is asserted everywhere.
+    """
+
+    def setUp(self):
+        self.root = _repo({"anything.py": "pass\n"})
+        self.addCleanup(__import__("shutil").rmtree, self.root, ignore_errors=True)
+        with mock.patch.object(runner, "bwrap_available", return_value=True):
+            self.argv = bwrap_prefix(self.root)
+        self.flags = self.argv[: self.argv.index("--")]
+
+    def test_ipc_and_hostname_are_unshared(self):
+        self.assertIn("--unshare-ipc", self.flags)
+        self.assertIn("--unshare-uts", self.flags)
+
+    def test_a_user_namespace_is_tried(self):
+        self.assertIn("--unshare-user-try", self.flags)
+
+    def test_every_capability_is_dropped(self):
+        i = self.flags.index("--cap-drop")
+        self.assertEqual(self.flags[i + 1], "ALL")
+        self.assertNotIn("--cap-add", self.flags)
+
+    def test_the_earlier_isolation_is_kept(self):
+        for flag in ("--unshare-net", "--unshare-pid", "--die-with-parent", "--new-session"):
+            with self.subTest(flag=flag):
+                self.assertIn(flag, self.flags)
