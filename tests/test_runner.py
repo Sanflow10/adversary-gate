@@ -193,6 +193,21 @@ class TestBytecodeTheTreeShipsIsNotRun(unittest.TestCase):
         (root / "mod.py").write_text("def value():\n    return 2\n")
         self.assertEqual(run_test(root, "test_mod.py").exit_code, 0)
 
+    def test_the_cache_it_reads_is_warm_and_holds_nothing_of_the_tree(self):
+        """The first fix pointed the cache under /dev/null: nothing was cached at
+        all, pytest recompiled itself on every run (0.4 s -> 1.75 s), and a 1 s
+        --timeout killed the claims in CI."""
+        import shutil
+
+        root = _repo({"test_mod.py": "def test_ok():\n    pass\n"})
+        self.addCleanup(shutil.rmtree, root, True)
+        seen = run_test(root, "", command='printf %s "$PYTHONPYCACHEPREFIX"').stdout
+        cache = Path(seen)
+        self.assertTrue(cache.is_dir(), seen)
+        cached = [p.as_posix() for p in cache.rglob("*.pyc")]
+        self.assertTrue(any("/_pytest/" in p for p in cached), cached[:5])
+        self.assertFalse(any(str(root.resolve()) in p for p in cached))
+
 
 class TestHarnessErrorDetection(unittest.TestCase):
     def test_missing_pytest_is_unrunnable(self):
