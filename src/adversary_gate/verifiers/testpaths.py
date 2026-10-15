@@ -153,6 +153,16 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
     if not candidates or not non_tests:
         return frozenset()
 
+    # AG-048: pytest puts the directory of each test module and conftest on
+    # sys.path, so ``tests/requests.py`` beside ``tests/test_x.py`` is what
+    # ``import requests`` gets. Each candidate is also known by its name
+    # relative to every such directory above it (3.0.9).
+    from adversary_gate.core.path_policy import _import_roots  # noqa: PLC0415 -- one rule
+
+    roots = sorted(r for r in _import_roots(base) if r)
+    aliases = {rel: {mod[len(r) + 1:] for r in roots if mod.startswith(r + "/")}
+               for rel, mod in candidates.items()}
+
     imported: set = set()
 
     def record(dotted: str) -> None:
@@ -163,7 +173,8 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
             if rel in imported:
                 continue
             # Under a src/ layout the module is imported without the "src/".
-            if mod == dotted or (mod.startswith("src/") and mod[4:] == dotted) or (
+            if mod == dotted or dotted in aliases[rel] or (
+                mod.startswith("src/") and mod[4:] == dotted) or (
                 "/" in dotted and (mod.endswith("/" + dotted) or dotted.endswith("/" + mod))
             ):
                 imported.add(rel)

@@ -40,23 +40,29 @@ quando esta seção vira uma com versão e data.
 
 ## [3.0.9] — 2026-10-15
 
-One fail-open found by reading the code, not reproduced end to end, and three
-gaps where the gate said too little. Each change has a test that fails on 3.0.8.
+One hole in the harness check, found by reading the code, and three gaps
+where the gate said too little. Each change has a test that fails on 3.0.8.
 
 ### Security
 
-- **AG-048: a module at the root that the runner would import is the
-  harness.** `python -m pytest` searches the tree's root first, and pytest
-  adds the directory of every test module and conftest that is not a package;
-  an `inspect.py`, `json.py` or `pytest/` the patch added in any of them ran in
-  place of the real module, on the patch side only, and no harness check named
-  it. The tree comparison now finds those directories as pytest does (checked
-  against pytest 9.1.1's own `sys.path`) and treats an entry there with a
+- **AG-048: a module on pytest's import path is the harness.** `python -m
+  pytest` searches the tree's root first, and pytest adds the directory of
+  every test module and conftest that is not a package; an `inspect.py`,
+  `json.py` or `pytest/` the patch added in any of them ran in place of the
+  real module, on the patch side only, and no harness check named it. The
+  tree comparison now finds those directories as pytest does (checked against
+  pytest 9.1.1's own `sys.path`) and treats an entry there with a
   standard-library name or the name of a module pytest loads as a harness
-  change when the patch adds or changes it. A directory the baseline already had keeps its contents free
-  (`test/` is a standard-library name), and a virtualenv at the root is
-  skipped. Not reproduced as an attack; verified at the mechanism. Tests:
-  `TestAModuleTheRunnerWouldImportIsTheHarness`.
+  change when the patch adds or changes it. A directory the baseline already
+  had keeps its contents free (`test/` is a standard-library name), and a
+  virtualenv at the root is skipped. The AG-047 resolver also knows a module
+  there by its bare name, so a `tests/requests.py` the product imports as
+  `requests` is product code, measured and mutated. Not shown to reach
+  `MERGE`: the cases built for this release were stopped by other checks (the
+  mutation blind-spot and stillborn rules); what was missing is that no check
+  named the file. Tests: `TestAModuleTheRunnerWouldImportIsTheHarness`,
+  `test_a_standard_module_name_on_the_import_path_is_not_a_merge`,
+  `test_a_module_on_pytests_path_is_matched_by_its_bare_name`.
 - **Claims cut by `--max-claims` with the full suite off are not a `MERGE`.**
   The tests discovery cut were judged by nothing, and the kept claims could
   merge. That is now `INCONCLUSIVE`, with a `raise_limit` step.
