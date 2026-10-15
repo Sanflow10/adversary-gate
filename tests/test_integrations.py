@@ -681,3 +681,32 @@ class TestHermesFiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnUntrackedFileIsReadAsGitWould(unittest.TestCase):
+    """The diff of untracked files followed symlinks and opened anything (3.0.8)."""
+
+    def test_a_symlink_is_its_target_not_its_content(self):
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "secret.txt").write_text("token = 123\n")
+            (root / "link.py").symlink_to(root / "secret.txt")
+            hunk = _new_file_hunk("link.py", root / "link.py")
+        self.assertNotIn("token", hunk)
+        self.assertIn("+" + str(root / "secret.txt"), hunk)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "no FIFOs here")
+    def test_a_fifo_is_not_opened(self):
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / "pipe.py"
+            os.mkfifo(fifo)
+            self.assertEqual(_new_file_hunk("pipe.py", fifo), "")
+
+    def test_a_form_feed_does_not_split_a_line(self):
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "m.py"
+            path.write_text("x = 1\n\x0c\ny = 2\n")
+            self.assertIn("@@ -0,0 +1,3 @@", _new_file_hunk("m.py", path))
