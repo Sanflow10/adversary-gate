@@ -45,7 +45,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
                         help="a variable the pass itself needs (not the project's)")
-    parser.add_argument("--timeout", type=int, default=900)
+    # No wall clock by default: the whole suite runs here, as it did before
+    # 3.0.7, and the job's own timeout bounds it. 900 s killed a real suite.
+    parser.add_argument("--timeout", type=int, default=None)
     parser.add_argument("--require-network-isolation", action="store_true")
     args = parser.parse_args(argv)
 

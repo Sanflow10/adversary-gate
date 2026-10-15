@@ -22,6 +22,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
+def _bwrap_runs_here() -> bool:
+    """Raw bwrap with a network namespace, none of the gate's arguments: GitHub's
+    runner refuses it (``loopback: Failed RTM_NEWADDR``), which says nothing
+    about the gate. Same probe as ``test_runner._bwrap_usable_here``."""
+    if not shutil.which("bwrap"):
+        return False
+    try:
+        return subprocess.run(["bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", "true"],
+                              capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 WRITE_REPORT = 'printf \'{"files": {}}\' > "$COVERAGE_JSON"; '
 
 
@@ -71,7 +84,7 @@ class TestTheCoveragePass(unittest.TestCase):
         result = _pass(self.repo, self.out, "coverage", "--tools-bin", str(tools))
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    @unittest.skipUnless(shutil.which("bwrap"), "bubblewrap not installed")
+    @unittest.skipUnless(_bwrap_runs_here(), "bwrap cannot run in this environment")
     def test_under_bwrap_only_the_report_directory_is_writable_outside_the_repo(self):
         tools = self.base / "out" / "tools" / "bin"
         tools.mkdir(parents=True)
@@ -82,8 +95,6 @@ class TestTheCoveragePass(unittest.TestCase):
         command = f"coverage; echo planted > {sibling}/calc.py; echo x > {tools}/coverage; true"
         result = _pass(self.repo, self.out, command, "--tools-bin", str(tools),
                        "--sandbox", "bwrap")
-        if "bwrap" in result.stderr and "Operation not permitted" in result.stderr:
-            self.skipTest("bwrap cannot create namespaces here")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((sibling / "calc.py").exists())
         self.assertIn("COVERAGE_JSON", (tools / "coverage").read_text())
@@ -101,6 +112,10 @@ class TestTheActionUsesThePass(unittest.TestCase):
     def test_the_script_no_longer_runs_the_command(self):
         self.assertIn("--skip-coverage", self.step)
         self.assertNotIn("--coverage-command", self.step)
+
+    def test_the_pass_has_no_wall_clock_of_its_own(self):
+        """A 900 s default killed the whole suite of a real project in CI."""
+        self.assertNotIn("--timeout", self.step)
 
     def test_the_pass_gets_the_gate_boundary(self):
         self.assertIn("adversary_gate.integrations.coverage_pass", self.step)

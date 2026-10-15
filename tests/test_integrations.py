@@ -411,6 +411,19 @@ class TestGitEvidence(unittest.TestCase):
                 prepare(repo, "no-such-ref", Path(directory) / "w", python=sys.executable)
 
 
+def _bwrap_runs_here() -> bool:
+    """Raw bwrap with a network namespace, none of the gate's arguments: GitHub's
+    runner refuses it (``loopback: Failed RTM_NEWADDR``), which says nothing
+    about the gate. Same probe as ``test_runner._bwrap_usable_here``."""
+    if not shutil.which("bwrap"):
+        return False
+    try:
+        return subprocess.run(["bwrap", "--unshare-net", "--ro-bind", "/", "/", "--", "true"],
+                              capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 @unittest.skipUnless(HAS_GIT and HAS_COVERAGE, "needs git and coverage")
 class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
     """The MCP's coverage pass runs the patch's tests: the same boundary as the gate's runs.
@@ -446,7 +459,7 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
         secret, _ = self._run()
         self.assertEqual(secret, "absent")
 
-    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    @unittest.skipUnless(_bwrap_runs_here(), "bwrap cannot run in this environment")
     def test_a_bwrap_policy_contains_the_coverage_pass(self):
         _, sees_host = self._run(sandbox="bwrap")
         self.assertEqual(sees_host, "False")
