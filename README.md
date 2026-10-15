@@ -206,9 +206,15 @@ mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
 `NON_SOURCE_SUFFIXES` in `src/adversary_gate/verifiers/strength.py` — a **denylist**, not an
 allowlist. Anything that is not Python, not a test, and not on the list of
 things that are plainly not code (`.md`, `.yml`, `.json`, images, archives,
-compiled artefacts) counts as source we cannot judge. That direction is
+object files) counts as source we cannot judge. That direction is
 deliberate: the previous shape was an allowlist of languages somebody had
-remembered to type, and every suffix outside it was invisible.
+remembered to type, and every suffix outside it was invisible. Compiled code a
+runtime loads (`.so`, `.pyd`, `.dll`, `.dylib`, `.pyc`, `.jar`, `.class`,
+`.wasm`, `.exe`) is code: Python imports `rules.so` before `rules.py`. Until
+3.0.7 it was on the not-code list. A project that builds extensions in place
+now gets INCONCLUSIVE when the built files differ from the baseline; build them
+outside the tree, or into `build/`. The tests also never read bytecode from the
+tree's `__pycache__`.
 
 That is not a hypothetical. Until AG-013, a patch whose entire effect was in
 `schema.sql` reported:

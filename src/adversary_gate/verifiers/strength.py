@@ -235,10 +235,14 @@ NON_SOURCE_SUFFIXES = frozenset({
     # images, media, fonts
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
     ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    # packaged or compiled artefacts
-    ".zip", ".gz", ".tar", ".bz2", ".xz", ".jar", ".war", ".class",
-    ".so", ".dll", ".dylib", ".a", ".o", ".obj", ".lib", ".exe",
-    ".pyc", ".pyo", ".pyd", ".wasm", ".min", ".map", ".cache",
+    # packaged artefacts and build intermediates. Not what a runtime loads:
+    # ``.so``/``.pyd``/``.dll``/``.dylib``, ``.pyc``/``.pyo``, ``.jar``,
+    # ``.class``, ``.wasm`` and ``.exe`` are code -- Python imports
+    # ``rules.so`` before ``rules.py`` -- and were on this list until 3.0.7, so
+    # a compiled module placed next to a source one replaced it unjudged.
+    ".zip", ".gz", ".tar", ".bz2", ".xz", ".war",
+    ".a", ".o", ".obj", ".lib",
+    ".min", ".map", ".cache",
     # version-control and editor noise
     ".orig", ".rej", ".bak", ".swp", ".swo", ".tmp", ".log",
 })

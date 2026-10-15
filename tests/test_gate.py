@@ -1753,6 +1753,26 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 changed_foreign_source_files(root / "baseline", root / "patch"), []
             )
 
+    def test_a_compiled_module_is_code_the_engine_cannot_judge(self):
+        """Python imports ``rules.so`` before ``rules.py``: it is code, not an artefact.
+
+        Until 3.0.7 compiled and bytecode files were on the list of things that
+        are plainly not code, so a patch that put one next to a module replaced
+        that module and was never judged.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            for name in ("rules.cpython-312-x86_64-linux-gnu.so", "native.pyd", "old.pyc", "lib.dylib"):
+                (root / "patch" / name).write_bytes(b"\x7fELF compiled")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["lib.dylib", "native.pyd", "old.pyc", "rules.cpython-312-x86_64-linux-gnu.so"],
+            )
+
     def test_foreign_only_patch_cannot_reach_merge(self):
         """The observable consequence: before the fix this returned exit 0."""
         with tempfile.TemporaryDirectory() as directory:

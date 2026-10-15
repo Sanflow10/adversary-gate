@@ -328,7 +328,15 @@ def run_test(
     if not root.is_dir():
         raise ValueError(f"repo_dir is not a directory: {repo_dir}")
 
-    safe_env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    safe_env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        # Bytecode is read from here, not from the tree's ``__pycache__``: an
+        # unchecked-hash ``.pyc`` there (PEP 552) is loaded without a look at
+        # its source, so a patch could ship one that runs in place of the
+        # module the gate measures. Nothing exists under this path.
+        "PYTHONPYCACHEPREFIX": os.path.join(os.devnull, "adversary-gate-pycache"),
+    }
     if site.USER_BASE:
         safe_env["PYTHONUSERBASE"] = site.USER_BASE
     if env:

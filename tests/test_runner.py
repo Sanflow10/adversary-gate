@@ -173,6 +173,27 @@ class TestExecutionContract(unittest.TestCase):
         self.assertEqual(result.output_tail, str(self.root.resolve()))
 
 
+class TestBytecodeTheTreeShipsIsNotRun(unittest.TestCase):
+    """A ``__pycache__`` the patch ships is not what runs: the source is.
+
+    An unchecked-hash ``.pyc`` (PEP 552) is loaded without looking at the
+    source at all, so one placed in ``__pycache__`` ran in place of the module
+    the gate measured. The runner points the bytecode cache elsewhere.
+    """
+
+    def test_an_unchecked_pyc_does_not_replace_the_source(self):
+        import py_compile
+        import shutil
+
+        root = _repo({"mod.py": "def value():\n    return 1\n",
+                      "test_mod.py": "import mod\n\ndef test_value():\n    assert mod.value() == 2\n"})
+        self.addCleanup(shutil.rmtree, root, True)
+        py_compile.compile(str(root / "mod.py"), doraise=True,
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+        (root / "mod.py").write_text("def value():\n    return 2\n")
+        self.assertEqual(run_test(root, "test_mod.py").exit_code, 0)
+
+
 class TestHarnessErrorDetection(unittest.TestCase):
     def test_missing_pytest_is_unrunnable(self):
         self.assertEqual(
