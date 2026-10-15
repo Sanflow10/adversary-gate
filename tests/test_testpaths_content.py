@@ -73,6 +73,20 @@ class TestProductionImportedTests(unittest.TestCase):
             })
             self.assertEqual(production_imported_tests(root), frozenset({"src/test_util.py"}))
 
+    def test_a_module_on_pytests_path_is_matched_by_its_bare_name(self):
+        """AG-048 (3.0.9): pytest puts ``tests/`` on sys.path, so ``tests/requests.py``
+        is what ``import requests`` in the product gets -- a library replaced by a
+        file judged as a test."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _tree(root, {
+                "app.py": "import requests\n\n\ndef get():\n    return requests.get\n",
+                "tests/requests.py": "def get():\n    return 1\n",
+                "tests/helpers.py": "X = 1\n",
+                "tests/test_app.py": "import helpers\nimport app\n\n\ndef test_a():\n    assert helpers.X\n",
+            })
+            self.assertEqual(production_imported_tests(root), frozenset({"tests/requests.py"}))
+
     def test_a_product_module_in_latin_1_is_read(self):
         """It was read as UTF-8, failed, and was skipped: its import went unseen (3.0.8)."""
         with tempfile.TemporaryDirectory() as d:

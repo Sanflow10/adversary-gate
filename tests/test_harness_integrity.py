@@ -236,3 +236,101 @@ class TestAPatchCannotWriteAVirtualenvMarker(unittest.TestCase):
         for path in ("pyvenv.cfg", "pkg/pyvenv.cfg", "a/b/pyvenv.cfg"):
             with self.subTest(path=path):
                 self.assertTrue(policy.violations([path]), path)
+
+
+class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
+    """AG-048: ``python -m pytest`` puts the tree's root first on ``sys.path``,
+    so a top-level ``inspect.py`` or ``pytest/`` the patch adds runs in place of
+    the real module, on the patch side only. It configures the runner as much as
+    a ``pytest.ini`` does (3.0.9)."""
+
+    def _trees(self, root: Path, base: dict, patch: dict):
+        for side, files in (("baseline", base), ("patch", {**base, **patch})):
+            for rel, text in files.items():
+                (root / side / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / side / rel).write_text(text)
+        return root / "baseline", root / "patch"
+
+    def _found(self, base: dict, patch: dict) -> set:
+        with tempfile.TemporaryDirectory() as directory:
+            return {v.path for v in harness_drift(*self._trees(Path(directory), base, patch))}
+
+    def test_a_stdlib_name_at_the_root_is_caught(self):
+        self.assertIn("inspect.py", self._found({"calc.py": "x = 1\n"}, {"inspect.py": "x = 1\n"}))
+
+    def test_a_package_named_like_the_runner_is_caught(self):
+        self.assertIn("pytest", self._found({"calc.py": "x = 1\n"}, {"pytest/__init__.py": "x = 1\n"}))
+        self.assertIn("pytest.py", self._found({"calc.py": "x = 1\n"}, {"pytest.py": "x = 1\n"}))
+
+    def test_changing_one_the_baseline_had_is_caught(self):
+        self.assertIn("json.py", self._found({"json.py": "a = 1\n"}, {"json.py": "a = 2\n"}))
+
+    def test_an_ordinary_module_is_not(self):
+        self.assertEqual(self._found({"calc.py": "x = 1\n"}, {"money.py": "y = 1\n"}), set())
+
+    def test_a_directory_the_baseline_had_keeps_its_files_free(self):
+        """``test/`` is a stdlib name and a common test directory."""
+        self.assertEqual(self._found({"test/test_a.py": "def test_a():\n    pass\n"},
+                                     {"test/test_b.py": "def test_b():\n    pass\n"}), set())
+
+    def test_a_nested_stdlib_name_is_not_on_the_path(self):
+        """Inside a package, ``pkg/inspect.py`` is ``pkg.inspect``: it shadows nothing."""
+        self.assertEqual(self._found({"pkg/__init__.py": "", "pkg/tests/__init__.py": "",
+                                      "pkg/tests/test_a.py": "def test_a():\n    pass\n"},
+                                     {"pkg/inspect.py": "x = 1\n"}), set())
+
+    # pytest's default import mode puts more than the root on sys.path:
+    # measured on pytest 9.1.1 (3.0.9), a ``wave.py`` beside each of these was
+    # imported in place of the standard library's.
+
+    def test_a_test_directory_without_init_is_on_the_path(self):
+        base = {"tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("tests/wave.py", self._found(base, {"tests/wave.py": "x = 1\n"}))
+
+    def test_a_deep_test_directory_is_on_the_path(self):
+        base = {"a/b/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("a/b/wave.py", self._found(base, {"a/b/wave.py": "x = 1\n"}))
+
+    def test_a_conftest_directory_is_on_the_path(self):
+        base = {"sub/conftest.py": "", "tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("sub/wave.py", self._found(base, {"sub/wave.py": "x = 1\n"}))
+
+    def test_the_parent_of_a_test_package_is_on_the_path(self):
+        base = {"x/pkg/__init__.py": "", "x/pkg/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("x/wave.py", self._found(base, {"x/wave.py": "x = 1\n"}))
+
+    def test_a_test_file_the_patch_adds_puts_its_directory_on_the_path(self):
+        self.assertIn("new/wave.py", self._found({"calc.py": "x = 1\n"},
+                                                 {"new/test_n.py": "def test_n():\n    pass\n",
+                                                  "new/wave.py": "x = 1\n"}))
+
+    def test_a_directory_put_on_the_path_by_a_test_is_covered(self):
+        """``sys.path.insert(0, "src")`` in a baseline test (this repository does
+        it) puts ``src/`` first: measured, ``src/wave.py`` was imported."""
+        base = {"tests/test_a.py": "import sys\nsys.path.insert(0, 'src')\n", "src/app.py": "X = 1\n"}
+        self.assertIn("src/wave.py", self._found(base, {"src/wave.py": "x = 1\n"}))
+
+    def test_a_namespace_directory_is_not(self):
+        """A directory without ``__init__.py`` never wins over a real module."""
+        base = {"tests/conftest.py": "", "tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertEqual(self._found(base, {"tests/http/test_x.py": "def test_x():\n    pass\n"}), set())
+        self.assertEqual(self._found({"calc.py": "x = 1\n"}, {"site/index.html": "<p>\n"}), set())
+
+    def test_a_package_with_a_standard_name_is(self):
+        self.assertIn("json", self._found({"calc.py": "x = 1\n"}, {"json/__init__.py": "x = 1\n"}))
+
+    def test_a_virtualenvs_site_packages_is_not(self):
+        base = {"calc.py": "x = 1\n"}
+        self.assertEqual(self._found(base, {".venv/pyvenv.cfg": "home = /usr\n",
+                                            ".venv/lib/python3.12/site-packages/six.py": "x = 1\n",
+                                            ".venv/lib/python3.12/site-packages/typing.py": "x\n"}), set())
+
+    def test_a_helper_beside_the_tests_is_not(self):
+        """``tests/helpers.py`` imported as ``helpers`` is how prepend mode is used."""
+        base = {"tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertEqual(self._found(base, {"tests/helpers.py": "x = 1\n"}), set())
+
+    def test_a_virtualenv_ci_creates_at_the_root_is_not(self):
+        """``venv`` is a stdlib name; a CI virtualenv in the checkout is tooling."""
+        self.assertEqual(self._found({"calc.py": "x = 1\n"},
+                                     {"venv/pyvenv.cfg": "home = /usr\n", "venv/bin/x": ""}), set())

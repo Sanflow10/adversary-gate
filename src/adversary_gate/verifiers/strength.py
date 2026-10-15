@@ -1274,6 +1274,7 @@ def measure_mutation_score(
     #: files stood for the whole patch: a ``# -*- coding: latin-1 -*-`` module
     #: changing ``>=`` to ``>`` merged next to a tested file (3.0.3).
     undecodable: List[str] = []
+    removal_only: List[str] = []
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -1301,6 +1302,11 @@ def measure_mutation_score(
         originals[rel] = source
         edited = changed_lines(before, source)
         if not edited:
+            # Only lines removed: nothing the patch wrote is left to break. Said
+            # in the artefact and the reason, not a veto (3.0.9).
+            if before != source:
+                removal_only.append(rel)
+                detail["removal_only_files"] = sorted(removal_only)
             continue
         edited_rows[rel] = edited
         # Scan generously, then keep only sites on lines this patch wrote,
@@ -1659,20 +1665,43 @@ def measure_mutation_score(
             "line as run, so no other mutant speaks for it",
         )
     if result.is_measured:
-        note = ""
+        notes = []
         if foreign:
             # The score just produced covers the Python files it mutated and
             # nothing else. Leaving ``reason`` blank let a 1.0 read as the
             # strength of the whole patch while part of the change was never
             # executed; say what the number is actually a number for.
-            note = (
+            notes.append(
                 f"score covers the {len(changed)} Python file(s) mutated only; "
                 f"{len(foreign)} non-Python source file(s) in this patch were "
                 "never judged"
             )
-        return finish(result, note)
+        if removal_only:
+            notes.append(
+                "the patch only removed lines from " + ", ".join(sorted(removal_only))
+                + ": nothing there was mutated, so the score does not speak for those removals"
+            )
+        stillborn = [m for m in entries if m.get("result") == "stillborn"]  # type: ignore[union-attr]
+        if stillborn:
+            # Left out of the sample, as they must be -- but until 3.0.9 only the
+            # artefact's count said so, and the lines they broke went unjudged.
+            shown = ", ".join(f"{m['file']}:{m['line']}" for m in stillborn[:5])
+            more = f" (+{len(stillborn) - 5} more)" if len(stillborn) > 5 else ""
+            notes.append(
+                f"{len(stillborn)} mutant(s) were stillborn -- the tests could not run "
+                f"against them -- and are not in the score: {shown}{more}"
+            )
+        return finish(result, "; ".join(notes))
     codes = [m.get("exit_code") for m in detail["mutants"] if m.get("result") == "stillborn"]  # type: ignore[union-attr]
-    if codes and all(isinstance(c, int) and c < 0 for c in codes):
+    if not codes:
+        # Nothing was stillborn: no mutant could be counted. Until 3.0.9 this
+        # fell through to "every mutant was stillborn (exit codes [])".
+        return finish(
+            result,
+            "no mutant could be counted: the changed lines hold no operator site, and "
+            "statement-level mutants (killed or not) never count toward a sampled score",
+        )
+    if all(isinstance(c, int) and c < 0 for c in codes):
         # Killed by a limit, not a statement about the mutants (AG-039: the
         # old message blamed the test target for what --cpu-seconds did).
         return finish(

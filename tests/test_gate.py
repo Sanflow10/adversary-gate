@@ -908,6 +908,25 @@ class TestCliExitCodes(unittest.TestCase):
             self.assertEqual(json.loads(out.getvalue())["decision"], "block")
             self.assertEqual(code, EXIT_BLOCK)
 
+    def test_a_standard_module_name_on_the_import_path_is_not_a_merge(self):
+        """AG-048 through the CLI: the decision names a ``wave.py`` the patch put
+        on pytest's import path. On 3.0.8 this harmless file was caught only
+        indirectly (no claim checked its line); the check now names it (3.0.9)."""
+        for where in ("wave.py", "sub/wave.py"):
+            with self.subTest(where=where), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self._tree(root, break_patch=False)
+                if where.startswith("sub/"):
+                    for side in ("baseline", "patch"):
+                        (root / side / "sub").mkdir()
+                        (root / side / "sub" / "conftest.py").write_text("")
+                (root / "patch" / where).write_text("MARK = 1\n")
+                with patch("sys.stdout", new_callable=io.StringIO) as out:
+                    code = self._invoke(root, list(self.UNTRUSTED_COVERAGE))
+                payload = json.loads(out.getvalue())
+                self.assertEqual(code, EXIT_INCONCLUSIVE, payload["reason"])
+                self.assertIn(f"{where}: added by the patch on pytest's import path", payload["reason"])
+
     def test_no_coverage_evidence_is_inconclusive_not_merge(self):
         """AG-002: the default used to be ``--coverage-ratio 1.0``.
 

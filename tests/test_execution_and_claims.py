@@ -431,6 +431,17 @@ class TestSeveralClaims(unittest.TestCase):
         self.assertEqual(payload["discovery"]["claims_added"], ["test_calc.py::test_sub"])
         self.assertEqual(payload["claims_total"], 1)
 
+    def test_claims_cut_by_the_cap_with_no_suite_are_not_a_merge(self):
+        """Decision 2 (3.0.9): a test that ran the changed line, cut by --max-claims,
+        was judged by nothing when the full suite was off; the rest could MERGE."""
+        self.coverage.write_text(json.dumps(_contexts_report(
+            {"2": ["test_calc.test_sub", "test_calc.TestMore.test_sub_negative"]})))
+        code, payload = _run_cli(self.root, "--discover-claims", "--max-claims", "1", *self._measured())
+        self.assertEqual(payload["discovery"]["truncated"], 1, payload["discovery"])
+        self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+        self.assertIn("--max-claims", payload["reason"])
+        self.assertIn("--max-claims", json.dumps(payload["next_steps"]))
+
     def test_discovering_nothing_is_inconclusive_not_merge(self):
         self.coverage.write_text(json.dumps(_contexts_report({"6": ["test_calc.test_add"]})))
         code, payload = _run_cli(self.root, "--discover-claims", *self._measured())
