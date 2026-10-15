@@ -1480,9 +1480,11 @@ def measure_mutation_score(
                     (tree / rel).write_text(neutral, encoding="utf-8")
             try:
                 probe = _run()
-                if probe.exit_code != PYTEST_OK:
-                    # Once more: a claim that reads the text fails again, a run
-                    # a busy machine cut short does not. Two failures decide.
+                if probe.timed_out or probe.exit_code < 0:
+                    # Once more, but only for a run a limit stopped: a busy
+                    # machine can cut one short. A claim that failed decides at
+                    # once -- until 3.0.7 it was run again too, and a claim that
+                    # failed only the first time it saw the copy passed (F).
                     probe = _run()
             finally:
                 for rel in canary_files:

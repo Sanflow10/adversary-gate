@@ -349,3 +349,28 @@ class TestARewrittenClaimTestIsMutatedAsItWasJudged(unittest.TestCase):
                                       ["test_calc.py::test_rates", "test_calc.py::test_total"])
         self.assertEqual(payload["decision"], "merge", payload["reason"])
         self.assertEqual(payload["mutation"]["mutants_killed"], payload["mutation"]["mutants_counted"])
+
+
+class TestTheCanaryDoesNotRetryAFailure(unittest.TestCase):
+    """F: a claim that failed the neutral copy was run again, and the second run
+    decided. A claim that reads the code and fails only the first time it sees
+    the copy then passed as one that runs it. Only a run a limit stopped is
+    run again (3.0.7)."""
+
+    def test_a_claim_that_fails_once_on_the_copy_is_caught(self):
+        test = ("from pathlib import Path\nfrom calc import add\n\n\ndef test_add():\n"
+                "    here = Path(__file__).parent\n"
+                "    if 'canary' in (here / 'calc.py').read_text():\n"
+                "        seen = here / '.seen'\n"
+                "        if not seen.exists():\n"
+                "            seen.write_text('1')\n"
+                "            assert False, 'reads the code'\n"
+                "    assert add(2, 3) == 5\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _sides(root, {"calc.py": "def add(a, b):\n    return a - b\n", "test_calc.py": test},
+                   {"calc.py": "def add(a, b):\n    return a + b\n"})
+            score, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                   targets=["test_calc.py::test_add"])
+        self.assertFalse(score.is_measured, detail)
+        self.assertTrue(detail.get("source_sensitive_claims"), detail)
