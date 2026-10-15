@@ -48,6 +48,20 @@ class TestProductionImportedTests(unittest.TestCase):
             })
             self.assertEqual(production_imported_tests(root), frozenset({"tests/rates.py"}))
 
+    def test_a_chain_through_test_named_modules_is_followed(self):
+        """app -> tests/rates.py -> tests/table.py: both run in production (3.0.8)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _tree(root, {
+                "app.py": "from tests.rates import RATE\n",
+                "tests/rates.py": "from tests.table import BASE\nRATE = BASE * 0.9\n",
+                "tests/table.py": "BASE = 1.0\n",
+                "tests/helper.py": "X = 1\n",
+                "tests/test_app.py": "from tests.helper import X\nimport app\n\n\ndef test_a():\n    assert X\n",
+            })
+            self.assertEqual(production_imported_tests(root),
+                             frozenset({"tests/rates.py", "tests/table.py"}))
+
     def test_a_product_module_in_latin_1_is_read(self):
         """It was read as UTF-8, failed, and was skipped: its import went unseen (3.0.8)."""
         with tempfile.TemporaryDirectory() as d:
