@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Iterable, List
@@ -206,4 +207,62 @@ def harness_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
                 same = False  # unreadable is not "unchanged"
             if not same:
                 found.append(PathViolation(rel, "test-harness file changed by the patch"))
+    found.extend(_shadowing_drift(Path(baseline_dir), Path(patch_dir)))
+    return found
+
+
+#: Modules the runner itself imports, beyond the standard library.
+_RUNNER_MODULES = frozenset({
+    "pytest", "_pytest", "pluggy", "iniconfig", "packaging", "py", "coverage",
+    "exceptiongroup", "tomli", "pygments", "colorama",
+})
+_SHADOW_SUFFIXES = (".py", ".pyc", ".so", ".pyd")
+
+
+def _shadowing(root: Path) -> dict:
+    """Entries at ``root`` an import of a standard or runner module would find first."""
+    names = set(getattr(sys, "stdlib_module_names", ())) | _RUNNER_MODULES
+    found = {}
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        stem = entry.name.split(".", 1)[0]
+        if stem not in names:
+            continue
+        if entry.is_dir() and entry.name == stem:
+            # A virtualenv CI made in the checkout (``venv`` is a stdlib name);
+            # a patch cannot write the marker (G).
+            if not (entry / "pyvenv.cfg").is_file():
+                found[entry.name] = entry
+        elif entry.name.endswith(_SHADOW_SUFFIXES):
+            found[entry.name] = entry
+    return found
+
+
+def _shadowing_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
+    """AG-048: a module at the root that would be imported in place of a real one.
+
+    ``python -m pytest`` puts the working directory -- the tree under test --
+    first on ``sys.path``, so an ``inspect.py`` or a ``pytest/`` the patch adds
+    there runs instead of the real module, on the patch side only: it can
+    report a test as passed as surely as a ``pytest.ini`` plugin could. A
+    directory the baseline already had keeps its contents free (``test/`` is a
+    standard-library name and a common test directory); a file is compared.
+    """
+    before = _shadowing(baseline_dir)
+    after = _shadowing(patch_dir)
+    found: List[PathViolation] = []
+    for name in sorted(after):
+        why = "would be imported in place of the module of that name"
+        if name not in before:
+            found.append(PathViolation(name, f"added by the patch at the root: {why}"))
+        elif after[name].is_file():
+            try:
+                same = before[name].read_bytes() == after[name].read_bytes()
+            except OSError:
+                same = False
+            if not same:
+                found.append(PathViolation(name, f"changed by the patch at the root: {why}"))
     return found
