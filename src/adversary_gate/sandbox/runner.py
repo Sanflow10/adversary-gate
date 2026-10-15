@@ -102,7 +102,7 @@ def bwrap_available() -> bool:
 
 
 def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
-                 writable: Sequence[Path] = ()) -> List[str]:
+                 writable: Sequence[Path] = (), readonly: Sequence[Path] = ()) -> List[str]:
     """``bwrap`` argv that runs the next command inside a restricted namespace.
 
     This is *optional defence in depth* over the resource limits, not a
@@ -116,7 +116,9 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
 
     ``writable`` are directories outside the repository the command must write
     to (the MCP's coverage data file): bound read-write, after the private
-    ``/tmp``, so one that lives under ``/tmp`` is the real one.
+    ``/tmp``, so one that lives under ``/tmp`` is the real one. ``readonly``
+    are directories outside it the command must read (the Action's coverage
+    wrapper): bound read-only, the same way.
 
     Raises ``ValueError`` when ``bwrap`` is missing, so a caller who asked for
     isolation learns that rather than silently getting none.
@@ -158,6 +160,9 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
     for extra in writable:
         path = str(Path(extra).resolve())
         argv += ["--bind", path, path]
+    for extra in readonly:
+        path = str(Path(extra).resolve())
+        argv += ["--ro-bind", path, path]
     for path in _SYSTEM_RO:
         candidate = Path(path)
         if not candidate.exists():
@@ -285,6 +290,7 @@ def run_test(
     python: Optional[str] = None,
     targets: Optional[Sequence[str]] = None,
     writable: Sequence[Path] = (),
+    readonly: Sequence[Path] = (),
 ) -> SandboxResult:
     """Run one test target under resource limits and return raw evidence.
 
@@ -346,7 +352,7 @@ def run_test(
     if sandbox == "bwrap":
         # Resolved *before* Popen so a missing binary is a usage error the
         # caller sees, not a run that quietly happened unsandboxed.
-        argv = bwrap_prefix(root, python=python, writable=writable) + argv
+        argv = bwrap_prefix(root, python=python, writable=writable, readonly=readonly) + argv
     elif sandbox not in (None, "", "none"):
         raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none' or 'bwrap')")
 
