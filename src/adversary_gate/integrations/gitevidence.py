@@ -30,13 +30,19 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from adversary_gate.sandbox.runner import run_test
 from adversary_gate.verifiers.coverage import validate_diff
+
+#: The coverage data file of a whole suite, with per-test contexts, outgrows the
+#: runner's 16 MiB per-file default on a real project.
+_COVERAGE_FILE_BYTES = 4 * 1024 * 1024 * 1024
 
 
 class EvidenceError(RuntimeError):
@@ -212,6 +218,8 @@ def prepare(
     coverage: bool = True,
     pytest_args: Sequence[str] = (),
     timeout: int = 600,
+    sandbox: Optional[str] = None,
+    require_network_isolation: bool = False,
 ) -> Evidence:
     repo = Path(repo).resolve()
     workdir = Path(workdir)
@@ -253,18 +261,31 @@ def prepare(
         rc = workdir / "coveragerc"
         rc.write_text("[run]\ndynamic_context = test_function\n")
         coverage_path = workdir / "coverage.json"
+        # The patch's tests run here, before the gate does, so under the same
+        # boundary as the gate's own runs: the operator's sandbox, the runner's
+        # resource limits and its scrubbed environment. Until 3.0.7 this was a
+        # bare subprocess with the server's whole environment, outside
+        # ``--sandbox bwrap``. CPU time and memory are not capped, as for the
+        # gate's full-suite run; the data file is the one path outside the
+        # repository the run may write.
         env = {
-            **os.environ,
             "COVERAGE_FILE": str(workdir / ".coverage"),
             "COVERAGE_RCFILE": str(rc),
             # No __pycache__ left behind in somebody else's working tree.
             "PYTHONDONTWRITEBYTECODE": "1",
         }
-        run = subprocess.run(
-            [python, "-m", "coverage", "run", "--rcfile", str(rc), "-m", "pytest", "-q",
-             "-p", "no:cacheprovider", *pytest_args],
-            cwd=repo, env=env, capture_output=True, text=True, timeout=timeout,
-        )
+        command = shlex.join([python, "-m", "coverage", "run", "--rcfile", str(rc), "-m", "pytest",
+                              "-q", "-p", "no:cacheprovider", *pytest_args])
+        try:
+            run = run_test(repo, "", command=command, sandbox=sandbox, python=python, env=env,
+                           timeout_seconds=timeout, cpu_seconds=None, mem_bytes=None,
+                           file_bytes=_COVERAGE_FILE_BYTES, open_files=4096,
+                           require_network_isolation=require_network_isolation,
+                           writable=[workdir])
+        except (RuntimeError, ValueError) as exc:
+            raise EvidenceError(f"the coverage pass could not run under the policy: {exc}") from exc
+        if run.timed_out:
+            raise EvidenceError(f"the coverage pass ran past {timeout} s")
         if "No module named coverage" in run.stderr:
             raise EvidenceError(f"coverage.py is not installed for {python}")
         # Not ``coverage json --show-contexts``: it writes every line of every
@@ -279,7 +300,10 @@ def prepare(
         report = subprocess.run(
             [python, "-c", _EXTRACT, str(workdir / ".coverage"), str(wanted),
              str(repo), str(coverage_path)],
-            cwd=repo, env=env, capture_output=True, text=True, timeout=timeout,
+            # Not from the repository: ``-c`` puts the working directory first
+            # on sys.path, and a ``json.py`` the patch added would run here, in
+            # the gate's own process, outside any sandbox.
+            cwd=workdir, capture_output=True, text=True, timeout=timeout,
         )
         if report.returncode != 0 or not coverage_path.is_file():
             raise EvidenceError(

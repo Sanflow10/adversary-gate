@@ -21,6 +21,7 @@ Two changes from the previous runner, both driven by measured failures:
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import signal
@@ -101,7 +102,8 @@ def bwrap_available() -> bool:
     return shutil.which("bwrap") is not None
 
 
-def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
+def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
+                 writable: Sequence[Path] = (), readonly: Sequence[Path] = ()) -> List[str]:
     """``bwrap`` argv that runs the next command inside a restricted namespace.
 
     This is *optional defence in depth* over the resource limits, not a
@@ -112,6 +114,12 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
     no seccomp profile, the repository is writable and the kernel is the
     host's, so treat it as "the casual damage is contained", which is a
     different promise from "this is a VM".
+
+    ``writable`` are directories outside the repository the command must write
+    to (the MCP's coverage data file): bound read-write, after the private
+    ``/tmp``, so one that lives under ``/tmp`` is the real one. ``readonly``
+    are directories outside it the command must read (the Action's coverage
+    wrapper): bound read-only, the same way.
 
     Raises ``ValueError`` when ``bwrap`` is missing, so a caller who asked for
     isolation learns that rather than silently getting none.
@@ -150,6 +158,12 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None) -> List[str]:
         "--bind", str(root), str(root),
         "--chdir", str(root),
     ]
+    for extra in writable:
+        path = str(Path(extra).resolve())
+        argv += ["--bind", path, path]
+    for extra in readonly:
+        path = str(Path(extra).resolve())
+        argv += ["--ro-bind", path, path]
     for path in _SYSTEM_RO:
         candidate = Path(path)
         if not candidate.exists():
@@ -259,6 +273,66 @@ def _limit_resources(
 #: child (``communicate``) is not, which is where the time goes.
 _SPAWN_LOCK = threading.Lock()
 
+#: One bytecode cache per interpreter, warmed once per gate process.
+_BYTECODE_CACHES: dict = {}
+_BYTECODE_LOCK = threading.Lock()
+
+
+def _bytecode_cache(python: Optional[str], sandbox: Optional[str] = None) -> str:
+    """``PYTHONPYCACHEPREFIX`` for runs on ``python``: a directory the gate owns.
+
+    Bytecode is read from there, never from the tree's ``__pycache__``: an
+    unchecked-hash ``.pyc`` there (PEP 552) is loaded without a look at its
+    source, so a patch could ship one that runs in place of the module the gate
+    measures. The directory is warmed once by running two trivial tests in an
+    empty directory, so it holds the standard library, pytest and the plugins
+    it loads by itself, and no file of any tree. The warm-up runs under the
+    same sandbox as the runs it serves: an installed plugin is code like any
+    other; every real run keeps
+    ``PYTHONDONTWRITEBYTECODE`` and adds nothing to it. Without a sandbox a test
+    could write into it, as it could into site-packages (SECURITY.md).
+
+    3.0.7 first pointed the prefix at a path under ``/dev/null``: nothing was
+    cached at all, pytest recompiled itself on every run (0.4 s became 1.75 s)
+    and a 1 s ``--timeout`` killed the claims. If warming fails, that is still
+    the fallback: slow, never the tree's bytecode.
+    """
+    # Not realpath: a venv's python is a symlink, and resolved it loses the venv.
+    interpreter = os.path.abspath(python or sys.executable)
+    key = (interpreter, sandbox or "none")
+    with _BYTECODE_LOCK:
+        cached = _BYTECODE_CACHES.get(key)
+        if cached is not None:
+            return cached
+        cache = tempfile.mkdtemp(prefix="adversary-pycache-")
+        atexit.register(shutil.rmtree, cache, True)
+        empty = tempfile.mkdtemp(prefix="adversary-warm-")
+        try:
+            env = {"PATH": "/usr/bin:/bin", "HOME": empty}
+            if site.USER_BASE:
+                env["PYTHONUSERBASE"] = site.USER_BASE
+            # A real run, not --collect-only: running a test (and reporting a
+            # failed assert) imports modules collection never does.
+            Path(empty, "test_adversary_warm.py").write_text(
+                "def test_pass():\n    assert 1\n\n\ndef test_fail():\n    assert [1] == [2]\n")
+            argv = [interpreter, "-X", f"pycache_prefix={cache}", "-m", "pytest", "-q",
+                    "-p", "no:cacheprovider", "test_adversary_warm.py"]
+            if sandbox == "bwrap":
+                argv = bwrap_prefix(Path(empty), python=interpreter,
+                                    writable=[Path(cache)]) + argv
+            subprocess.run(
+                argv,
+                cwd=empty, env=env, capture_output=True, timeout=120, check=False,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        finally:
+            shutil.rmtree(empty, True)
+        if not any(Path(cache).rglob("*.pyc")):
+            cache = os.path.join(os.devnull, "adversary-gate-pycache")
+        _BYTECODE_CACHES[key] = cache
+        return cache
+
 
 def run_test(
     repo_dir: Path,
@@ -276,6 +350,8 @@ def run_test(
     sandbox: Optional[str] = None,
     python: Optional[str] = None,
     targets: Optional[Sequence[str]] = None,
+    writable: Sequence[Path] = (),
+    readonly: Sequence[Path] = (),
 ) -> SandboxResult:
     """Run one test target under resource limits and return raw evidence.
 
@@ -319,7 +395,12 @@ def run_test(
     if not root.is_dir():
         raise ValueError(f"repo_dir is not a directory: {repo_dir}")
 
-    safe_env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}
+    safe_env = {
+        "PATH": "/usr/bin:/bin",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        # Never the tree's ``__pycache__``: see :func:`_bytecode_cache`.
+        "PYTHONPYCACHEPREFIX": _bytecode_cache(python, sandbox),
+    }
     if site.USER_BASE:
         safe_env["PYTHONUSERBASE"] = site.USER_BASE
     if env:
@@ -329,7 +410,10 @@ def run_test(
     if sandbox == "bwrap":
         # Resolved *before* Popen so a missing binary is a usage error the
         # caller sees, not a run that quietly happened unsandboxed.
-        argv = bwrap_prefix(root, python=python) + argv
+        cache = safe_env["PYTHONPYCACHEPREFIX"]
+        warm = [Path(cache)] if Path(cache).is_dir() else []
+        argv = bwrap_prefix(root, python=python, writable=writable,
+                            readonly=[*readonly, *warm]) + argv
     elif sandbox not in (None, "", "none"):
         raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none' or 'bwrap')")
 

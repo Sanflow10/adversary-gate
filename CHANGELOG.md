@@ -36,8 +36,61 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.7] — 2026-10-15
+
+Fixes from an internal read-only audit of 3.0.6. Each one has a test that
+fails on 3.0.6 and passes here. None was reported from outside.
+
 ### Security
 
+- **The MCP tool's coverage pass runs inside the operator's boundary.**
+  `verify_repo` ran the patch's tests for coverage as a bare subprocess with
+  the server's whole environment, outside `--sandbox bwrap` and every resource
+  limit, before the gate started. It now goes through the gate's runner: the
+  policy's sandbox and network-isolation requirement, the minimal environment,
+  and the coverage data directory as the one extra writable path. The report
+  is no longer extracted from inside the repository, where a `json.py` the
+  patch added would have run. Tests: `test_integrations.py`.
+- **The Action's `base-sha` coverage pass runs inside the gate's boundary.**
+  `coverage-command` ran as a plain shell step with the job's whole
+  environment, outside `sandbox: bwrap`, able to write the baseline the oracle
+  reads and the gate's own install. It now runs through the gate's runner
+  (`adversary_gate.integrations.coverage_pass`): the `sandbox` input, the
+  minimal environment plus `pass-env`/`env`, and one fresh writable directory
+  for the report. This bounds the run; the report itself is still produced by
+  the patch's code running inside coverage.py, as it must be for coverage to
+  be measured. Tests: `test_coverage_pass.py`.
+- **Compiled modules are code.** `.so`, `.pyd`, `.pyc` and other files a
+  runtime loads were on the not-code list, and Python imports `rules.so`
+  before `rules.py`: a change shipped as a compiled file beside the source was
+  never judged. They now count as source the gate cannot judge
+  (`INCONCLUSIVE`), and the tests never read bytecode from the tree's
+  `__pycache__`.
+- **Changed decorators, default values and base classes are broken.** These
+  lines run on import, so coverage counted them as run with no test looking,
+  and they had no mutant. A decorator is now replaced by `lambda f: f`, a
+  default by `None`, a base class by `object`. Lines that still get no mutant
+  are listed in `mutation.unmutated_lines`; the README says plainly that a
+  listed line does not stop a `MERGE`.
+- **The diff is read by its hunk counts.** An added line whose text starts
+  with `++` (spelled `+++ y` in the diff) was read as a file header and
+  dropped, and a removed `-- x` followed by an added `++ y` looked like a new
+  file; the diff was also split with `str.splitlines`, which breaks on
+  characters such as a form feed that end a line neither in a diff nor in
+  Python. Each moved later changed lines onto other rows, where a line that
+  ran could cover one that did not. Tests: `test_diff_parsing.py`.
+- **The canary does not retry a failure.** A claim that failed on the neutral
+  copy was run again and the second run decided, so a claim that read the
+  code and failed only the first time passed as one that runs it. Only a run
+  a limit stopped is retried now. Tests: `TestTheCanaryDoesNotRetryAFailure`.
+- **A patch may not write `pyvenv.cfg`.** The harness check skips a
+  virtualenv inside the checkout, recognised by its `pyvenv.cfg`, so a patch
+  that wrote one hid every `conftest.py`, `.pth` or pytest config beside it. A
+  `pyvenv.cfg` in the diff is now a protected path; a virtualenv CI creates is
+  not in the diff and stays skipped. Tests:
+  `TestAPatchCannotWriteAVirtualenvMarker`.
 - **A release tag's signature is checked, not assumed.** "A person pushes a
   signed tag" was a convention: `pypi-publish.yml` checked the tag's name and
   version and nothing else, so a lightweight or unsigned `vX.Y.Z` tag went to

@@ -223,3 +223,16 @@ class TestReportedPathsDenylist(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAPatchCannotWriteAVirtualenvMarker(unittest.TestCase):
+    """G: the harness check skips a directory with ``pyvenv.cfg`` on both sides
+    (a CI virtualenv in the checkout is tooling state), so a patch that wrote
+    one hid every harness file under it. The diff is what tells them apart: a
+    ``pyvenv.cfg`` in it is denied (3.0.7)."""
+
+    def test_a_reported_pyvenv_cfg_is_a_violation(self):
+        policy = PathPolicy()
+        for path in ("pyvenv.cfg", "pkg/pyvenv.cfg", "a/b/pyvenv.cfg"):
+            with self.subTest(path=path):
+                self.assertTrue(policy.violations([path]), path)

@@ -70,6 +70,23 @@ def policy_args() -> List[str]:
     return args
 
 
+def _boundary(policy: List[str]) -> Dict[str, Any]:
+    """The operator's execution boundary, for the coverage pass that runs before the gate.
+
+    The gate reads ``--sandbox`` and ``--require-network-isolation`` from the
+    policy itself; the coverage pass runs the same tests earlier and must not
+    run them outside what the operator asked for.
+    """
+    sandbox: Optional[str] = None
+    for i, arg in enumerate(policy):
+        if arg == "--sandbox" and i + 1 < len(policy):
+            sandbox = policy[i + 1]
+        elif arg.startswith("--sandbox="):
+            sandbox = arg.split("=", 1)[1]
+    return {"sandbox": sandbox,
+            "require_network_isolation": "--require-network-isolation" in policy}
+
+
 def _run_gate(argv: List[str], timeout: int) -> Dict[str, Any]:
     src = str(Path(__file__).resolve().parents[2])
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [src, os.environ.get("PYTHONPATH")]))}
@@ -178,7 +195,7 @@ def verify_repo(
             raise ValueError(f"pytest_args takes test paths only, not options: {options}")
         with tempfile.TemporaryDirectory(prefix="adversary-mcp-") as scratch:
             evidence = prepare(Path(repo), base, Path(scratch), python=interpreter,
-                               pytest_args=pytest_args or ())
+                               pytest_args=pytest_args or (), **_boundary(policy))
             argv = [
                 "--baseline", str(evidence.baseline), "--patch", str(evidence.patch),
                 "--diff", str(evidence.diff), "--coverage-json", str(evidence.coverage),

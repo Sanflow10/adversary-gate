@@ -366,13 +366,15 @@ runs:
         AG_TOOLS_BIN: ${{ steps.python.outputs.bin }}
         ADVERSARY_PYTHON: ${{ steps.python.outputs.python }}
         ADVERSARY_COVERAGE_RC: ${{ steps.python.outputs.rcfile }}
+        AG_GATE_PYTHON: ${{ steps.gate-venv.outputs.python }}
+        AG_SANDBOX: ${{ inputs.sandbox }}
+        AG_PASS_ENV: ${{ inputs.pass-env }}
+        AG_ENV: ${{ inputs.env }}
+        AG_REQUIRE_NET: ${{ inputs.require-network-isolation }}
       run: |
         set -euo pipefail
         OUT="${RUNNER_TEMP}/adversary-gate"
         mkdir -p "$OUT"
-        # `coverage` in any coverage-command is the project's interpreter
-        # running coverage.py, whatever else is on PATH.
-        export PATH="$AG_TOOLS_BIN:$PATH"
         if [ -z "$AG_COVERAGE_CMD" ]; then
           if [ "$AG_DISCOVER" = "true" ]; then
             AG_COVERAGE_CMD='coverage run --rcfile "$ADVERSARY_COVERAGE_RC" -m pytest || true; coverage json --rcfile "$ADVERSARY_COVERAGE_RC" --show-contexts -o "$COVERAGE_JSON"'
@@ -384,25 +386,49 @@ runs:
           fi
         fi
 
-        EXTRA=()
-        if [ -n "$AG_COVERAGE_JSON_IN" ]; then
-          EXTRA+=(--skip-coverage)
-        else
-          EXTRA+=(--coverage-file "$OUT/coverage.json" --coverage-command "$AG_COVERAGE_CMD")
-        fi
-
         bash "${{ github.action_path }}/scripts/prepare_evidence.sh" \
           --workspace "${GITHUB_WORKSPACE}" \
           --base-sha "$AG_BASE_SHA" \
           --baseline-dir "$OUT/baseline" \
           --diff-file "$OUT/change.diff" \
-          "${EXTRA[@]}"
+          --skip-coverage
 
         echo "baseline=$OUT/baseline" >> "$GITHUB_OUTPUT"
         echo "diff=$OUT/change.diff" >> "$GITHUB_OUTPUT"
-        if [ -s "$OUT/coverage.json" ]; then
-          echo "coverage=$OUT/coverage.json" >> "$GITHUB_OUTPUT"
+        if [ -n "$AG_COVERAGE_JSON_IN" ]; then
+          exit 0
         fi
+
+        # The patch's tests run here, before the gate, so under the gate's
+        # boundary: the sandbox input, the minimal environment plus pass-env
+        # and env, no limit but wall clock, and one writable directory outside
+        # the repository -- not $OUT, which holds the baseline and the gate's
+        # own install. Until 3.0.7 this was a bare `bash -c` with the job's
+        # whole environment. `coverage` in the command is the project's
+        # interpreter running coverage.py (the tools directory comes first on
+        # PATH).
+        PASS=(--repo "${GITHUB_WORKSPACE}" --out-dir "$OUT/coverage-pass"
+              --command "$AG_COVERAGE_CMD" --tools-bin "$AG_TOOLS_BIN"
+              --python "$ADVERSARY_PYTHON"
+              --set "ADVERSARY_PYTHON=$ADVERSARY_PYTHON"
+              --set "ADVERSARY_COVERAGE_RC=$ADVERSARY_COVERAGE_RC")
+        trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+        while read -r -a names; do
+          for name in "${names[@]}"; do PASS+=(--pass-env "$name"); done
+        done <<< "$AG_PASS_ENV"
+        while IFS= read -r line; do
+          if [ -n "$(trim "$line")" ]; then PASS+=(--env "$line"); fi
+        done <<< "$AG_ENV"
+        if [ "$AG_SANDBOX" != "none" ]; then
+          PASS+=(--sandbox "$AG_SANDBOX")
+        fi
+        if [ "$AG_REQUIRE_NET" = "true" ]; then
+          PASS+=(--require-network-isolation)
+        fi
+        # -I: the gate's installed copy, never a module the workspace shadows.
+        "$AG_GATE_PYTHON" -I -m adversary_gate.integrations.coverage_pass "${PASS[@]}" \
+          || { echo "::error::coverage-command failed in the patch tree"; exit 4; }
+        echo "coverage=$OUT/coverage-pass/coverage.json" >> "$GITHUB_OUTPUT"
 
     - name: Execute AdversaryGate Verification
       id: gate

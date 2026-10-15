@@ -47,7 +47,9 @@ them produces a `MERGE` it should not:
 
 - **The test code runs with your privileges.** `--sandbox bwrap` adds no
   network, a private PID namespace, a private `/tmp`, a read-only system tree
-  and a repository that is the only writable path. It has no seccomp profile
+  and a repository that is the only writable path (the coverage pass of the
+  MCP tool and of the Action's `base-sha` mode also writes one fresh directory
+  outside it, for the coverage data). It has no seccomp profile
   and does not drop privileges. It is containment for opportunistic code, not
   for code written to escape. For hostile input, run the whole gate in a
   container or VM.

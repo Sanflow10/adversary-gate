@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.6)
+# AdversaryGate (v3.0.7)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -83,7 +83,7 @@ Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always out
 - **The collateral suite.** When the patch changed tests the baseline had, the full-suite run also executes the **baseline's** tests against the patch's code (`full_suite_oracle` in the artefact). A test that is no claim's, bent to agree with a bug, is a collateral regression → `BLOCK`.
 - **`--test-command` claims.** The `test-id` of a command suite is a label, so the transplant always applies: the command runs from the baseline's copy of the files.
 
-When the baseline's copy of a Python test cannot be parsed, the old rule stands: a passing rewritten test is `UNVERIFIED`. A test file the patch *adds* is judged as before. A legitimate behaviour change that rewrites its tests therefore lands on `BLOCK` — the old tests fail on the new code — which is the gate saying *"the contract changed; a person signs that"*. Nor does it get to configure the runner that judges it (AG-032): every test-harness file in the tree — the five config names pytest 9 reads (`pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`), plus `pyproject.toml`, `setup.cfg`, any `conftest.py`, `sitecustomize.py`, `usercustomize.py` and `*.pth`, at any depth — must be byte-for-byte the baseline's, or the claim is `UNVERIFIED`. The trees are compared directly, so a harness change the `--diff` leaves out is still caught. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`.
+When the baseline's copy of a Python test cannot be parsed, the old rule stands: a passing rewritten test is `UNVERIFIED`. A test file the patch *adds* is judged as before. A legitimate behaviour change that rewrites its tests therefore lands on `BLOCK` — the old tests fail on the new code — which is the gate saying *"the contract changed; a person signs that"*. Nor does it get to configure the runner that judges it (AG-032): every test-harness file in the tree — the five config names pytest 9 reads (`pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`), plus `pyproject.toml`, `setup.cfg`, any `conftest.py`, `sitecustomize.py`, `usercustomize.py` and `*.pth`, at any depth — must be byte-for-byte the baseline's, or the claim is `UNVERIFIED`. The trees are compared directly, so a harness change the `--diff` leaves out is still caught. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`. A directory holding `pyvenv.cfg` is a virtualenv and is skipped by the tree comparison, so from 3.0.7 a `pyvenv.cfg` in the diff is a protected path: a patch cannot turn a directory of its own into one and hide harness files there.
 
 ### How `diff_coverage` gets its value
 
@@ -120,7 +120,7 @@ Several things must hold before a score exists, and each one that fails leaves t
 - `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
 - If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
 - **The floor reads a confidence bound, not the ratio (AG-023).** A ratio from one mutant is `1.0` and evidence of almost nothing. The gate computes a two-sided **Wilson interval** around `killed / counted` and applies `--suite-strength-floor` to its **lower bound** (`--strength-confidence`, default `0.80`; `0` restores the raw ratio). At the default, **5 of 5** killed mutants clear 0.75 (lower bound 0.753) and 4 of 4 do not (0.709). The artefact records `suite_strength` (the ratio), `suite_strength_lower`, `mutation.interval` and `mutation.confidence`. Consequence, said plainly: a patch whose changed lines hold fewer than five mutable operators cannot reach `MERGE` at the default — it is `INCONCLUSIVE`, because the gate cannot tell a strong suite from a lucky one on that sample.
-- **Every changed line is broken at least once.** With its first operator site, or — on a line no operator reaches — with a statement-level mutant: a `return` gives `None`, a condition is negated, a loop iterates nothing, any other statement is deleted. A call on its own line (a log call, say) and an `assert` are not broken; they are listed in `mutation.unmutated_lines`, with `def`/`class` headers. A statement-level mutant that survives is a blind spot too, like a branch mutant; killed, it stays out of the ratio. `mutation.mutants_needed` records how many mutants breaking every line once took. The remaining sites fill the sample, one per line before any line gets a second, files and lines in order, up to **12** mutants. Until 3.0.3 the 12 were simply the first 12 changed lines: three untested boundary changes after twelve tested lines merged without ever being broken, and `return a` → `return b` merged beside a tested line. `--mutation-max` (default **60**) is the ceiling: a change that needs more mutants than that to break every line once is **not measured**, and the reason says how far to raise it.
+- **Every changed line is broken at least once — with listed exceptions.** With its first operator site, or — on a line no operator reaches — with a statement-level mutant: a `return` gives `None`, a condition is negated, a loop iterates nothing, any other statement is deleted. A changed decorator is replaced by `lambda f: f` (not `cache`, `lru_cache` or `wraps`, whose removal no test can see), a changed default value by `None`, a changed base class by `object` — these lines run on import, so coverage counts them as run with no test looking; until 3.0.7 they had no mutant. Not broken, and listed in `mutation.unmutated_lines`: a call on its own line (a log call, say), an `assert`, an `import`, and a header with nothing of that kind to break. **A listed line does not stop a `MERGE`**: it is judged only by the claims and the full suite, so read the list. A statement-level mutant that survives is a blind spot too, like a branch mutant; killed, it stays out of the ratio. `mutation.mutants_needed` records how many mutants breaking every line once took. The remaining sites fill the sample, one per line before any line gets a second, files and lines in order, up to **12** mutants. Until 3.0.3 the 12 were simply the first 12 changed lines: three untested boundary changes after twelve tested lines merged without ever being broken, and `return a` → `return b` merged beside a tested line. `--mutation-max` (default **60**) is the ceiling: a change that needs more mutants than that to break every line once is **not measured**, and the reason says how far to raise it.
 
 `--mutation-max N` is the ceiling on the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
 
@@ -206,9 +206,15 @@ mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
 `NON_SOURCE_SUFFIXES` in `src/adversary_gate/verifiers/strength.py` — a **denylist**, not an
 allowlist. Anything that is not Python, not a test, and not on the list of
 things that are plainly not code (`.md`, `.yml`, `.json`, images, archives,
-compiled artefacts) counts as source we cannot judge. That direction is
+object files) counts as source we cannot judge. That direction is
 deliberate: the previous shape was an allowlist of languages somebody had
-remembered to type, and every suffix outside it was invisible.
+remembered to type, and every suffix outside it was invisible. Compiled code a
+runtime loads (`.so`, `.pyd`, `.dll`, `.dylib`, `.pyc`, `.jar`, `.class`,
+`.wasm`, `.exe`) is code: Python imports `rules.so` before `rules.py`. Until
+3.0.7 it was on the not-code list. A project that builds extensions in place
+now gets INCONCLUSIVE when the built files differ from the baseline; build them
+outside the tree, or into `build/`. The tests also never read bytecode from the
+tree's `__pycache__`.
 
 That is not a hypothetical. Until AG-013, a patch whose entire effect was in
 `schema.sql` reported:
@@ -342,7 +348,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.6** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.7** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -351,20 +357,20 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.6. Versions before 3.0.4 are unsupported: each lacks fixes the
+# PyPI -- 3.0.7. Versions before 3.0.4 are unsupported: each lacks fixes the
 # CHANGELOG lists after it.
-pip install adversary-gate==3.0.6
+pip install adversary-gate==3.0.7
 ```
 
 ```bash
-# GitHub Release -- 3.0.6: every fix in this document.
+# GitHub Release -- 3.0.7: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.6/adversary_gate-3.0.6-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.7/adversary_gate-3.0.7-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.6` has not been published yet. A release
+Release for `v3.0.7` has not been published yet. A release
 takes two steps, in this order, and only the first is done by hand:
 
 1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
@@ -605,7 +611,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.6` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.7` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -619,7 +625,7 @@ What that does, and where each piece comes from:
 |---|---|
 | `baseline` | `<base-sha>`'s tree through a private index (`read-tree` + `checkout-index`) — every file as committed, no worktree leftovers; not `git archive`, which applies the repository's export attributes (AG-044) |
 | `diff` | `git diff --no-ext-diff <base-sha>...HEAD` |
-| `coverage-json` | `coverage-command`, run in the checkout |
+| `coverage-json` | `coverage-command`, run in the checkout under the gate's own boundary: the `sandbox` input, the minimal environment plus `pass-env`/`env`, and one fresh writable directory outside the repository (until 3.0.7 it ran as a bare shell step with the job's whole environment) |
 | `patch` | the checkout itself |
 
 If the ref is not in your local history the Action **stops with exit 4 and

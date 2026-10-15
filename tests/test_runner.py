@@ -173,6 +173,42 @@ class TestExecutionContract(unittest.TestCase):
         self.assertEqual(result.output_tail, str(self.root.resolve()))
 
 
+class TestBytecodeTheTreeShipsIsNotRun(unittest.TestCase):
+    """A ``__pycache__`` the patch ships is not what runs: the source is.
+
+    An unchecked-hash ``.pyc`` (PEP 552) is loaded without looking at the
+    source at all, so one placed in ``__pycache__`` ran in place of the module
+    the gate measured. The runner points the bytecode cache elsewhere.
+    """
+
+    def test_an_unchecked_pyc_does_not_replace_the_source(self):
+        import py_compile
+        import shutil
+
+        root = _repo({"mod.py": "def value():\n    return 1\n",
+                      "test_mod.py": "import mod\n\ndef test_value():\n    assert mod.value() == 2\n"})
+        self.addCleanup(shutil.rmtree, root, True)
+        py_compile.compile(str(root / "mod.py"), doraise=True,
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+        (root / "mod.py").write_text("def value():\n    return 2\n")
+        self.assertEqual(run_test(root, "test_mod.py").exit_code, 0)
+
+    def test_the_cache_it_reads_is_warm_and_holds_nothing_of_the_tree(self):
+        """The first fix pointed the cache under /dev/null: nothing was cached at
+        all, pytest recompiled itself on every run (0.4 s -> 1.75 s), and a 1 s
+        --timeout killed the claims in CI."""
+        import shutil
+
+        root = _repo({"test_mod.py": "def test_ok():\n    pass\n"})
+        self.addCleanup(shutil.rmtree, root, True)
+        seen = run_test(root, "", command='printf %s "$PYTHONPYCACHEPREFIX"').stdout
+        cache = Path(seen)
+        self.assertTrue(cache.is_dir(), seen)
+        cached = [p.as_posix() for p in cache.rglob("*.pyc")]
+        self.assertTrue(any("/_pytest/" in p for p in cached), cached[:5])
+        self.assertFalse(any(str(root.resolve()) in p for p in cached))
+
+
 class TestHarnessErrorDetection(unittest.TestCase):
     def test_missing_pytest_is_unrunnable(self):
         self.assertEqual(

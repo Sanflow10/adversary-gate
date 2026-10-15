@@ -45,6 +45,12 @@ DEFAULT_DENYLIST = [
     "**/usercustomize.py",
     "*.pth",
     "**/*.pth",
+    # A directory with one is a virtualenv, and the harness check skips it as
+    # tooling state; a patch that writes one hides every harness file beside
+    # it (G, 3.0.7). A virtualenv CI creates is not in the diff, so it is not
+    # caught here.
+    "pyvenv.cfg",
+    "**/pyvenv.cfg",
     ".github/workflows/*",
     "**/fixtures/**",
     "**/*.env",

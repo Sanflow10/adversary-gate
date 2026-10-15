@@ -235,10 +235,14 @@ NON_SOURCE_SUFFIXES = frozenset({
     # images, media, fonts
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
     ".mp4", ".mp3", ".wav", ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    # packaged or compiled artefacts
-    ".zip", ".gz", ".tar", ".bz2", ".xz", ".jar", ".war", ".class",
-    ".so", ".dll", ".dylib", ".a", ".o", ".obj", ".lib", ".exe",
-    ".pyc", ".pyo", ".pyd", ".wasm", ".min", ".map", ".cache",
+    # packaged artefacts and build intermediates. Not what a runtime loads:
+    # ``.so``/``.pyd``/``.dll``/``.dylib``, ``.pyc``/``.pyo``, ``.jar``,
+    # ``.class``, ``.wasm`` and ``.exe`` are code -- Python imports
+    # ``rules.so`` before ``rules.py`` -- and were on this list until 3.0.7, so
+    # a compiled module placed next to a source one replaced it unjudged.
+    ".zip", ".gz", ".tar", ".bz2", ".xz", ".war",
+    ".a", ".o", ".obj", ".lib",
+    ".min", ".map", ".cache",
     # version-control and editor noise
     ".orig", ".rej", ".bak", ".swp", ".swo", ".tmp", ".log",
 })
@@ -870,6 +874,21 @@ _COMPOUND = (ast.If, ast.While, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, 
 _INERT = (ast.Pass, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)
 
 
+#: Decorators whose removal changes no result a test can see -- a cache, or a
+#: wrapper's metadata: breaking them would be an equivalent mutant, a survivor
+#: that blames the tests for nothing.
+_EQUIVALENT_DECORATORS = frozenset({"cache", "lru_cache", "wraps"})
+
+
+def _decorator_name(node: ast.expr) -> str:
+    """``functools.lru_cache(maxsize=8)`` -> ``lru_cache``."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return node.id if isinstance(node, ast.Name) else ""
+
+
 def _statement_sites(source: str, edited: set, operator_rows: set,
                      skip: Tuple[type, ...] = ()) -> Tuple[Dict[int, List[Mutation]], List[int]]:
     """A site for every changed statement that has no operator site.
@@ -905,6 +924,22 @@ def _statement_sites(source: str, edited: set, operator_rows: set,
     sites: Dict[int, List[Mutation]] = {}
     uncovered: List[int] = []
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # What a header carries that its body does not: decorators, default
+            # values and base classes. They run when the module is imported,
+            # so line coverage counts them as run with no test looking; until
+            # 3.0.7 a changed one had no mutant at all (a decorator line was in
+            # no statement's span, so it was not even listed as unmutated).
+            parts: List[Tuple[ast.expr, str]] = [(d, "(lambda f: f)") for d in node.decorator_list
+                                                 if _decorator_name(d) not in _EQUIVALENT_DECORATORS]
+            if isinstance(node, ast.ClassDef):
+                parts += [(b, "object") for b in node.bases]
+            else:
+                parts += [(d, "None") for d in [*node.args.defaults, *node.args.kw_defaults]
+                          if d is not None and not (isinstance(d, ast.Constant) and d.value is None)]
+            for expr, replacement in parts:
+                if expr.lineno in edited and expr.lineno not in operator_rows:
+                    sites.setdefault(expr.lineno, []).append((*where(expr), replacement))
         if not isinstance(node, ast.stmt) or isinstance(node, _INERT):
             continue
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
@@ -934,7 +969,8 @@ def _statement_sites(source: str, edited: set, operator_rows: set,
         elif not isinstance(node, _COMPOUND) and not isinstance(node, ast.Return):
             mutation = (*where(node), "pass")
         if mutation is None:
-            uncovered.extend(sorted(span & edited))
+            # A header whose decorator, default or base got a site above is broken.
+            uncovered.extend(row for row in sorted(span & edited) if row not in sites)
         else:
             sites.setdefault(mutation[0][0], []).append(mutation)
     return sites, sorted(set(uncovered))
@@ -1444,9 +1480,11 @@ def measure_mutation_score(
                     (tree / rel).write_text(neutral, encoding="utf-8")
             try:
                 probe = _run()
-                if probe.exit_code != PYTEST_OK:
-                    # Once more: a claim that reads the text fails again, a run
-                    # a busy machine cut short does not. Two failures decide.
+                if probe.timed_out or probe.exit_code < 0:
+                    # Once more, but only for a run a limit stopped: a busy
+                    # machine can cut one short. A claim that failed decides at
+                    # once -- until 3.0.7 it was run again too, and a claim that
+                    # failed only the first time it saw the copy passed (F).
                     probe = _run()
             finally:
                 for rel in canary_files:
