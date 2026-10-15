@@ -619,7 +619,7 @@ class TestActionContract(unittest.TestCase):
     def test_setup_python_never_touches_the_callers_path(self):
         import re
 
-        uses = re.findall(r"uses: actions/setup-python@\S+\n(?:\s+with:\n(?:\s{8}.+\n)+)?", self.text)
+        uses = re.findall(r"uses: actions/setup-python@\S+[^\n]*\n(?:\s+with:\n(?:\s{8}.+\n)+)?", self.text)
         self.assertTrue(uses, "action.yml no longer sets up the gate's Python")
         for block in uses:
             self.assertIn("update-environment: false", block)
