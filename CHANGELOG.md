@@ -46,12 +46,14 @@ gaps where the gate said too little. Each change has a test that fails on 3.0.8.
 ### Security
 
 - **AG-048: a module at the root that the runner would import is the
-  harness.** `python -m pytest` searches the tree's root first, so a
-  top-level `inspect.py`, `json.py` or `pytest/` the patch added ran in place
-  of the real module, on the patch side only, and no harness check named it.
-  The tree comparison now treats a root entry with a standard-library name or
-  the name of a module pytest loads as a harness change when the patch adds
-  or changes it. A directory the baseline already had keeps its contents free
+  harness.** `python -m pytest` searches the tree's root first, and pytest
+  adds the directory of every test module and conftest that is not a package;
+  an `inspect.py`, `json.py` or `pytest/` the patch added in any of them ran in
+  place of the real module, on the patch side only, and no harness check named
+  it. The tree comparison now finds those directories as pytest does (checked
+  against pytest 9.1.1's own `sys.path`) and treats an entry there with a
+  standard-library name or the name of a module pytest loads as a harness
+  change when the patch adds or changes it. A directory the baseline already had keeps its contents free
   (`test/` is a standard-library name), and a virtualenv at the root is
   skipped. Not reproduced as an attack; verified at the mechanism. Tests:
   `TestAModuleTheRunnerWouldImportIsTheHarness`.

@@ -273,7 +273,40 @@ class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
                                      {"test/test_b.py": "def test_b():\n    pass\n"}), set())
 
     def test_a_nested_stdlib_name_is_not_on_the_path(self):
-        self.assertEqual(self._found({"pkg/__init__.py": ""}, {"pkg/inspect.py": "x = 1\n"}), set())
+        """Inside a package, ``pkg/inspect.py`` is ``pkg.inspect``: it shadows nothing."""
+        self.assertEqual(self._found({"pkg/__init__.py": "", "pkg/tests/__init__.py": "",
+                                      "pkg/tests/test_a.py": "def test_a():\n    pass\n"},
+                                     {"pkg/inspect.py": "x = 1\n"}), set())
+
+    # pytest's default import mode puts more than the root on sys.path:
+    # measured on pytest 9.1.1 (3.0.9), a ``wave.py`` beside each of these was
+    # imported in place of the standard library's.
+
+    def test_a_test_directory_without_init_is_on_the_path(self):
+        base = {"tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("tests/wave.py", self._found(base, {"tests/wave.py": "x = 1\n"}))
+
+    def test_a_deep_test_directory_is_on_the_path(self):
+        base = {"a/b/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("a/b/wave.py", self._found(base, {"a/b/wave.py": "x = 1\n"}))
+
+    def test_a_conftest_directory_is_on_the_path(self):
+        base = {"sub/conftest.py": "", "tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("sub/wave.py", self._found(base, {"sub/wave.py": "x = 1\n"}))
+
+    def test_the_parent_of_a_test_package_is_on_the_path(self):
+        base = {"x/pkg/__init__.py": "", "x/pkg/test_a.py": "def test_a():\n    pass\n"}
+        self.assertIn("x/wave.py", self._found(base, {"x/wave.py": "x = 1\n"}))
+
+    def test_a_test_file_the_patch_adds_puts_its_directory_on_the_path(self):
+        self.assertIn("new/wave.py", self._found({"calc.py": "x = 1\n"},
+                                                 {"new/test_n.py": "def test_n():\n    pass\n",
+                                                  "new/wave.py": "x = 1\n"}))
+
+    def test_a_helper_beside_the_tests_is_not(self):
+        """``tests/helpers.py`` imported as ``helpers`` is how prepend mode is used."""
+        base = {"tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertEqual(self._found(base, {"tests/helpers.py": "x = 1\n"}), set())
 
     def test_a_virtualenv_ci_creates_at_the_root_is_not(self):
         """``venv`` is a stdlib name; a CI virtualenv in the checkout is tooling."""

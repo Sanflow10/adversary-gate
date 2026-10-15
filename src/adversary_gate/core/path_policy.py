@@ -219,50 +219,84 @@ _RUNNER_MODULES = frozenset({
 _SHADOW_SUFFIXES = (".py", ".pyc", ".so", ".pyd")
 
 
-def _shadowing(root: Path) -> dict:
-    """Entries at ``root`` an import of a standard or runner module would find first."""
+def _is_collected(name: str) -> bool:
+    """A file pytest imports from where it lies: a test module or a conftest."""
+    return name == "conftest.py" or (
+        name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+    )
+
+
+def _import_roots(root: Path) -> set:
+    """Directories pytest's default import mode puts on ``sys.path``, relative.
+
+    The root (``python -m pytest`` runs there), and for every test module and
+    conftest the first directory above it that is not a package -- its
+    ``basedir``. Measured on pytest 9.1.1: a module beside any of these was
+    imported in place of a standard-library one of that name.
+    """
+    dirs = {""}
+    for current, subdirs, files in os.walk(root):
+        here = Path(current)
+        subdirs[:] = [d for d in subdirs
+                      if d not in _SKIP_DIRS and not (here / d / "pyvenv.cfg").is_file()]
+        if not any(_is_collected(name) for name in files):
+            continue
+        base = here
+        while base != root and (base / "__init__.py").is_file():
+            base = base.parent
+        dirs.add("" if base == root else base.relative_to(root).as_posix())
+    return dirs
+
+
+def _shadowing(root: Path, dirs: set) -> dict:
+    """Entries in ``dirs`` an import of a standard or runner module would find first."""
     names = set(getattr(sys, "stdlib_module_names", ())) | _RUNNER_MODULES
     found = {}
-    try:
-        entries = list(root.iterdir())
-    except OSError:
-        return found
-    for entry in entries:
-        stem = entry.name.split(".", 1)[0]
-        if stem not in names:
+    for rel_dir in dirs:
+        try:
+            entries = list((root / rel_dir).iterdir())
+        except OSError:
             continue
-        if entry.is_dir() and entry.name == stem:
-            # A virtualenv CI made in the checkout (``venv`` is a stdlib name);
-            # a patch cannot write the marker (G).
-            if not (entry / "pyvenv.cfg").is_file():
-                found[entry.name] = entry
-        elif entry.name.endswith(_SHADOW_SUFFIXES):
-            found[entry.name] = entry
+        for entry in entries:
+            stem = entry.name.split(".", 1)[0]
+            if stem not in names:
+                continue
+            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
+            if entry.is_dir() and entry.name == stem:
+                # A virtualenv CI made in the checkout (``venv`` is a stdlib
+                # name); a patch cannot write the marker (G).
+                if not (entry / "pyvenv.cfg").is_file():
+                    found[rel] = entry
+            elif entry.name.endswith(_SHADOW_SUFFIXES):
+                found[rel] = entry
     return found
 
 
 def _shadowing_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
-    """AG-048: a module at the root that would be imported in place of a real one.
+    """AG-048: a module on pytest's path that would be imported in place of a real one.
 
     ``python -m pytest`` puts the working directory -- the tree under test --
-    first on ``sys.path``, so an ``inspect.py`` or a ``pytest/`` the patch adds
-    there runs instead of the real module, on the patch side only: it can
+    first on ``sys.path``, and pytest adds the directory of every test module
+    and conftest that is not a package (:func:`_import_roots`), so an
+    ``inspect.py`` or a ``pytest/`` the patch adds there runs instead of the
+    real module, on the patch side only: it can
     report a test as passed as surely as a ``pytest.ini`` plugin could. A
     directory the baseline already had keeps its contents free (``test/`` is a
     standard-library name and a common test directory); a file is compared.
     """
-    before = _shadowing(baseline_dir)
-    after = _shadowing(patch_dir)
+    dirs = _import_roots(baseline_dir) | _import_roots(patch_dir)
+    before = _shadowing(baseline_dir, dirs)
+    after = _shadowing(patch_dir, dirs)
     found: List[PathViolation] = []
     for name in sorted(after):
         why = "would be imported in place of the module of that name"
         if name not in before:
-            found.append(PathViolation(name, f"added by the patch at the root: {why}"))
+            found.append(PathViolation(name, f"added by the patch on pytest's import path: {why}"))
         elif after[name].is_file():
             try:
                 same = before[name].read_bytes() == after[name].read_bytes()
             except OSError:
                 same = False
             if not same:
-                found.append(PathViolation(name, f"changed by the patch at the root: {why}"))
+                found.append(PathViolation(name, f"changed by the patch on pytest's import path: {why}"))
     return found
