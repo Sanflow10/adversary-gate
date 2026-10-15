@@ -38,7 +38,7 @@ quando esta seção vira uma com versão e data.
 
 ---
 
-## [3.0.8] — 2026-10-16
+## [3.0.8] — 2026-10-15
 
 The low-severity items of the same internal audit as 3.0.7. Each code change
 has a test that fails on 3.0.7 and passes here. None was reported from outside.
