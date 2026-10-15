@@ -374,3 +374,21 @@ class TestTheCanaryDoesNotRetryAFailure(unittest.TestCase):
                                                    targets=["test_calc.py::test_add"])
         self.assertFalse(score.is_measured, detail)
         self.assertTrue(detail.get("source_sensitive_claims"), detail)
+
+
+class TestStillbornMutantsAreSaid(unittest.TestCase):
+    """A mutant whose run could not even collect left the sample with no word in
+    the reason; only the artefact's count showed it (3.0.9)."""
+
+    def test_the_reason_names_the_stillborn(self):
+        base = {"calc.py": "LIMIT = 1\n\n\ndef add(a, b):\n    return a - b\n",
+                "test_calc.py": ("from calc import LIMIT, add\n\n\ndef test_add():\n"
+                                 "    assert add(2, 3) == 5\n    assert LIMIT\n")}
+        patch = {"calc.py": "LIMIT = 2\n\n\ndef add(a, b):\n    return a + b\n"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _sides(root, base, patch)
+            score, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                   targets=["test_calc.py::test_add"])
+        self.assertGreater(detail["stillborn"], 0, detail)
+        self.assertIn("stillborn", detail["reason"], detail)

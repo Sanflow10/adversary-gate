@@ -1659,18 +1659,28 @@ def measure_mutation_score(
             "line as run, so no other mutant speaks for it",
         )
     if result.is_measured:
-        note = ""
+        notes = []
         if foreign:
             # The score just produced covers the Python files it mutated and
             # nothing else. Leaving ``reason`` blank let a 1.0 read as the
             # strength of the whole patch while part of the change was never
             # executed; say what the number is actually a number for.
-            note = (
+            notes.append(
                 f"score covers the {len(changed)} Python file(s) mutated only; "
                 f"{len(foreign)} non-Python source file(s) in this patch were "
                 "never judged"
             )
-        return finish(result, note)
+        stillborn = [m for m in entries if m.get("result") == "stillborn"]  # type: ignore[union-attr]
+        if stillborn:
+            # Left out of the sample, as they must be -- but until 3.0.9 only the
+            # artefact's count said so, and the lines they broke went unjudged.
+            shown = ", ".join(f"{m['file']}:{m['line']}" for m in stillborn[:5])
+            more = f" (+{len(stillborn) - 5} more)" if len(stillborn) > 5 else ""
+            notes.append(
+                f"{len(stillborn)} mutant(s) were stillborn -- the tests could not run "
+                f"against them -- and are not in the score: {shown}{more}"
+            )
+        return finish(result, "; ".join(notes))
     codes = [m.get("exit_code") for m in detail["mutants"] if m.get("result") == "stillborn"]  # type: ignore[union-attr]
     if codes and all(isinstance(c, int) and c < 0 for c in codes):
         # Killed by a limit, not a statement about the mutants (AG-039: the
