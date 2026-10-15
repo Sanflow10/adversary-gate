@@ -412,6 +412,53 @@ class TestGitEvidence(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_GIT and HAS_COVERAGE, "needs git and coverage")
+class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
+    """The MCP's coverage pass runs the patch's tests: the same boundary as the gate's runs.
+
+    Until 3.0.7 it ran them with ``subprocess.run`` and the server's whole
+    environment, outside ``--sandbox bwrap`` and every resource limit, before the
+    gate (which honours the policy) ever started.
+    """
+
+    PROBE = (
+        "import os, pathlib\n\n"
+        "def test_probe():\n"
+        "    pathlib.Path('seen.txt').write_text(\n"
+        "        os.environ.get('ADVERSARY_PROBE_SECRET', 'absent') + '|' +\n"
+        "        str(pathlib.Path(OUTSIDE).exists()))\n"
+    )
+
+    def _run(self, **kwargs):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        repo = _git_repo(root)
+        outside = root / "outside.txt"
+        outside.write_text("host file")
+        (repo / "test_probe.py").write_text(f"OUTSIDE = {str(outside)!r}\n" + self.PROBE)
+        env = {"ADVERSARY_PROBE_SECRET": "leaked"}
+        with mock.patch.dict(os.environ, env):
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, **kwargs)
+        self.assertTrue(evidence.coverage.is_file())
+        return (repo / "seen.txt").read_text().split("|")
+
+    def test_the_servers_environment_does_not_reach_the_tests(self):
+        secret, _ = self._run()
+        self.assertEqual(secret, "absent")
+
+    @unittest.skipUnless(shutil.which("bwrap"), "needs bubblewrap")
+    def test_a_bwrap_policy_contains_the_coverage_pass(self):
+        _, sees_host = self._run(sandbox="bwrap")
+        self.assertEqual(sees_host, "False")
+
+    def test_the_policy_reaches_the_coverage_pass(self):
+        with mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY": "--sandbox bwrap"}), \
+                mock.patch.object(mcp_server, "prepare", side_effect=EvidenceError("stop")) as fake:
+            mcp_server.verify_repo(str(ROOT))
+        self.assertEqual(fake.call_args.kwargs.get("sandbox"), "bwrap")
+
+
+@unittest.skipUnless(HAS_GIT and HAS_COVERAGE, "needs git and coverage")
 class TestVerifyRepoTool(unittest.TestCase):
     def setUp(self):
         self.env = mock.patch.dict(os.environ, {"PYTHONPATH": str(ROOT / "src")})
