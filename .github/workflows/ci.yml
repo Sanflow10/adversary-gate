@@ -53,7 +53,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tooling
-        run: python -m pip install build
+        run: python -m pip install build==1.6.1
 
       - name: Build wheel and sdist
         run: python -m build
@@ -489,7 +489,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install analysers
-        run: python -m pip install bandit semgrep
+        run: python -m pip install bandit==1.9.4 semgrep==1.181.0
 
       - name: bandit (MEDIUM and above)
         # The two B108 hits on the bwrap argv are mount specifications, not

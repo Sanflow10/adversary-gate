@@ -235,6 +235,19 @@ class TestThirdPartyActionsArePinned(unittest.TestCase):
                     self.assertRegex(ref, r"@[0-9a-f]{40}$")
 
 
+class TestReleaseToolsArePinned(unittest.TestCase):
+    """What builds and tests the published artefacts is a fixed version, not
+    whatever PyPI serves that day (3.0.8)."""
+
+    def test_publishing_workflows_pin_their_tools(self):
+        for name in ("pypi-publish.yml", "release.yml"):
+            text = (ROOT / ".github" / "workflows" / name).read_text()
+            for line in re.findall(r"pip install (build[^\n]*)", text):
+                with self.subTest(workflow=name, line=line):
+                    for word in line.split():
+                        self.assertIn("==", word, line)
+
+
 class TestTheFloatingTagFollowsSignedTags(unittest.TestCase):
     """An unsigned ``v3.9.9`` counted as the newest 3.x, and the floating ``v3``
     then never moved again (3.0.8)."""
