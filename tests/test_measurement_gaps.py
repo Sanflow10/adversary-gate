@@ -413,3 +413,22 @@ class TestAFileThePatchOnlyShortenedIsSaid(unittest.TestCase):
                                                    targets=["test_calc.py::test_add"])
         self.assertEqual(detail.get("removal_only_files"), ["guard.py"], detail)
         self.assertIn("guard.py", detail["reason"])
+
+
+class TestAReasonDoesNotInventStillbornMutants(unittest.TestCase):
+    """Only statement-level mutants on the changed lines, all killed: none counts
+    in a sample, and the reason said "every mutant was stillborn (exit codes [])"
+    when none was (3.0.9)."""
+
+    def test_the_reason_says_what_happened(self):
+        base = {"calc.py": "def add(a, b):\n    return sum((a, b))\n",
+                "test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"}
+        patch = {"calc.py": "def add(a, b):\n    return sum([a, b])\n"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _sides(root, base, patch)
+            score, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                   targets=["test_calc.py::test_add"])
+        self.assertFalse(score.is_measured, detail)
+        self.assertEqual(detail["stillborn"], 0, detail)
+        self.assertNotIn("stillborn", detail["reason"])

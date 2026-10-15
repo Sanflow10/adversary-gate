@@ -45,22 +45,23 @@ where the gate said too little. Each change has a test that fails on 3.0.8.
 
 ### Security
 
-- **AG-048: a module on pytest's import path is the harness.** `python -m
-  pytest` searches the tree's root first, and pytest adds the directory of
-  every test module and conftest that is not a package; an `inspect.py`,
-  `json.py` or `pytest/` the patch added in any of them ran in place of the
-  real module, on the patch side only, and no harness check named it. The
-  tree comparison now finds those directories as pytest does (checked against
-  pytest 9.1.1's own `sys.path`) and treats an entry there with a
-  standard-library name or the name of a module pytest loads as a harness
-  change when the patch adds or changes it. A directory the baseline already
-  had keeps its contents free (`test/` is a standard-library name), and a
-  virtualenv at the root is skipped. The AG-047 resolver also knows a module
-  there by its bare name, so a `tests/requests.py` the product imports as
-  `requests` is product code, measured and mutated. Not shown to reach
-  `MERGE`: the cases built for this release were stopped by other checks (the
-  mutation blind-spot and stillborn rules); what was missing is that no check
-  named the file. Tests: `TestAModuleTheRunnerWouldImportIsTheHarness`,
+- **AG-048: a module that can shadow a real one is the harness.** `python -m
+  pytest` searches the tree's root first, pytest adds the directory of every
+  test module and conftest that is not a package, and a `pythonpath` setting
+  or a test's own `sys.path.insert` can add more. An `inspect.py`, `json.py`
+  or `pytest/` package the patch added in any such directory ran in place of
+  the real module, on the patch side only (measured with a harmless marker
+  module on pytest 9.1.1), and no harness check named it. The tree comparison
+  now checks every directory that is not a package and treats a module or
+  package there with a standard-library name, or the name of a module pytest
+  loads, as a harness change when the patch adds or changes it. A directory
+  without `__init__.py` is not counted (a namespace never wins over a real
+  module), virtualenvs are skipped, and a file the baseline already had is
+  compared, not refused. The AG-047 resolver also knows a module on pytest's
+  path by its bare name, so a `tests/requests.py` the product imports as
+  `requests` is product code, measured and mutated. Not reproduced as an
+  attack; the decision now names the file. Tests:
+  `TestAModuleTheRunnerWouldImportIsTheHarness`,
   `test_a_standard_module_name_on_the_import_path_is_not_a_merge`,
   `test_a_module_on_pytests_path_is_matched_by_its_bare_name`.
 - **Claims cut by `--max-claims` with the full suite off are not a `MERGE`.**
@@ -75,6 +76,10 @@ where the gate said too little. Each change has a test that fails on 3.0.8.
   block, since removing an unused import is the common case.
 - **Stillborn mutants are named in the reason,** not only counted in the
   artefact.
+- **A reason no longer invents stillborn mutants.** When the changed lines
+  held only statement-level mutants, none counted, and the reason said "every
+  mutant was stillborn (exit codes [])" with none stillborn. It now says that
+  no mutant could be counted, and why.
 
 ---
 

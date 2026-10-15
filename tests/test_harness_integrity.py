@@ -260,6 +260,7 @@ class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
 
     def test_a_package_named_like_the_runner_is_caught(self):
         self.assertIn("pytest", self._found({"calc.py": "x = 1\n"}, {"pytest/__init__.py": "x = 1\n"}))
+        self.assertIn("pytest.py", self._found({"calc.py": "x = 1\n"}, {"pytest.py": "x = 1\n"}))
 
     def test_changing_one_the_baseline_had_is_caught(self):
         self.assertIn("json.py", self._found({"json.py": "a = 1\n"}, {"json.py": "a = 2\n"}))
@@ -302,6 +303,27 @@ class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
         self.assertIn("new/wave.py", self._found({"calc.py": "x = 1\n"},
                                                  {"new/test_n.py": "def test_n():\n    pass\n",
                                                   "new/wave.py": "x = 1\n"}))
+
+    def test_a_directory_put_on_the_path_by_a_test_is_covered(self):
+        """``sys.path.insert(0, "src")`` in a baseline test (this repository does
+        it) puts ``src/`` first: measured, ``src/wave.py`` was imported."""
+        base = {"tests/test_a.py": "import sys\nsys.path.insert(0, 'src')\n", "src/app.py": "X = 1\n"}
+        self.assertIn("src/wave.py", self._found(base, {"src/wave.py": "x = 1\n"}))
+
+    def test_a_namespace_directory_is_not(self):
+        """A directory without ``__init__.py`` never wins over a real module."""
+        base = {"tests/conftest.py": "", "tests/test_a.py": "def test_a():\n    pass\n"}
+        self.assertEqual(self._found(base, {"tests/http/test_x.py": "def test_x():\n    pass\n"}), set())
+        self.assertEqual(self._found({"calc.py": "x = 1\n"}, {"site/index.html": "<p>\n"}), set())
+
+    def test_a_package_with_a_standard_name_is(self):
+        self.assertIn("json", self._found({"calc.py": "x = 1\n"}, {"json/__init__.py": "x = 1\n"}))
+
+    def test_a_virtualenvs_site_packages_is_not(self):
+        base = {"calc.py": "x = 1\n"}
+        self.assertEqual(self._found(base, {".venv/pyvenv.cfg": "home = /usr\n",
+                                            ".venv/lib/python3.12/site-packages/six.py": "x = 1\n",
+                                            ".venv/lib/python3.12/site-packages/typing.py": "x\n"}), set())
 
     def test_a_helper_beside_the_tests_is_not(self):
         """``tests/helpers.py`` imported as ``helpers`` is how prepend mode is used."""

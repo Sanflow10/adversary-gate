@@ -1693,7 +1693,15 @@ def measure_mutation_score(
             )
         return finish(result, "; ".join(notes))
     codes = [m.get("exit_code") for m in detail["mutants"] if m.get("result") == "stillborn"]  # type: ignore[union-attr]
-    if codes and all(isinstance(c, int) and c < 0 for c in codes):
+    if not codes:
+        # Nothing was stillborn: no mutant could be counted. Until 3.0.9 this
+        # fell through to "every mutant was stillborn (exit codes [])".
+        return finish(
+            result,
+            "no mutant could be counted: the changed lines hold no operator site, and "
+            "statement-level mutants (killed or not) never count toward a sampled score",
+        )
+    if all(isinstance(c, int) and c < 0 for c in codes):
         # Killed by a limit, not a statement about the mutants (AG-039: the
         # old message blamed the test target for what --cpu-seconds did).
         return finish(
