@@ -1274,6 +1274,7 @@ def measure_mutation_score(
     #: files stood for the whole patch: a ``# -*- coding: latin-1 -*-`` module
     #: changing ``>=`` to ``>`` merged next to a tested file (3.0.3).
     undecodable: List[str] = []
+    removal_only: List[str] = []
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -1301,6 +1302,11 @@ def measure_mutation_score(
         originals[rel] = source
         edited = changed_lines(before, source)
         if not edited:
+            # Only lines removed: nothing the patch wrote is left to break. Said
+            # in the artefact and the reason, not a veto (3.0.9).
+            if before != source:
+                removal_only.append(rel)
+                detail["removal_only_files"] = sorted(removal_only)
             continue
         edited_rows[rel] = edited
         # Scan generously, then keep only sites on lines this patch wrote,
@@ -1669,6 +1675,11 @@ def measure_mutation_score(
                 f"score covers the {len(changed)} Python file(s) mutated only; "
                 f"{len(foreign)} non-Python source file(s) in this patch were "
                 "never judged"
+            )
+        if removal_only:
+            notes.append(
+                "the patch only removed lines from " + ", ".join(sorted(removal_only))
+                + ": nothing there was mutated, so the score does not speak for those removals"
             )
         stillborn = [m for m in entries if m.get("result") == "stillborn"]  # type: ignore[union-attr]
         if stillborn:

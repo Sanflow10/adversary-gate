@@ -392,3 +392,24 @@ class TestStillbornMutantsAreSaid(unittest.TestCase):
                                                    targets=["test_calc.py::test_add"])
         self.assertGreater(detail["stillborn"], 0, detail)
         self.assertIn("stillborn", detail["reason"], detail)
+
+
+class TestAFileThePatchOnlyShortenedIsSaid(unittest.TestCase):
+    """Decision 1 (3.0.9): a file whose change is only removed lines has nothing
+    left to mutate, and the score of the other files stood for the patch without
+    a word. It is listed and named in the reason; it does not block -- deleting
+    an unused import is the common case."""
+
+    def test_the_shortened_file_is_listed(self):
+        base = {"calc.py": "def add(a, b):\n    return a - b\n",
+                "guard.py": "def check(x):\n    if x is None:\n        raise ValueError\n    return x\n",
+                "test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"}
+        patch = {"calc.py": "def add(a, b):\n    return a + b\n",
+                 "guard.py": "def check(x):\n    return x\n"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _sides(root, base, patch)
+            score, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                   targets=["test_calc.py::test_add"])
+        self.assertEqual(detail.get("removal_only_files"), ["guard.py"], detail)
+        self.assertIn("guard.py", detail["reason"])
