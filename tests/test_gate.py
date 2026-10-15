@@ -16,6 +16,7 @@ previous version, not theorized:
 
 from __future__ import annotations
 
+import io
 import json
 import subprocess
 import sys
@@ -893,6 +894,19 @@ class TestCliExitCodes(unittest.TestCase):
             self._tree(root, break_patch=False)
             code = self._invoke(root, list(self.UNTRUSTED_COVERAGE))
             self.assertEqual(code, EXIT_MERGE)
+
+    def test_a_failing_report_does_not_change_the_printed_decision(self):
+        """The decision was printed, then --report raised and the exit code became
+        a usage error under a JSON that said BLOCK (3.0.8)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root, break_patch=True)
+            with patch("adversary_gate.cli.compute_metrics", side_effect=KeyError("x")), \
+                    patch("sys.stdout", new_callable=io.StringIO) as out, \
+                    patch("sys.stderr", new_callable=io.StringIO):
+                code = self._invoke(root, ["--report", "--evidence-log", str(root / "log.jsonl")])
+            self.assertEqual(json.loads(out.getvalue())["decision"], "block")
+            self.assertEqual(code, EXIT_BLOCK)
 
     def test_no_coverage_evidence_is_inconclusive_not_merge(self):
         """AG-002: the default used to be ``--coverage-ratio 1.0``.
