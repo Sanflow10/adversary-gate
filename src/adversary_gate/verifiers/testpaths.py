@@ -168,7 +168,9 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
 
     for rel in non_tests:
         try:
-            tree = ast.parse((base / rel).read_text(encoding="utf-8"))
+            # Bytes, so a "# coding:" line is honoured: read as UTF-8, a latin-1
+            # module failed and its imports went unseen (3.0.8).
+            tree = ast.parse((base / rel).read_bytes())
         except (OSError, SyntaxError, ValueError, UnicodeDecodeError):
             continue
         pkg = rel.split("/")[:-1]

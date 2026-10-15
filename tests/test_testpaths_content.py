@@ -48,6 +48,17 @@ class TestProductionImportedTests(unittest.TestCase):
             })
             self.assertEqual(production_imported_tests(root), frozenset({"tests/rates.py"}))
 
+    def test_a_product_module_in_latin_1_is_read(self):
+        """It was read as UTF-8, failed, and was skipped: its import went unseen (3.0.8)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _tree(root, {"tests/rates.py": "RATE = 0.9\n",
+                         "tests/test_price.py": "def test_p():\n    pass\n"})
+            (root / "app.py").write_bytes(
+                "# -*- coding: latin-1 -*-\nfrom tests.rates import RATE\nNAME = 'pre\u00e7o'\n"
+                .encode("latin-1"))
+            self.assertEqual(production_imported_tests(root), frozenset({"tests/rates.py"}))
+
     def test_a_helper_imported_only_by_tests_is_not_flagged(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
