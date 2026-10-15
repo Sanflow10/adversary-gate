@@ -5,6 +5,11 @@ on:
     branches: ['**']
   pull_request:
 
+# The suite runs the patch's code, so the token reads the repository and
+# nothing else; no job here publishes (3.0.8).
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Suite (Python ${{ matrix.python-version }})

@@ -206,6 +206,21 @@ def _step_script(workflow: str, step_name: str) -> str:
 
 
 @unittest.skipUnless(shutil.which("ssh-keygen") and shutil.which("git"), "needs ssh-keygen and git")
+class TestWorkflowTokens(unittest.TestCase):
+    """Every workflow states what its token may do. Without a ``permissions``
+    block the token gets the repository's default, which can be write access,
+    and the CI job runs the patch's code (3.0.8)."""
+
+    def test_every_workflow_declares_its_permissions(self):
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            with self.subTest(workflow=path.name):
+                self.assertRegex(path.read_text(), r"(?m)^\s*permissions:", path.name)
+
+    def test_ci_reads_and_writes_nothing(self):
+        text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read\n")
+
+
 class TestTheTagSignatureStepRuns(unittest.TestCase):
     """The publisher's signature step, run as written against real tags.
 
