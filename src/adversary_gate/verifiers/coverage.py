@@ -73,6 +73,64 @@ def _diff_target(header: str) -> str | None:
     return path or None
 
 
+_HUNK = re.compile(r"^@@ -\d+(?:,(?P<old>\d+))? \+(?P<start>\d+)(?:,(?P<new>\d+))? @@")
+
+
+def _diff_lines(diff_text: str) -> list[str]:
+    """The diff's lines, split on ``\\n`` only.
+
+    ``str.splitlines`` also breaks on ``\\x0c``, ``\\x1c``-``\\x1e``, ``\\x85``
+    and ``\\u2028``/``\\u2029``, which end a line neither in a diff nor in
+    Python: one such character in a changed line moved every later line of
+    its hunk one row down (3.0.7).
+    """
+    lines = diff_text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+
+def _walk_hunks(diff_text: str):
+    """``(kind, line, row)`` for each line: ``header``, ``added``, ``removed``, ``context``, ``other``.
+
+    Inside a hunk its header's counts decide what a line is, never how it
+    starts: an added line whose text begins with ``++`` is spelled ``+++ y``,
+    and a removed ``-- x`` then an added ``++ y`` look exactly like a file
+    header. Until 3.0.7 both were read as headers, which dropped the line and
+    moved, or misattributed, every changed line after it. ``row`` is the
+    new-side line number of an added or context line.
+    """
+    old_left = new_left = 0
+    row = 0
+    for line in _diff_lines(diff_text):
+        if old_left > 0 or new_left > 0:
+            if line.startswith("\\"):
+                yield "other", line, row  # "\ No newline at end of file"
+                continue
+            if line.startswith("+"):
+                new_left -= 1
+                yield "added", line, row
+                row += 1
+                continue
+            if line.startswith("-"):
+                old_left -= 1
+                yield "removed", line, row
+                continue
+            old_left -= 1
+            new_left -= 1
+            yield "context", line, row
+            row += 1
+            continue
+        match = _HUNK.match(line)
+        if match:
+            old_left = int(match.group("old") if match.group("old") is not None else 1)
+            new_left = int(match.group("new") if match.group("new") is not None else 1)
+            row = int(match.group("start"))
+            yield "hunk", line, row
+            continue
+        yield "header", line, row
+
+
 def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
     """Added line numbers per file.
 
@@ -88,39 +146,27 @@ def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
     files: dict[str, set[int]] = {}
     current: str | None = None
     previous_path: str | None = None
-    new_line = 0
     previous_was_removed_header = False
-    for line in diff_text.splitlines():
-        if line.startswith("--- "):
-            previous_was_removed_header = True
-            previous_path = _diff_target(line[4:])
-        elif line.startswith("+++ ") and previous_was_removed_header:
+    # "\ No newline at end of file" describes the line above it; it is not a
+    # line of either file, and :func:`_walk_hunks` counts it as neither.
+    for kind, line, row in _walk_hunks(diff_text):
+        if kind == "header":
+            if line.startswith("--- "):
+                previous_was_removed_header = True
+                previous_path = _diff_target(line[4:])
+                continue
+            if line.startswith("+++ ") and previous_was_removed_header:
+                current = _diff_target(line[4:])
+                if current is None:
+                    # A deletion: attribute the hunk to the file that was removed.
+                    current = previous_path
+                if current is not None:
+                    files.setdefault(current, set())
             previous_was_removed_header = False
-            current = _diff_target(line[4:])
-            if current is None:
-                # A deletion: attribute the hunk to the file that was removed.
-                current = previous_path
-            if current is not None:
-                files.setdefault(current, set())
-        else:
-            previous_was_removed_header = False
-        if line.startswith("+++ ") or line.startswith("--- "):
             continue
-        if line.startswith("@@"):
-            match = re.search(r"\+(\d+)(?:,(\d+))?", line)
-            if match:
-                new_line = int(match.group(1))
-        elif current is not None and line.startswith("+") and not line.startswith("+++"):
-            files[current].add(new_line)
-            new_line += 1
-        elif line.startswith("\\"):
-            # "\ No newline at end of file" describes the line above it; it is
-            # not a line of either file. Counted as context, it moved every
-            # added line after it one row down: a fully tested patch measured
-            # 1/2 and named a row past the end of the file as not run.
-            continue
-        elif current is not None and not line.startswith("-"):
-            new_line += 1
+        previous_was_removed_header = False
+        if kind == "added" and current is not None:
+            files[current].add(row)
     return files
 
 
@@ -137,7 +183,9 @@ def binary_python_diffs(diff_text: str) -> list[str]:
     passed while a change in ``calc.py`` was never checked).
     """
     found: list[str] = []
-    for line in diff_text.splitlines():
+    for kind, line, _ in _walk_hunks(diff_text):
+        if kind != "header":
+            continue
         match = _BINARY_DIFF.match(line)
         if not match:
             continue
@@ -188,26 +236,16 @@ def _non_code_added_lines(diff_text: str) -> dict:
     """
     out: dict = {}
     path: str | None = None
-    number = 0
-    for line in diff_text.splitlines():
-        if line.startswith("+++ "):
-            path = _diff_target(line[4:])
+    for kind, line, row in _walk_hunks(diff_text):
+        if kind == "header":
+            if line.startswith("+++ "):
+                path = _diff_target(line[4:])
             continue
-        if line.startswith("--- "):
+        if kind != "added" or path is None or not path.endswith(".py"):
             continue
-        if line.startswith("@@"):
-            match = re.search(r"\+(\d+)", line)
-            number = int(match.group(1)) if match else 0
-            continue
-        if path is None or not path.endswith(".py"):
-            continue
-        if line.startswith("+"):
-            text = line[1:].strip()
-            if not text or text.startswith("#"):
-                out.setdefault(path, set()).add(number)
-            number += 1
-        elif line.startswith(" "):
-            number += 1
+        text = line[1:].strip()
+        if not text or text.startswith("#"):
+            out.setdefault(path, set()).add(row)
     return out
 
 
