@@ -221,6 +221,17 @@ class TestWorkflowTokens(unittest.TestCase):
         self.assertRegex(text, r"(?m)^permissions:\n  contents: read\n")
 
 
+class TestTheFloatingTagFollowsSignedTags(unittest.TestCase):
+    """An unsigned ``v3.9.9`` counted as the newest 3.x, and the floating ``v3``
+    then never moved again (3.0.8)."""
+
+    def test_only_signed_tags_are_candidates(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        step = text[text.index("- name: Move the floating major tag"):]
+        self.assertIn("verify-tag", step)
+        self.assertIn("allowed_signers", step)
+
+
 class TestTheTagSignatureStepRuns(unittest.TestCase):
     """The publisher's signature step, run as written against real tags.
 
