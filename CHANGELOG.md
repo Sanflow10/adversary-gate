@@ -38,6 +38,38 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.9] — 2026-10-15
+
+One fail-open found by reading the code, not reproduced end to end, and three
+gaps where the gate said too little. Each change has a test that fails on 3.0.8.
+
+### Security
+
+- **AG-048: a module at the root that the runner would import is the
+  harness.** `python -m pytest` searches the tree's root first, so a
+  top-level `inspect.py`, `json.py` or `pytest/` the patch added ran in place
+  of the real module, on the patch side only, and no harness check named it.
+  The tree comparison now treats a root entry with a standard-library name or
+  the name of a module pytest loads as a harness change when the patch adds
+  or changes it. A directory the baseline already had keeps its contents free
+  (`test/` is a standard-library name), and a virtualenv at the root is
+  skipped. Not reproduced as an attack; verified at the mechanism. Tests:
+  `TestAModuleTheRunnerWouldImportIsTheHarness`.
+- **Claims cut by `--max-claims` with the full suite off are not a `MERGE`.**
+  The tests discovery cut were judged by nothing, and the kept claims could
+  merge. That is now `INCONCLUSIVE`, with a `raise_limit` step.
+
+### Changed
+
+- **A file the patch only shortened is named.** Nothing in it is left to
+  mutate, and the other files' score stood for the patch without a word. It is
+  listed as `mutation.removal_only_files` and named in the reason; it does not
+  block, since removing an unused import is the common case.
+- **Stillborn mutants are named in the reason,** not only counted in the
+  artefact.
+
+---
+
 ## [3.0.8] — 2026-10-15
 
 The low-severity items of the same internal audit as 3.0.7. Each code change
