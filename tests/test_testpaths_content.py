@@ -62,6 +62,17 @@ class TestProductionImportedTests(unittest.TestCase):
             self.assertEqual(production_imported_tests(root),
                              frozenset({"tests/rates.py", "tests/table.py"}))
 
+    def test_a_top_level_module_under_src_is_matched(self):
+        """``src/test_util.py`` is imported as ``test_util`` (3.0.8)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _tree(root, {
+                "src/app.py": "import test_util\n",
+                "src/test_util.py": "RATE = 0.9\n",
+                "tests/test_app.py": "def test_a():\n    pass\n",
+            })
+            self.assertEqual(production_imported_tests(root), frozenset({"src/test_util.py"}))
+
     def test_a_product_module_in_latin_1_is_read(self):
         """It was read as UTF-8, failed, and was skipped: its import went unseen (3.0.8)."""
         with tempfile.TemporaryDirectory() as d:

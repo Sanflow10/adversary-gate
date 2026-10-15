@@ -162,7 +162,8 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
         for rel, mod in candidates.items():
             if rel in imported:
                 continue
-            if mod == dotted or (
+            # Under a src/ layout the module is imported without the "src/".
+            if mod == dotted or (mod.startswith("src/") and mod[4:] == dotted) or (
                 "/" in dotted and (mod.endswith("/" + dotted) or dotted.endswith("/" + mod))
             ):
                 imported.add(rel)
