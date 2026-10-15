@@ -510,6 +510,14 @@ class TestVerifyRepoTool(unittest.TestCase):
             with mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY": "--diff /tmp/x"}):
                 self.assertIn("evidence flags", mcp_server.verify_repo(str(repo))["reason"])
 
+    def test_an_argument_file_is_an_option_too(self):
+        """pytest 8.2+ reads ``@file`` as more arguments: options the filter never saw (3.0.8)."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            refused = mcp_server.verify_repo(str(repo), pytest_args=["@args.txt"])
+            self.assertEqual(refused["decision"], "inconclusive")
+            self.assertIn("options", refused["reason"])
+
     def test_a_pinned_baseline_wins_over_the_agents(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = _git_repo(Path(directory))

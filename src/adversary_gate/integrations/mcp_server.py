@@ -190,7 +190,8 @@ def verify_repo(
                               "chooses, so nothing was run",
                     "claims": [], "baseline_chosen_by": None}
         base = pinned or base_ref
-        options = [a for a in (pytest_args or []) if a.startswith("-")]
+        # ``@file`` is an option too: pytest 8.2+ reads more arguments from it.
+        options = [a for a in (pytest_args or []) if a.startswith(("-", "@"))]
         if options:
             raise ValueError(f"pytest_args takes test paths only, not options: {options}")
         with tempfile.TemporaryDirectory(prefix="adversary-mcp-") as scratch:
