@@ -135,7 +135,8 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
     behaviour, so it must be measured, not reverted to the baseline. A test
     *helper*, imported only by other tests, is not here and stays a test;
     ``conftest.py`` and declared support are never reclassified. Read from the
-    AST, so a file that will not parse is left as its name says.
+    AST, so a file that will not parse is left as its name says. Followed to a
+    fixed point: what such a module imports is reached by production too.
     """
     if root is None:
         return frozenset()
@@ -161,14 +162,24 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
         for rel, mod in candidates.items():
             if rel in imported:
                 continue
-            if mod == dotted or (
+            # Under a src/ layout the module is imported without the "src/".
+            if mod == dotted or (mod.startswith("src/") and mod[4:] == dotted) or (
                 "/" in dotted and (mod.endswith("/" + dotted) or dotted.endswith("/" + mod))
             ):
                 imported.add(rel)
 
-    for rel in non_tests:
+    # To a fixed point: a test-named module the product imports is product,
+    # so what it imports is reached by production too. Until 3.0.8 only the
+    # non-test modules' imports were read, and the second link of a chain
+    # (product -> tests/a.py -> tests/b.py) stayed a test.
+    queue = list(non_tests)
+    while queue:
+        rel = queue.pop()
+        before = set(imported)
         try:
-            tree = ast.parse((base / rel).read_text(encoding="utf-8"))
+            # Bytes, so a "# coding:" line is honoured: read as UTF-8, a latin-1
+            # module failed and its imports went unseen (3.0.8).
+            tree = ast.parse((base / rel).read_bytes())
         except (OSError, SyntaxError, ValueError, UnicodeDecodeError):
             continue
         pkg = rel.split("/")[:-1]
@@ -187,6 +198,7 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
                 record(prefix)
                 for alias in node.names:
                     record("/".join([prefix, alias.name]) if prefix else alias.name)
+        queue.extend(sorted(imported - before))
         if len(imported) == len(candidates):
             break
     return frozenset(imported)

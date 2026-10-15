@@ -206,6 +206,59 @@ def _step_script(workflow: str, step_name: str) -> str:
 
 
 @unittest.skipUnless(shutil.which("ssh-keygen") and shutil.which("git"), "needs ssh-keygen and git")
+class TestWorkflowTokens(unittest.TestCase):
+    """Every workflow states what its token may do. Without a ``permissions``
+    block the token gets the repository's default, which can be write access,
+    and the CI job runs the patch's code (3.0.8)."""
+
+    def test_every_workflow_declares_its_permissions(self):
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+            with self.subTest(workflow=path.name):
+                self.assertRegex(path.read_text(), r"(?m)^\s*permissions:", path.name)
+
+    def test_ci_reads_and_writes_nothing(self):
+        text = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        self.assertRegex(text, r"(?m)^permissions:\n  contents: read\n")
+
+
+class TestThirdPartyActionsArePinned(unittest.TestCase):
+    """A tag is the action owner's to move; a commit is not. The publisher runs
+    with an OIDC token for PyPI, so what it runs is fixed by SHA (3.0.8)."""
+
+    def test_every_third_party_action_is_a_commit(self):
+        files = [*sorted((ROOT / ".github" / "workflows").glob("*.yml")), ROOT / "action.yml"]
+        for path in files:
+            for ref in re.findall(r"(?m)^\s*-?\s*uses:\s*(\S+)", path.read_text()):
+                if ref.startswith("./"):
+                    continue
+                with self.subTest(file=path.name, uses=ref):
+                    self.assertRegex(ref, r"@[0-9a-f]{40}$")
+
+
+class TestReleaseToolsArePinned(unittest.TestCase):
+    """What builds and tests the published artefacts is a fixed version, not
+    whatever PyPI serves that day (3.0.8)."""
+
+    def test_publishing_workflows_pin_their_tools(self):
+        for name in ("pypi-publish.yml", "release.yml"):
+            text = (ROOT / ".github" / "workflows" / name).read_text()
+            for line in re.findall(r"pip install (build[^\n]*)", text):
+                with self.subTest(workflow=name, line=line):
+                    for word in line.split():
+                        self.assertIn("==", word, line)
+
+
+class TestTheFloatingTagFollowsSignedTags(unittest.TestCase):
+    """An unsigned ``v3.9.9`` counted as the newest 3.x, and the floating ``v3``
+    then never moved again (3.0.8)."""
+
+    def test_only_signed_tags_are_candidates(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        step = text[text.index("- name: Move the floating major tag"):]
+        self.assertIn("verify-tag", step)
+        self.assertIn("allowed_signers", step)
+
+
 class TestTheTagSignatureStepRuns(unittest.TestCase):
     """The publisher's signature step, run as written against real tags.
 

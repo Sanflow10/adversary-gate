@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.7)
+# AdversaryGate (v3.0.8)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -348,7 +348,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.7** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.8** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -357,20 +357,20 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.7. Versions before 3.0.4 are unsupported: each lacks fixes the
+# PyPI -- 3.0.8. Versions before 3.0.4 are unsupported: each lacks fixes the
 # CHANGELOG lists after it.
-pip install adversary-gate==3.0.7
+pip install adversary-gate==3.0.8
 ```
 
 ```bash
-# GitHub Release -- 3.0.7: every fix in this document.
+# GitHub Release -- 3.0.8: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.7/adversary_gate-3.0.7-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.8/adversary_gate-3.0.8-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.7` has not been published yet. A release
+Release for `v3.0.8` has not been published yet. A release
 takes two steps, in this order, and only the first is done by hand:
 
 1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
@@ -611,7 +611,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.7` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.8` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For

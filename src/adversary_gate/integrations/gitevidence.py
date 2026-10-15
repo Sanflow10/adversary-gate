@@ -118,15 +118,30 @@ def _git(repo: Path, *args: str, binary: bool = False, env: Optional[dict] = Non
 
 
 def _new_file_hunk(rel: str, path: Path) -> str:
+    """An untracked file as ``git diff`` would show it once added.
+
+    A symlink is its target's path, one line, as git stores it: until 3.0.8 it
+    was followed, so a link put a file from outside the repository into the
+    diff, and a FIFO or device hung the server on read. Anything that is not a
+    regular file is left out. Lines end at ``\\n`` only, as in the diff parser.
+    """
     try:
-        text = path.read_text(encoding="utf-8")
+        if path.is_symlink():
+            text = os.readlink(path)
+        elif not path.is_file():
+            return ""
+        else:
+            text = path.read_bytes().decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return ""  # binary or unreadable: nothing line-based to cover
-    lines = text.splitlines()
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     if not lines:
         return ""
     body = "".join(f"+{line}\n" for line in lines)
-    return f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{len(lines)} @@\n{body}"
+    mode = "120000" if path.is_symlink() else "100644"
+    return f"diff --git a/{rel} b/{rel}\nnew file mode {mode}\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1,{len(lines)} @@\n{body}"
 
 
 _MODES = {"100644": 0o644, "100755": 0o755}

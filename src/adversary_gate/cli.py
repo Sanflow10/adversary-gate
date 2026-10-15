@@ -1411,8 +1411,16 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(payload, indent=2, default=str))
 
         if args.report and log is not None:
-            print(file=sys.stderr)
-            print(format_report(compute_metrics(log.read_all())), file=sys.stderr)
+            # After the decision is printed nothing may change its exit code:
+            # a report that raised turned a printed BLOCK or MERGE into a usage
+            # error (3.0.8). The report is an extra; its failure is said, not obeyed.
+            try:
+                report = format_report(compute_metrics(log.read_all()))
+            except Exception as exc:  # noqa: BLE001 -- any failure here is the report's
+                print(f"warning: the --report could not be built: {exc}", file=sys.stderr)
+            else:
+                print(file=sys.stderr)
+                print(report, file=sys.stderr)
 
         return DECISION_EXIT[decision]
 

@@ -38,6 +38,42 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.8] — 2026-10-15
+
+The low-severity items of the same internal audit as 3.0.7. Each code change
+has a test that fails on 3.0.7 and passes here. None was reported from outside.
+
+### Security
+
+- **AG-047 reads more of what the product imports.** The resolver that tells a
+  product module wearing a test's name from a real test now follows a chain
+  (product -> `tests/a.py` -> `tests/b.py` makes both product), matches a
+  top-level module under `src/` by its import name (`src/test_util.py` as
+  `test_util`), and reads a module in another encoding (`# coding: latin-1`),
+  which it used to skip. Tests: `test_testpaths_content.py`.
+- **MCP: an untracked symlink is its target, and a FIFO is not opened.** The
+  diff of untracked files followed symlinks, so a link put a file from outside
+  the repository into the diff, and read anything, so a FIFO hung the server.
+  A symlink is now one line with its target, as git stores it; anything that
+  is not a regular file is left out. Tests: `TestAnUntrackedFileIsReadAsGitWould`.
+- **MCP: `@file` in `pytest_args` is refused like any option.** pytest 8.2+
+  reads further arguments from it.
+- **CI's token reads the repository and nothing else** (`permissions:
+  contents: read`); every workflow must declare its permissions.
+- **Third-party actions are pinned by commit,** the PyPI publisher among them,
+  and the tools that build, test and scan releases are exact versions.
+- **The floating `v3` tag follows signed tags only.** An unsigned `v3.9.9`
+  counted as the newest 3.x and kept `v3` from moving again.
+
+### Fixed
+
+- **A failing `--report` no longer changes the exit code.** The decision was
+  printed, then the metrics report raised, and the exit code became a usage
+  error under a JSON that said `BLOCK` or `MERGE`. The report's failure is now
+  a warning on stderr.
+
+---
+
 ## [3.0.7] — 2026-10-15
 
 Fixes from an internal read-only audit of 3.0.6. Each one has a test that
