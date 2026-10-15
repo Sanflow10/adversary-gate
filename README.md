@@ -466,7 +466,7 @@ A test file the patch **rewrote** is still picked, and judged with the
 baseline's copy of it (the baseline oracle, above); it is named under
 `discovery` (`rewritten_test_files_judged_by_baseline`), next to anything that
 could not be resolved to a node id, and the cap
-(`--max-claims`, default 10) with how many it cut. A report recorded without
+(`--max-claims`, default 10) with how many it cut. From 3.0.9 a cut test is not left unjudged: with the full suite off (`--full-suite-path ""`), a patch whose kept claims would merge is `INCONCLUSIVE` instead, and the reason says to raise the cap or run the suite. A report recorded without
 contexts is a usage error (exit 3), not "no tests".
 
 #### Your project's interpreter, its limits, its environment

@@ -1335,6 +1335,18 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             full_suite_exit_codes=full_codes,
             suite_strength_unverified=strength_unverified,
         )
+        # Decision 2 (3.0.9): tests that ran a changed line and were cut by
+        # --max-claims are judged by nothing when the full suite is off, and
+        # the claims that were kept could MERGE without them.
+        cut = int((discovery or {}).get("truncated") or 0)
+        unjudged_reason = None
+        if decision is Decision.MERGE and cut and not full_suite_ran:
+            decision = Decision.INCONCLUSIVE
+            unjudged_reason = (
+                f"{cut} test(s) that ran a changed line were left out by --max-claims "
+                f"({args.max_claims}) and the full suite is off, so nothing judged them; "
+                "raise --max-claims or run the full suite"
+            )
 
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
@@ -1373,7 +1385,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "classification": decisive.classification.value if decisive else None,
             "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
-            "reason": _reason(
+            "reason": unjudged_reason or _reason(
                 decision, verdicts, decisive, full_codes, args,
                 coverage_ratio=coverage_ratio, strength_judged=strength_judged,
                 strength_unverified=strength_unverified, mutation=mutation_detail,
@@ -1381,7 +1393,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "next_steps": _next_steps(
                 decision, verdicts, full_codes, args,
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
-            ),
+            ) + ([{"action": "raise_limit", "flags": ["--max-claims", "--full-suite-path"],
+                   "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": summary["claims_total"],
             "claims_fixed": summary["claims_fixed"],
