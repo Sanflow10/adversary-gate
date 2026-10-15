@@ -263,6 +263,48 @@ class TestALineWithNoOperatorIsBroken(unittest.TestCase):
         self.assertTrue(score.is_measured, detail["reason"])
 
 
+class TestAHeaderLineIsBroken(unittest.TestCase):
+    """A default value, a decorator or a base class: lines that run on import alone.
+
+    Until 3.0.7 a changed ``def``/``class`` header or decorator line had no
+    mutant, and coverage counts it as run as soon as the module is imported:
+    beside five tested operators, ``limit=10`` -> ``limit=1`` merged unjudged.
+    Now the changed default, decorator or base is broken, and a claim that
+    never notices leaves a blind spot.
+    """
+
+    BASE = ("def deco(fn):\n    return fn\n\n\n"
+            "def wrap(fn):\n    return lambda *a: None\n\n\n"
+            "@deco\ndef pick(a, limit=10):\n    return limit\n\n\n"
+            "class Base:\n    k = 1\n\n\nclass Other:\n    k = 2\n\n\n"
+            "class C(Base):\n    pass\n\n\n"
+            "def f(a, b):\n    return a - b * a - b + a * b\n")
+    TEST = ("from calc import pick, C, f\n\n\ndef test_f():\n    pick(1)\n    C()\n"
+            "    assert f(2, 3) == 11\n    assert f(3, 2) == 13\n    assert f(5, 7) == 68\n")
+    FIXED_F = "def f(a, b):\n    return a + b * a - b + a * b\n"
+
+    def _measure(self, old: str, new: str, line: str):
+        patch = self.BASE.replace(old, new).replace(
+            "def f(a, b):\n    return a - b * a - b + a * b\n", self.FIXED_F)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _sides(root, {"calc.py": self.BASE, "test_c.py": self.TEST}, {"calc.py": patch})
+            score, detail = measure_mutation_score(root / "baseline", root / "patch", "test_c.py",
+                                                   targets=["test_c.py::test_f"])
+        self.assertFalse(score.is_strong, detail)
+        self.assertTrue(any(spot.startswith(f"calc.py:{line} ") for spot in detail["blind_spots"]),
+                        detail["blind_spots"])
+
+    def test_a_changed_default_value(self):
+        self._measure("limit=10", "limit=1", "10")
+
+    def test_a_changed_decorator(self):
+        self._measure("@deco\n", "@wrap\n", "9")
+
+    def test_a_changed_base_class(self):
+        self._measure("class C(Base)", "class C(Other)", "22")
+
+
 class TestARewrittenClaimTestIsMutatedAsItWasJudged(unittest.TestCase):
     """The verdict read the baseline's test; the mutants ran the patch's (3.0.3).
 

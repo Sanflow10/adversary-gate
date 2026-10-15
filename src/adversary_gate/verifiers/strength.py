@@ -874,6 +874,21 @@ _COMPOUND = (ast.If, ast.While, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, 
 _INERT = (ast.Pass, ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)
 
 
+#: Decorators whose removal changes no result a test can see -- a cache, or a
+#: wrapper's metadata: breaking them would be an equivalent mutant, a survivor
+#: that blames the tests for nothing.
+_EQUIVALENT_DECORATORS = frozenset({"cache", "lru_cache", "wraps"})
+
+
+def _decorator_name(node: ast.expr) -> str:
+    """``functools.lru_cache(maxsize=8)`` -> ``lru_cache``."""
+    if isinstance(node, ast.Call):
+        node = node.func
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return node.id if isinstance(node, ast.Name) else ""
+
+
 def _statement_sites(source: str, edited: set, operator_rows: set,
                      skip: Tuple[type, ...] = ()) -> Tuple[Dict[int, List[Mutation]], List[int]]:
     """A site for every changed statement that has no operator site.
@@ -909,6 +924,22 @@ def _statement_sites(source: str, edited: set, operator_rows: set,
     sites: Dict[int, List[Mutation]] = {}
     uncovered: List[int] = []
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # What a header carries that its body does not: decorators, default
+            # values and base classes. They run when the module is imported,
+            # so line coverage counts them as run with no test looking; until
+            # 3.0.7 a changed one had no mutant at all (a decorator line was in
+            # no statement's span, so it was not even listed as unmutated).
+            parts: List[Tuple[ast.expr, str]] = [(d, "(lambda f: f)") for d in node.decorator_list
+                                                 if _decorator_name(d) not in _EQUIVALENT_DECORATORS]
+            if isinstance(node, ast.ClassDef):
+                parts += [(b, "object") for b in node.bases]
+            else:
+                parts += [(d, "None") for d in [*node.args.defaults, *node.args.kw_defaults]
+                          if d is not None and not (isinstance(d, ast.Constant) and d.value is None)]
+            for expr, replacement in parts:
+                if expr.lineno in edited and expr.lineno not in operator_rows:
+                    sites.setdefault(expr.lineno, []).append((*where(expr), replacement))
         if not isinstance(node, ast.stmt) or isinstance(node, _INERT):
             continue
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
@@ -938,7 +969,8 @@ def _statement_sites(source: str, edited: set, operator_rows: set,
         elif not isinstance(node, _COMPOUND) and not isinstance(node, ast.Return):
             mutation = (*where(node), "pass")
         if mutation is None:
-            uncovered.extend(sorted(span & edited))
+            # A header whose decorator, default or base got a site above is broken.
+            uncovered.extend(row for row in sorted(span & edited) if row not in sites)
         else:
             sites.setdefault(mutation[0][0], []).append(mutation)
     return sites, sorted(set(uncovered))
