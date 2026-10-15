@@ -231,7 +231,7 @@ runs:
     # now fetched without touching PATH and lives in a private venv.
     - name: Set up the gate's own Python
       id: gate-python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: '3.12'
         update-environment: false

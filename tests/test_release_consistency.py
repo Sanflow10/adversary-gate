@@ -221,6 +221,20 @@ class TestWorkflowTokens(unittest.TestCase):
         self.assertRegex(text, r"(?m)^permissions:\n  contents: read\n")
 
 
+class TestThirdPartyActionsArePinned(unittest.TestCase):
+    """A tag is the action owner's to move; a commit is not. The publisher runs
+    with an OIDC token for PyPI, so what it runs is fixed by SHA (3.0.8)."""
+
+    def test_every_third_party_action_is_a_commit(self):
+        files = [*sorted((ROOT / ".github" / "workflows").glob("*.yml")), ROOT / "action.yml"]
+        for path in files:
+            for ref in re.findall(r"(?m)^\s*-?\s*uses:\s*(\S+)", path.read_text()):
+                if ref.startswith("./"):
+                    continue
+                with self.subTest(file=path.name, uses=ref):
+                    self.assertRegex(ref, r"@[0-9a-f]{40}$")
+
+
 class TestTheFloatingTagFollowsSignedTags(unittest.TestCase):
     """An unsigned ``v3.9.9`` counted as the newest 3.x, and the floating ``v3``
     then never moved again (3.0.8)."""
