@@ -593,11 +593,15 @@ runs:
         # fire. Exiting 0 was the only case that ever worked.
         # `cmd || var=$?` is a handled failure, so -e does not stop for it.
         EXIT_CODE=0
-        JSON_OUT=$(PYTHONPATH="${{ github.action_path }}/src" "$AG_GATE_PYTHON" -m adversary_gate "${ARGS[@]}") || EXIT_CODE=$?
+        # -I, as for the coverage pass: the venv's installed gate, never a module
+        # the workspace shadows. This runs in the PR's checkout, and "-m" put it
+        # first on sys.path, so an adversary_gate/ package or a json.py at the
+        # root of the PR ran in place of the gate (3.0.11).
+        JSON_OUT=$("$AG_GATE_PYTHON" -I -m adversary_gate "${ARGS[@]}") || EXIT_CODE=$?
         echo "$JSON_OUT"
 
         field() { # $1=key, $2=fallback; `or` because a run with no claim reports null
-          echo "$JSON_OUT" | "$AG_GATE_PYTHON" -c "import sys, json; print(json.load(sys.stdin).get('$1') or '$2')" 2>/dev/null || echo "$2"
+          echo "$JSON_OUT" | "$AG_GATE_PYTHON" -I -c "import sys, json; print(json.load(sys.stdin).get('$1') or '$2')" 2>/dev/null || echo "$2"
         }
         DECISION="$(field decision inconclusive)"
         OUTCOME="$(field outcome unverified)"

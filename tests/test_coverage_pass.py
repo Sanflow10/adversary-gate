@@ -124,5 +124,21 @@ class TestTheActionUsesThePass(unittest.TestCase):
             self.assertIn(name, self.step)
 
 
+class TestTheActionRunsItsOwnGate(unittest.TestCase):
+    """The gate step runs in the PR's checkout. ``-m adversary_gate`` without
+    ``-I`` put that checkout first on sys.path, so an ``adversary_gate/`` or a
+    ``json.py`` at the root of the PR ran in place of the gate (3.0.11)."""
+
+    def test_every_gate_python_call_is_isolated(self):
+        import re
+        text = (ROOT / "action.yml").read_text()
+        calls = re.findall(r'"\$AG_GATE_PYTHON"((?: -[A-Za-z]+)+)', text)
+        self.assertTrue(calls)
+        for flags in calls:
+            with self.subTest(flags=flags):
+                self.assertIn(" -I", flags)
+        self.assertNotIn('PYTHONPATH="${{ github.action_path }}/src"', text)
+
+
 if __name__ == "__main__":
     unittest.main()
