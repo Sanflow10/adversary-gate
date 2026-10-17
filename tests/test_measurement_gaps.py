@@ -404,7 +404,7 @@ class TestAFileThePatchOnlyShortenedIsSaid(unittest.TestCase):
         base = {"calc.py": "def add(a, b):\n    return a - b\n",
                 "guard.py": "def check(x):\n    if x is None:\n        raise ValueError\n    return x\n",
                 "test_calc.py": "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"}
-        patch = {"calc.py": "def add(a, b):\n    return a + b\n",
+        patch = {"calc.py": "def add(a, b):\n    return b + a\n",
                  "guard.py": "def check(x):\n    return x\n"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

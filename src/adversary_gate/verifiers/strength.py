@@ -841,8 +841,28 @@ def _is_operand_end(token: Optional[tokenize.TokenInfo]) -> bool:
     return token.type == tokenize.OP and token.string in _OPERAND_END
 
 
-def _mutants_in(source: str, limit: int) -> List[Mutation]:
-    """Ordered, deterministic mutation sites in one module."""
+def _number_mutation(text: str) -> Optional[str]:
+    """``n`` -> ``n + 1`` for an integer literal, or ``None``.
+
+    Until 3.0.11 no mutant touched a constant, so on a patch that only swapped
+    an operator the one mutant was the baseline itself, and a test asserting
+    ``!= 1`` scored the same as one asserting ``== 3``. Integers only: a float
+    or complex literal moved by one is often a value no test pins.
+    """
+    try:
+        value = int(text, 0)
+    except ValueError:
+        return None
+    return str(value + 1)
+
+
+def _mutants_in(source: str, limit: int, constants: bool = False) -> List[Mutation]:
+    """Ordered, deterministic mutation sites in one module.
+
+    ``constants`` adds :func:`_number_mutation`; off by default (3.0.11): a
+    literal no test can observe, a timeout or a buffer size, survives and is
+    counted against the tests, so turning it on changes verdicts.
+    """
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
@@ -858,6 +878,8 @@ def _mutants_in(source: str, limit: int) -> List[Mutation]:
                 replacement = None
         elif token.type == tokenize.NAME:
             replacement = _KEYWORD_MUTATIONS.get(token.string)
+        elif token.type == tokenize.NUMBER:
+            replacement = _number_mutation(token.string) if constants else None
         if token.type not in _TRIVIA:
             previous = token
         if replacement is None:
@@ -1146,6 +1168,7 @@ def measure_mutation_score(
     parallel: int = 1,
     oracle_dir: Optional[Path] = None,
     oracle_targets: Optional[Sequence[str]] = None,
+    mutate_constants: bool = False,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -1312,7 +1335,14 @@ def measure_mutation_score(
         # Scan generously, then keep only sites on lines this patch wrote,
         # grouped by line.
         operator_rows = set()
-        for site in _mutants_in(source, 10_000):
+        source_lines = source.split("\n")
+        for site in _mutants_in(source, 10_000, constants=mutate_constants):
+            # A mutant that rebuilds the baseline (the patch turned ``-`` into
+            # ``+``; the mutant turns it back) proves only what the claim
+            # already did -- the test tells old from new -- and says nothing of
+            # how strong the test is. Not counted (3.0.11).
+            if "\n".join(_apply(source_lines, *site)) == before:
+                continue
             if site[0][0] in edited:
                 by_line.setdefault((rel, site[0][0]), []).append(site)
                 operator_rows.add(site[0][0])

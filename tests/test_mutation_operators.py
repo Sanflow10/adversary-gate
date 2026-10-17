@@ -83,3 +83,49 @@ class TestStarSyntaxIsNotAnOperator(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConstantsAreMutatedOnlyWhenAsked(unittest.TestCase):
+    """3.0.11: ``n -> n+1`` on integer literals, behind ``--mutate-constants``.
+    Off by default because a constant no test observes survives and counts
+    against the tests."""
+
+    def test_off_by_default(self):
+        self.assertEqual(_mutants_in("x = 2\n", 100), [])
+
+    def test_integers_only_when_on(self):
+        sites = _mutants_in("x = 2\ny = 0x10\nz = 1.5\nw = 2j\n", 100, constants=True)
+        self.assertEqual([s[2] for s in sites], ["3", "17"])
+
+
+class TestAMutantThatRebuildsTheBaselineIsNotCounted(unittest.TestCase):
+    """3.0.11: a patch that turned ``-`` into ``+`` had one mutant, ``-``: the
+    baseline itself. Killing it proved what the claim already did, and a test
+    asserting ``!= 1`` scored the same as one asserting ``== 3``."""
+
+    def _measure(self, test_body: str, **kwargs):
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        base = "def add(a, b):\n    return a - b + 1\n"
+        patch = "def add(a, b):\n    return a + b + 1\n"
+        test = f"from calc import add\n\n\ndef test_add():\n    {test_body}\n"
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for side, src in (("baseline", base), ("patch", patch)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(test)
+            return measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                          targets=["test_calc.py::test_add"], **kwargs)
+
+    def test_the_baseline_mutant_is_dropped(self):
+        # Two "+" on the line: the first turned back is the baseline, the
+        # second ("a + b - 1") is not. Only the second is left.
+        _, detail = self._measure("assert add(1, 1) == 3")
+        operators = [m for m in detail["mutants"] if m["kind"] == "operator"]
+        self.assertEqual([m["replaces"] for m in operators], ["-"], detail["mutants"])
+
+    def test_with_constants_a_weak_test_scores_below_a_strong_one(self):
+        _, weak = self._measure("assert add(1, 1) != 1", mutate_constants=True, confidence=0)
+        _, strong = self._measure("assert add(1, 1) == 3", mutate_constants=True, confidence=0)
+        self.assertLess(weak["mutants_killed"], strong["mutants_killed"], (weak, strong))

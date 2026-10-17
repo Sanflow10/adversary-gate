@@ -1097,7 +1097,7 @@ class TestAClaimThatHashesTheTreeIsNotMeasured(unittest.TestCase):
 
     BASE = ("def add(a, b):\n    return a - b\n\n\ndef total(values):\n    out = 0\n"
             "    for v in values:\n        out = out + v * 2 - 1\n    return out + len(values) * 3\n")
-    PATCH = BASE.replace("return a - b", "return a + b")
+    PATCH = BASE.replace("return a - b", "return b + a")
 
     def _measure(self, test_text: str):
         import ast as _ast

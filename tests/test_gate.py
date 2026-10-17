@@ -1227,7 +1227,7 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             # patch edits `sub`, which no test touches
-            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            self._tree(root, self.BASE.replace("return a - b", "return b + a"))
             score, detail = self._strength(root, max_mutants=2)
             self.assertTrue(score.is_measured, detail)
             self.assertLess(score.mutation_score, 1.0)
@@ -1299,7 +1299,7 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
         """A strength the log cannot show is as unauditable as no strength."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            self._tree(root, self.BASE.replace("return a - b", "return b + a"))
             log_path = root / "evidence.jsonl"
             code = main([
                 "--baseline", str(root / "baseline"),

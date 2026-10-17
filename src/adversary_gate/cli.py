@@ -809,6 +809,14 @@ def build_parser() -> argparse.ArgumentParser:
         "0 (default) keeps the interval always.",
     )
     parser.add_argument(
+        "--mutate-constants",
+        action="store_true",
+        help="also mutate integer literals on changed lines (n -> n+1), so a test "
+        "that pins a value scores above one that only checks it changed. Off by "
+        "default: a constant no test can observe (a timeout, a buffer size) "
+        "survives and counts against the tests, so turning it on changes verdicts.",
+    )
+    parser.add_argument(
         "--full-suite-timeout",
         type=_limit,
         default=900,
@@ -1273,6 +1281,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 targets=sorted({node(claim) for claim in claims} - set(by_baseline)),
                 run_kwargs=run_options,
                 census_min=max(0, args.census_min_mutants),
+                mutate_constants=args.mutate_constants,
                 alongside=suite_future,
                 parallel=execution["mutation_workers"],
                 **limits,
