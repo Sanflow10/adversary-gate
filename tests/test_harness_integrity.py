@@ -221,6 +221,31 @@ class TestReportedPathsDenylist(unittest.TestCase):
                 self.assertTrue(policy.violations([path]), path)
 
 
+class TestARecursiveDenyGlobAlsoMatchesAtTheRoot(unittest.TestCase):
+    """AG-049: the root fallback stripped ``**/`` with ``lstrip``, which removes
+    a set of characters, so ``**/*.env`` became the literal ``.env`` and a
+    root-level ``app.env`` passed with no violation (3.0.10)."""
+
+    def test_root_level_env_file_is_a_violation(self):
+        policy = PathPolicy()
+        for path in ("app.env", "prod.env", ".env", "sub/app.env"):
+            with self.subTest(path=path):
+                self.assertTrue(policy.violations([path]), path)
+
+    def test_every_recursive_glob_matches_at_root_and_below(self):
+        import fnmatch
+        policy = PathPolicy()
+        for pattern in policy.denylist_globs:
+            if not pattern.startswith("**/"):
+                continue
+            tail = pattern.removeprefix("**/")
+            sample = tail.replace("**", "x").replace("*", "x")
+            for path in (sample, "deep/dir/" + sample):
+                with self.subTest(pattern=pattern, path=path):
+                    self.assertTrue(fnmatch.fnmatch(sample, tail))
+                    self.assertTrue(policy.violations([path]), path)
+
+
 if __name__ == "__main__":
     unittest.main()
 

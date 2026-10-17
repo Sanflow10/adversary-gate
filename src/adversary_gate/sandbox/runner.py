@@ -175,14 +175,19 @@ def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
     # pytest and any third-party plugin usually live in the *user* site, which
     # Python derives from $HOME -- and HOME is /tmp inside the guest, so the
     # guest would look in /tmp/.local and die with "No module named pytest".
-    # Bind the real user base read-only and point PYTHONUSERBASE at it, which
-    # is resolved at interpreter start and so does not follow HOME.
+    # Point PYTHONUSERBASE at the real user base, which is resolved at
+    # interpreter start and so does not follow HOME, but bind only the parts
+    # the interpreter needs: the user site-packages and the scripts directory.
+    # The base itself (~/.local) also holds share/ and state/, where other
+    # tools keep credentials, and the repository bind is writable, so binding
+    # the whole base would let a test copy those into the tree.
     user_base = Path(site.USER_BASE) if site.USER_BASE else None
     if user_base and user_base.exists() and not user_base.is_relative_to(root):
-        argv += [
-            "--ro-bind", str(user_base), str(user_base),
-            "--setenv", "PYTHONUSERBASE", str(user_base),
-        ]
+        user_dirs = [Path(site.getusersitepackages()), user_base / "bin"]
+        for path in user_dirs:
+            if path.is_dir() and path.is_relative_to(user_base):
+                argv += ["--ro-bind", str(path), str(path)]
+        argv += ["--setenv", "PYTHONUSERBASE", str(user_base)]
 
     # A venv interpreter is outside /usr as well; bind exactly its prefix
     # rather than the whole home directory it may sit in. ``python`` is the
