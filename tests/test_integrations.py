@@ -710,3 +710,22 @@ class TestAnUntrackedFileIsReadAsGitWould(unittest.TestCase):
             path = Path(directory) / "m.py"
             path.write_text("x = 1\n\x0c\ny = 2\n")
             self.assertIn("@@ -0,0 +1,3 @@", _new_file_hunk("m.py", path))
+
+    def test_a_module_in_another_encoding_is_in_the_diff(self):
+        """A new latin-1 module counted as binary and left the diff: no line in
+        the coverage ratio, no path for the path checks (3.0.11)."""
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "m.py"
+            path.write_bytes("# -*- coding: latin-1 -*-\nNAME = 'é'\nx = 1\n".encode("latin-1"))
+            hunk = _new_file_hunk("m.py", path)
+        self.assertIn("+++ b/m.py", hunk)
+        self.assertIn("@@ -0,0 +1,3 @@", hunk)
+        self.assertIn("+x = 1", hunk)
+
+    def test_a_file_with_a_nul_byte_is_still_binary(self):
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "logo.png"
+            path.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+            self.assertEqual(_new_file_hunk("logo.png", path), "")

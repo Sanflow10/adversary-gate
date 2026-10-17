@@ -124,6 +124,12 @@ def _new_file_hunk(rel: str, path: Path) -> str:
     was followed, so a link put a file from outside the repository into the
     diff, and a FIFO or device hung the server on read. Anything that is not a
     regular file is left out. Lines end at ``\\n`` only, as in the diff parser.
+
+    Binary is what git calls binary: a NUL in the first 8000 bytes. Until
+    3.0.11 a file that was not UTF-8 counted as binary and left the diff, so a
+    new ``# coding: latin-1`` module had no line in the coverage ratio and its
+    path reached no path check, while the same file tracked was in the diff --
+    those are read as bytes and decoded with replacement, and so is this.
     """
     try:
         if path.is_symlink():
@@ -131,9 +137,12 @@ def _new_file_hunk(rel: str, path: Path) -> str:
         elif not path.is_file():
             return ""
         else:
-            text = path.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""  # binary or unreadable: nothing line-based to cover
+            data = path.read_bytes()
+            if b"\0" in data[:8000]:
+                return ""  # binary: nothing line-based to cover
+            text = data.decode("utf-8", "replace")
+    except OSError:
+        return ""  # unreadable
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
