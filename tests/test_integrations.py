@@ -234,7 +234,10 @@ def _git_repo(root: Path) -> Path:
     repo.mkdir()
     (repo / "calc.py").write_text(CALC)
     (repo / "test_calc.py").write_text(TESTS)
-    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+    # The base is "pushed": an agent-chosen baseline must be on a
+    # remote-tracking branch (3.0.11).
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"],
+                 ["update-ref", "refs/remotes/origin/main", "HEAD"]):
         subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
     return repo
 
@@ -466,6 +469,7 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
 
     def test_the_policy_reaches_the_coverage_pass(self):
         with mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY": "--sandbox bwrap"}), \
+                mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
                 mock.patch.object(mcp_server, "prepare", side_effect=EvidenceError("stop")) as fake:
             mcp_server.verify_repo(str(ROOT))
         self.assertEqual(fake.call_args.kwargs.get("sandbox"), "bwrap")
@@ -480,6 +484,26 @@ class TestVerifyRepoTool(unittest.TestCase):
         for name in ("ADVERSARY_GATE_POLICY", "ADVERSARY_GATE_BASE_REF", "ADVERSARY_GATE_PYTHON",
                      "ADVERSARY_GATE_REQUIRE_PINNED_BASE"):
             os.environ.pop(name, None)
+
+    def test_a_baseline_the_agent_committed_itself_is_refused(self):
+        """With no pin, the default ``HEAD`` made the agent's last commit the
+        oracle: commit a weakened test, and the patch is judged by it (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            (repo / "test_calc.py").write_text("def test_nothing():\n    pass\n")
+            for args in (["add", "-A"], ["commit", "-qm", "weaken"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True,
+                               env={**os.environ, **GIT_ENV})
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.object(mcp_server, "prepare") as never:
+                local = mcp_server.verify_repo(str(repo))
+            never.assert_not_called()
+            (repo / "test_calc.py").write_text(TESTS)
+            pushed = mcp_server.verify_repo(str(repo), base_ref="origin/main")
+        self.assertEqual(local["decision"], "inconclusive")
+        self.assertFalse(local["mergeable"])
+        self.assertIn("no remote-tracking branch", local["reason"])
+        self.assertEqual(pushed["decision"], "merge", pushed["reason"])
 
     def test_clean_change_merges_and_names_who_chose_the_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -659,6 +683,7 @@ class TestVerifyRepoTimeLimit(unittest.TestCase):
         late = subprocess.TimeoutExpired(cmd="adversary_gate", timeout=5)
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.object(mcp_server, "prepare", return_value=evidence), \
+                mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
                 mock.patch.object(mcp_server, "_run_gate", side_effect=late):
             result = mcp_server.verify_repo(directory, timeout_seconds=5)
         self.assertEqual(result["decision"], "inconclusive")
