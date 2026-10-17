@@ -194,10 +194,21 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
         except (OSError, SyntaxError, ValueError, UnicodeDecodeError):
             continue
         pkg = rel.split("/")[:-1]
+        # A name an ``import`` bound, and the module it stands for: ``import
+        # tests`` binds ``tests``, ``import tests as t`` binds ``t``. An
+        # attribute chain from one (``t.rates.X``) reaches a submodule the
+        # import itself never named -- loaded by a conftest or another test --
+        # and until 3.0.11 that submodule stayed a test.
+        bound: dict = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     record(alias.name.replace(".", "/"))
+                    if alias.asname:
+                        bound[alias.asname] = alias.name.replace(".", "/")
+                    else:
+                        head = alias.name.split(".")[0]
+                        bound[head] = head
             elif isinstance(node, ast.ImportFrom):
                 mod = (node.module or "").replace(".", "/")
                 if node.level:
@@ -209,6 +220,21 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
                 record(prefix)
                 for alias in node.names:
                     record("/".join([prefix, alias.name]) if prefix else alias.name)
+                    bound[alias.asname or alias.name] = (
+                        "/".join([prefix, alias.name]) if prefix else alias.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute):
+                continue
+            names = []
+            inner = node
+            while isinstance(inner, ast.Attribute):
+                names.append(inner.attr)
+                inner = inner.value
+            if isinstance(inner, ast.Name) and inner.id in bound:
+                path = bound[inner.id]
+                for attr in reversed(names):
+                    path = path + "/" + attr
+                    record(path)
         queue.extend(sorted(imported - before))
         if len(imported) == len(candidates):
             break

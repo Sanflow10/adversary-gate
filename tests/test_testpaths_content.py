@@ -133,6 +133,25 @@ class TestProductionImportedTests(unittest.TestCase):
             # Without the declaration, support.py is product-imported -> source.
             self.assertEqual(production_imported_tests(root), frozenset({"tests/support.py"}))
 
+    def test_a_submodule_reached_through_an_attribute_is_flagged(self):
+        """``import tests`` names only the package; ``tests.rates.X`` reaches
+        the submodule a conftest loaded. Statically visible, and until 3.0.11
+        ``tests/rates.py`` stayed a test."""
+        for app in ("import tests\n\n\ndef f():\n    return tests.rates.X\n",
+                    "import tests as t\n\n\ndef f():\n    return t.rates.X\n",
+                    "from tests import rates as r\n\n\ndef f():\n    return r.X\n"):
+            with self.subTest(app=app.splitlines()[0]), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                _tree(root, {
+                    "app.py": app,
+                    "tests/__init__.py": "",
+                    "tests/rates.py": "X = 1\n",
+                    "tests/helper.py": "Y = 1\n",
+                })
+                found = production_imported_tests(root)
+                self.assertIn("tests/rates.py", found)
+                self.assertNotIn("tests/helper.py", found)
+
 
 class TestIsTestFileIn(unittest.TestCase):
     def test_disguised_module_is_source_real_test_is_test(self):
