@@ -300,9 +300,20 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
         if coverage_ratio is None and args.coverage_floor > 0:
             return f"{proven}, but no diff coverage was measured; the {args.coverage_floor:.2f} floor needs it"
         if coverage_ratio is not None and coverage_ratio < args.coverage_floor:
+            # A configuration or data file counts on purpose -- it can change
+            # what the code does -- but a reason that only said "changed lines
+            # no test executes" read as a bug when it was package.json (3.0.11).
+            from adversary_gate.verifiers.strength import _is_non_source  # noqa: PLC0415 -- the one list
+
+            config = sorted(name for name in _uncovered(args) if _is_non_source(name))
+            note = ""
+            if config:
+                shown = ", ".join(config[:3]) + (f" (+{len(config) - 3} more)" if len(config) > 3 else "")
+                note = (f"; {len(config)} of the files are configuration or data ({shown}), "
+                        "which count because they can change behaviour")
             return (
                 f"{proven}, but diff coverage is {coverage_ratio:.2f}, below the "
-                f"{args.coverage_floor:.2f} floor: changed lines no test executes"
+                f"{args.coverage_floor:.2f} floor: changed lines no test executes{note}"
             )
         if strength_unverified:
             why = (mutation or {}).get("reason") or "the changed code could not be mutated and measured"

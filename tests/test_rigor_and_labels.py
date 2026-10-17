@@ -1426,6 +1426,27 @@ class TestMessagesThatNameTheRealCause(unittest.TestCase):
         self.assertIn("--full-suite-memory", reason)
         self.assertNotIn("Raise the limit", reason)
 
+    def test_low_coverage_names_the_configuration_files_it_counted(self):
+        """A package.json counts against coverage on purpose; the reason says so
+        instead of reading like a bug (3.0.11)."""
+        from types import SimpleNamespace
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.gate import Decision
+        verdict = mock.Mock(outcome=Outcome.VERIFIED)
+        verdict.classification.value = "fixed"
+        args = SimpleNamespace(coverage_floor=0.8, suite_strength_floor=0.75)
+        with mock.patch("adversary_gate.cli._uncovered",
+                        return_value={"package.json": [3], "app.py": [7]}):
+            reason = _reason(Decision.INCONCLUSIVE, [verdict], None, None, args,
+                             coverage_ratio=0.5)
+        self.assertIn("package.json", reason)
+        self.assertIn("configuration or data", reason)
+        self.assertNotIn("app.py", reason)
+        with mock.patch("adversary_gate.cli._uncovered", return_value={"app.py": [7]}):
+            reason = _reason(Decision.INCONCLUSIVE, [verdict], None, None, args,
+                             coverage_ratio=0.5)
+        self.assertNotIn("configuration", reason)
+
 
 class TestADocumentCannotPassAsCoverage(unittest.TestCase):
     """E, and a gap found while checking it: in 3.0.0 a patch that only deleted
