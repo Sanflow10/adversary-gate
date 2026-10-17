@@ -566,6 +566,17 @@ def _resolve_coverage(args: argparse.Namespace):
     }
 
 
+def _aggression(value: str) -> str:
+    """``paranoid`` was accepted and ran as ``normal``: nothing reads it. Refused
+    (3.0.11), so a run that asked for more rigour is not told it got it."""
+    if value == AggressionLevel.PARANOID.value:
+        raise argparse.ArgumentTypeError(
+            "'paranoid' is not implemented and ran as 'normal' until 3.0.11; "
+            "use 'normal' or 'nuclear'"
+        )
+    return value
+
+
 def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     """File paths named by ``--diff``, or ``None`` when the caller gave none.
 
@@ -715,7 +726,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--criterion", action="append", default=[], metavar="ID:TEXT")
     parser.add_argument("--rationale", default="")
     parser.add_argument(
-        "--aggression", default="normal", choices=[x.value for x in AggressionLevel]
+        "--aggression", default="normal", type=_aggression,
+        choices=[x.value for x in AggressionLevel if x is not AggressionLevel.PARANOID],
     )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--changed-path", action="append", default=[])

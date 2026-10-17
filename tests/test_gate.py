@@ -16,6 +16,7 @@ previous version, not theorized:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import subprocess
@@ -37,7 +38,6 @@ from adversary_gate.core.exitmap import classify_exit, describe
 from adversary_gate.core.gate import Gate, GateConfig
 from adversary_gate.core.metrics import compute_metrics, compare_models, format_report
 from adversary_gate.core.path_policy import PathPolicy
-from adversary_gate.core.quarantine import QuarantineStore
 from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
@@ -705,25 +705,18 @@ class TestMetrics(unittest.TestCase):
             self.assertIn("unverified merges", text)
 
 
-class TestQuarantineAndContestation(unittest.TestCase):
-    def test_quarantine_only_accepts_refuted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = QuarantineStore(Path(directory) / "q.json")
-            for classification in (
-                FailureClass.REGRESSION,
-                FailureClass.UNRUNNABLE,
-                FailureClass.FLAKY,
-                FailureClass.CLAIM_DISCARDED,
-            ):
-                gate = make_gate()
-                v = verdict_with(gate, classification)
-                stored = store.add(v, "src")
-                if classification is FailureClass.REGRESSION:
-                    self.assertTrue(stored)
-                else:
-                    self.assertFalse(stored, f"{classification} must not be quarantined")
-            self.assertEqual(len(store.load()), 1)
+class TestParanoidIsRefused(unittest.TestCase):
+    """``--aggression paranoid`` was accepted and ran as ``normal`` (3.0.11)."""
 
+    def test_paranoid_is_a_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = main(["--aggression", "paranoid"])
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("not implemented", err.getvalue())
+
+
+class TestContestation(unittest.TestCase):
     def test_contestation_rejects_unrelated_counter_test(self):
         claim = CriticClaim("tests/critical_bug.py", "t1")
         original = GateVerdict(
