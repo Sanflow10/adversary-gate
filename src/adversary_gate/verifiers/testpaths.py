@@ -179,6 +179,19 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
             ):
                 imported.add(rel)
 
+    def record_package(dotted: str) -> None:
+        """A test package imported as a whole -- ``import tests``, ``from tests
+        import *`` -- reaches every module in it once something loads them, by
+        an attribute, an alias, ``getattr`` or the star. Following each spelling
+        did not converge (3.0.11), so every module under it is product."""
+        dotted = dotted.strip("/")
+        if not dotted:
+            return
+        for rel, mod in candidates.items():
+            names = {mod, *aliases[rel]} | ({mod[4:]} if mod.startswith("src/") else set())
+            if any(name.startswith(dotted + "/") for name in names):
+                imported.add(rel)
+
     # To a fixed point: a test-named module the product imports is product,
     # so what it imports is reached by production too. Until 3.0.8 only the
     # non-test modules' imports were read, and the second link of a chain
@@ -204,6 +217,7 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     record(alias.name.replace(".", "/"))
+                    record_package(alias.name.replace(".", "/"))
                     if alias.asname:
                         bound[alias.asname] = alias.name.replace(".", "/")
                     else:
@@ -218,11 +232,25 @@ def production_imported_tests(root: Optional[Path]) -> "frozenset[str]":
                 else:
                     prefix = mod
                 record(prefix)
+                if any(alias.name == "*" for alias in node.names):
+                    record_package(prefix)
                 for alias in node.names:
                     record("/".join([prefix, alias.name]) if prefix else alias.name)
                     bound[alias.asname or alias.name] = (
                         "/".join([prefix, alias.name]) if prefix else alias.name)
         for node in ast.walk(tree):
+            # ``importlib.import_module("tests.rates")`` or ``__import__``
+            # with the name written out: the AST has it, so it counts. A name
+            # built at run time stays the open case SECURITY.md names.
+            if isinstance(node, ast.Call) and node.args:
+                func = node.func
+                called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                first = node.args[0]
+                if (called in ("import_module", "__import__")
+                        and isinstance(first, ast.Constant) and isinstance(first.value, str)):
+                    record(first.value.replace(".", "/"))
+                    record_package(first.value.replace(".", "/"))
+                continue
             if not isinstance(node, ast.Attribute):
                 continue
             names = []
