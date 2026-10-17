@@ -496,9 +496,14 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
     patch did not write, and tests that cover the untouched lines would kill
     those mutants and report a high score for a diff nobody checked. Only the
     lines the patch actually introduced are mutation targets.
+
+    Rows are counted at ``\\n`` only, as tokenize, ast and the canary count
+    them. ``splitlines`` also breaks at a form feed, U+2028 and others, so after
+    one of those the rows drifted and the mutants broke the line below the one
+    the patch wrote (3.0.11; the diff parser had the same fix in 3.0.7).
     """
-    old = baseline_text.splitlines()
-    new = patch_text.splitlines()
+    old = baseline_text.split("\n")
+    new = patch_text.split("\n")
     differing: set = set()
     matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
     for tag, _i1, _i2, start, stop in matcher.get_opcodes():

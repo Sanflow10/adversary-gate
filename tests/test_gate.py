@@ -1288,6 +1288,16 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
             for mutant in detail["mutants"]:
                 self.assertEqual(mutant["line"], 2)
 
+    def test_rows_are_counted_as_python_counts_them(self):
+        """A form feed or U+2028 earlier in the file split the line for
+        ``splitlines`` but not for tokenize: the rows drifted and the mutants
+        broke the line below the change (3.0.11)."""
+        for mark in ("\x0c", "\u2028"):
+            with self.subTest(mark=repr(mark)):
+                before = f"# page{mark}break\ndef f(a, b):\n    return a >= b\n    x = 1\n"
+                after = before.replace("a >= b", "a > b")
+                self.assertEqual(changed_lines(before, after), {3})
+
     def test_evidence_artifact_carries_the_measured_value(self):
         """A strength the log cannot show is as unauditable as no strength."""
         with tempfile.TemporaryDirectory() as directory:
