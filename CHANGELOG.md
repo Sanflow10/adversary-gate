@@ -38,6 +38,29 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.10] — 2026-10-17
+
+Two fixes, both found by reading the code. Each has a test that fails on 3.0.9.
+
+### Security
+
+- **AG-049: a recursive deny glob now matches at the root.** The fallback
+  that lets `**/X` match a root-level path stripped `**/` with `str.lstrip`,
+  which removes a set of characters, not a prefix. `**/*.env` became the
+  literal `.env`, so a root-level `app.env` produced no violation while
+  `sub/app.env` did, and nothing said the rule had not applied. It now uses
+  `removeprefix`. The other recursive globs only matched at the root because
+  a root-level twin was also in the list; a test now checks every one.
+- **The bwrap sandbox no longer exposes the whole user base.** To keep pytest
+  importable with `HOME=/tmp`, the runner bound `site.USER_BASE` (usually
+  `~/.local`) read-only. That also exposed `share/` and `state/`, where other
+  tools keep credentials, and since the repository bind is writable a test
+  could copy them into the tree. Only the user site-packages and `bin/` are
+  bound now. The README sentence on what the guest sees was wrong and is
+  corrected.
+
+---
+
 ## [3.0.9] — 2026-10-15
 
 One hole in the harness check, found by reading the code, and three gaps

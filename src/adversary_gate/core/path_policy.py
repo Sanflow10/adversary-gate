@@ -119,7 +119,7 @@ class PathPolicy:
             for pattern in self.denylist_globs:
                 normalized = normalize_path(pattern)
                 if fnmatch.fnmatch(path, normalized) or fnmatch.fnmatch(
-                    path, normalized.lstrip("**/")
+                    path, normalized.removeprefix("**/")
                 ):
                     found.append(
                         PathViolation(raw_path, f"matches test-infra denylist ({pattern})")

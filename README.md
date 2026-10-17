@@ -1,4 +1,4 @@
-# AdversaryGate (v3.0.9)
+# AdversaryGate (v3.0.10)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
@@ -348,7 +348,7 @@ PYTHONPATH=src python3 -m adversary_gate --help
 | `git clone` + `pip install .` | `main` | git |
 | `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
 | `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.9** — every fix | nothing but `pip` |
+| GitHub Release wheel (below) | **3.0.10** — every fix | nothing but `pip` |
 | `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
 
 ### Install a released wheel
@@ -357,20 +357,20 @@ PYTHONPATH=src python3 -m adversary_gate --help
 today they carry the same code:
 
 ```bash
-# PyPI -- 3.0.9. Versions before 3.0.4 are unsupported: each lacks fixes the
+# PyPI -- 3.0.10. Versions before 3.0.4 are unsupported: each lacks fixes the
 # CHANGELOG lists after it.
-pip install adversary-gate==3.0.9
+pip install adversary-gate==3.0.10
 ```
 
 ```bash
-# GitHub Release -- 3.0.9: every fix in this document.
+# GitHub Release -- 3.0.10: every fix in this document.
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.9/adversary_gate-3.0.9-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.10/adversary_gate-3.0.10-py3-none-any.whl
 ```
 
 The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
 needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.9` has not been published yet. A release
+Release for `v3.0.10` has not been published yet. A release
 takes two steps, in this order, and only the first is done by hand:
 
 1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
@@ -611,7 +611,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.9` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.10` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -736,7 +736,7 @@ Wraps every claim run and the collateral suite in [bubblewrap](https://github.co
 
 If `bwrap` is missing the gate **refuses to start** (exit 3) rather than quietly running unsandboxed — asking for isolation and not getting it is the failure mode the flag exists to prevent.
 
-**What it is still not.** There is no seccomp profile, the repository itself is writable, and the kernel is the host's: a kernel bug is reachable from inside. Outside the repository, the guest sees only the read-only system tree and the interpreter's prefix. It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
+**What it is still not.** There is no seccomp profile, the repository itself is writable, and the kernel is the host's: a kernel bug is reachable from inside. Outside the repository, the guest sees only the read-only system tree, the interpreter's prefix, and the user site-packages and scripts directory (not the rest of `~/.local`). It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
 
 `--require-network-isolation` now has something real to point at: under `--sandbox bwrap` the network genuinely is gone, so `ADVERSARY_NETWORK_ISOLATED=1` becomes a statement you can make honestly instead of a wish. Outside bwrap it remains a **declaration, not a mechanism** — an assertion by *you* about *your* environment, which the tool cannot verify about itself.
 

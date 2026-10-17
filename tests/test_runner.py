@@ -20,6 +20,7 @@ import sys
 import subprocess
 import tempfile
 import types
+import site
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -385,7 +386,28 @@ class TestBwrapPrefix(unittest.TestCase):
             for i, flag in enumerate(self.argv)
             if flag == "--ro-bind"
         ]
-        self.assertIn(value, bound)
+        site_dir = site.getusersitepackages()
+        if Path(site_dir).is_dir():
+            self.assertIn(site_dir, bound)
+
+    @unittest.skipUnless(HAVE_BWRAP, "bwrap not installed")
+    def test_user_base_is_not_bound_whole(self):
+        """The user base (~/.local) also holds share/ and state/, where other
+        tools keep credentials; with the repository writable, binding all of it
+        let a test copy them into the tree (3.0.10)."""
+        value = self._env_value("PYTHONUSERBASE")
+        if value is None:
+            self.skipTest("no user site to bind on this interpreter")
+        bound = [
+            self.argv[i + 2]
+            for i, flag in enumerate(self.argv)
+            if flag in ("--bind", "--ro-bind")
+        ]
+        self.assertNotIn(value, bound)
+        for path in bound:
+            if Path(path).is_relative_to(value):
+                rel = Path(path).relative_to(value).parts[0]
+                self.assertIn(rel, ("lib", "bin"), path)
 
     @unittest.skipUnless(HAVE_BWRAP, "bwrap not installed")
     def test_command_separator_is_last(self):
