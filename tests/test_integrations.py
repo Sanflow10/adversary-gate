@@ -754,3 +754,20 @@ class TestAnUntrackedFileIsReadAsGitWould(unittest.TestCase):
             path = Path(directory) / "logo.png"
             path.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
             self.assertEqual(_new_file_hunk("logo.png", path), "")
+
+
+class TestMergeableNeedsTheGatesOwnAnswer(unittest.TestCase):
+    """Exit 0 with output that did not parse said mergeable with no evidence;
+    exit 0 next to a decision that is not merge said it too (3.0.11)."""
+
+    def test_exit_zero_without_a_merge_payload_is_not_mergeable(self):
+        for payload in (None, {"decision": "inconclusive"}, {"decision": "block"}):
+            with self.subTest(payload=payload):
+                out = mcp_server._summary({"exit_code": 0, "payload": payload, "stderr": "noise"})
+                self.assertFalse(out["mergeable"])
+                self.assertNotEqual(out["decision"], "merge")
+
+    def test_a_merge_payload_with_exit_zero_is_mergeable(self):
+        out = mcp_server._summary({"exit_code": 0, "payload": {"decision": "merge"}, "stderr": ""})
+        self.assertTrue(out["mergeable"])
+        self.assertEqual(out["decision"], "merge")

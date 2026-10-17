@@ -106,10 +106,14 @@ def _run_gate(argv: List[str], timeout: int) -> Dict[str, Any]:
 def _summary(result: Dict[str, Any]) -> Dict[str, Any]:
     payload = result["payload"] or {}
     code = result["exit_code"]
+    # Mergeable only when the exit code and the gate's own answer agree. Exit 0
+    # with output that did not parse said mergeable with no evidence (3.0.11).
+    merged = code == 0 and payload.get("decision") == "merge"
     return {
-        "decision": payload.get("decision") or EXIT_MEANING.get(code, "error"),
+        "decision": (payload.get("decision") if payload else None)
+        or ("inconclusive" if code == 0 else EXIT_MEANING.get(code, "error")),
         "exit_code": code,
-        "mergeable": code == 0,
+        "mergeable": merged,
         "fix_proven": payload.get("fix_proven"),
         "reason": payload.get("reason") or (result["stderr"].strip().splitlines() or [""])[-1],
         "claims": [
