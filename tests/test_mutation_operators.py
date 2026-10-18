@@ -141,7 +141,86 @@ class TestAMutantThatRebuildsTheBaselineIsNotCounted(unittest.TestCase):
         self.assertIn("back into the baseline", detail.get("reason", ""), detail)
         self.assertEqual(detail["baseline_mutants_skipped"], ["calc.py:2"])
 
+    def test_in_a_patch_of_two_files_the_flip_back_is_a_mutant(self):
+        """3.0.12: a ``>`` flipped in a second file was skipped as "the baseline"."""
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for side, op, b in (("baseline", ">", "a - b"), ("patch", ">=", "a + b")):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(f"def add(a, b):\n    return {b}\n")
+                (root / side / "limit.py").write_text(f"def over(n):\n    return n {op} 3\n")
+                (root / side / "test_calc.py").write_text(
+                    "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n")
+            _, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                               targets=["test_calc.py::test_add"])
+        flipped = [m for m in detail["mutants"] if m["file"] == "limit.py" and m["kind"] == "operator"]
+        self.assertTrue(flipped, detail["mutants"])
+        self.assertNotIn("baseline_mutants_skipped", detail)
+
     def test_with_constants_a_weak_test_scores_below_a_strong_one(self):
         _, weak = self._measure("assert add(1, 1) != 1", mutate_constants=True, confidence=0)
         _, strong = self._measure("assert add(1, 1) == 3", mutate_constants=True, confidence=0)
         self.assertLess(weak["mutants_killed"], strong["mutants_killed"], (weak, strong))
+
+
+class TestAClaimThatCountsItsRunsKillsNothing(unittest.TestCase):
+    """3.0.12: the mutants ran in one tree, and only the mutated file was put
+    back. A claim asserting ``is not None`` that counted its runs in a file
+    passed the reference and the canary and failed every mutant: 12/12."""
+
+    CODE = ("def calc(a, b, c):\n    x = a * 2 - b + c\n    y = x % 7 + a * b\n"
+            "    return y - c * 3 + x\n")
+
+    def _measure(self, where: str):
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            counter = where.replace("OUTSIDE", str(root / "outside.n"))
+            test = ("import os, pathlib\n"
+                    f"p = pathlib.Path({counter})\n"
+                    "n = (int(p.read_text()) if p.exists() else 0) + 1\n"
+                    "p.write_text(str(n))\n"
+                    "from calc import calc\n\n\n"
+                    "def test_calc():\n    assert calc(1, 2, 3) is not None\n    assert n <= 2\n")
+            for side, src in (("baseline", "def calc(a, b, c):\n    raise NotImplementedError\n"),
+                              ("patch", self.CODE)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(test)
+            return measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                          targets=["test_calc.py::test_calc"])
+
+    def test_a_count_in_the_tree_starts_over_every_run(self):
+        result, detail = self._measure("os.getcwd(), '.n'")
+        self.assertTrue(result.is_measured, detail.get("reason"))
+        self.assertEqual(result.mutants_killed, 0, detail["mutants"])
+
+    def test_a_count_outside_the_tree_leaves_the_score_unmeasured(self):
+        result, detail = self._measure("'OUTSIDE'")
+        self.assertFalse(result.is_measured)
+        self.assertIn("after them", detail["reason"])
+
+
+class TestALineWhoseMutantsAreAllStillbornIsNotJudged(unittest.TestCase):
+    """3.0.12: a mutant that breaks the import is stillborn, and a line with
+    only those was left out with a note while the other lines merged."""
+
+    def test_it_is_a_blind_spot(self):
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        base = "HOSTS = ['a']\n\n\ndef add(a, b):\n    return a - b\n"
+        patch = "HOSTS = ['a'] + ['0.0.0.0/0']\n\n\ndef add(a, b):\n    return a + b * 2 - 1\n"
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for side, src in (("baseline", base), ("patch", patch)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(
+                    "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 7\n")
+            result, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                    targets=["test_calc.py::test_add"])
+        self.assertEqual(detail.get("stillborn_lines"), ["calc.py:1"], detail["mutants"])
+        self.assertFalse(result.is_strong)

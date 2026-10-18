@@ -38,6 +38,53 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.12] — 2026-10-18
+
+Holes found by a read-only audit of 3.0.11 and confirmed with crafted
+repositories. Each change has a test that fails on 3.0.11.
+
+> **Stricter verdicts.** A patch that changes a document or data file and also
+> runs source text (`exec`, `compile`, `runpy`, a file loader), or adds a zip
+> that holds a module, or writes a line whose every mutant stops the tests
+> from collecting, is now `INCONCLUSIVE` where it could be `MERGE`.
+
+### Security
+
+- **The MCP server no longer runs the checkout's modules inside the gate.** It
+  started the gate with `python -m`, which puts the working directory first on
+  `sys.path`; an MCP client starts the server in the checkout the agent
+  writes, so a `json.py` there ran in the judge. The Action already ran with
+  `python -I`.
+- **A claim cannot count its runs.** The mutants ran in one tree and only the
+  mutated file was put back, so a test that kept a counter in a file there
+  passed the unmutated run and the canary and failed every mutant: a test
+  asserting `is not None` scored 12/12 and merged. Every run now starts from a
+  fresh copy, and the claims run once more, unmutated, after the mutants; if
+  they fail then, the score is not measured.
+- **A zip that holds a module is code.** `sys.path.insert(0, "deps.zip")`
+  imports from it whatever the file is called (`logo.png` works too), and as a
+  non-source suffix or a test fixture it was never judged: the logic sat
+  inside it behind one covered import line. Decided by content now, and
+  reported as unjudged source.
+- **A document Python runs is code.** `exec(open("NOTICE.txt").read())` made a
+  text file the logic, and documents are not counted. A changed document or
+  data file now counts as unjudged source when it parses as Python and
+  defines something, or when a changed module runs source text.
+
+### Fixed
+
+- **A passing run is never rewritten to a harness error.** A run that exited 0
+  but printed `pytest: error:` became "stillborn", so a surviving mutant left
+  the score instead of lowering it.
+- **The "turns the patch back into the baseline" skip is for one-file patches
+  only.** In a patch of two files, a `>` flipped in the second one was skipped
+  as the baseline, though the claim failed on the baseline because of the
+  first; that line went unbroken.
+- **A line whose every mutant is stillborn is a blind spot.** A mutant that
+  breaks the import (`HOSTS = ["a"] + ["0.0.0.0/0"]`, `+` to `-`) stops
+  collection; such a line was left out of the ratio with a note, and the
+  other lines' kills merged a change no claim had been tried against.
+
 ## [3.0.11] — 2026-10-18
 
 Holes and false verdicts found by reading the code and by crafted repositories

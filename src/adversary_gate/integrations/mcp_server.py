@@ -89,11 +89,19 @@ def _boundary(policy: List[str]) -> Dict[str, Any]:
             "require_network_isolation": "--require-network-isolation" in policy}
 
 
+#: ``python -m adversary_gate`` without the working directory on sys.path.
+_NO_CWD_MAIN = ("import sys; del sys.path[0]; import runpy; "
+                "runpy.run_module('adversary_gate', run_name='__main__', alter_sys=True)")
+
+
 def _run_gate(argv: List[str], timeout: int) -> Dict[str, Any]:
     src = str(Path(__file__).resolve().parents[2])
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [src, os.environ.get("PYTHONPATH")]))}
+    # Not ``-m``: it puts the working directory first on sys.path, and an MCP
+    # client starts the server in the checkout the agent writes. A ``json.py``
+    # there ran inside the judge (3.0.12). ``-P`` would do, but not on 3.10.
     proc = subprocess.run(
-        [sys.executable, "-m", "adversary_gate", *argv],
+        [sys.executable, "-c", _NO_CWD_MAIN, *argv],
         capture_output=True, text=True, env=env, timeout=timeout,
     )
     try:

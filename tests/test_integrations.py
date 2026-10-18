@@ -733,6 +733,20 @@ class TestVerifyRepoTimeLimit(unittest.TestCase):
         self.assertEqual([(s["action"], s.get("argument")) for s in result["next_steps"]],
                          [("raise_limit", "timeout_seconds")])
 
+    def test_a_module_in_the_working_directory_does_not_run_in_the_gate(self):
+        # The MCP client starts the server in the checkout the agent writes.
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "json.py").write_text(
+                "import sys\nprint('SHADOWED', file=sys.stderr)\n")
+            here = os.getcwd()
+            os.chdir(directory)
+            try:
+                result = mcp_server._run_gate(["--help"], 60)
+            finally:
+                os.chdir(here)
+        self.assertEqual(result["exit_code"], 0, result["stderr"])
+        self.assertNotIn("SHADOWED", result["stderr"])
+
 
 class TestHermesFiles(unittest.TestCase):
     def test_the_skill_and_config_ship_and_print(self):

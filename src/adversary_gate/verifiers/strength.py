@@ -314,6 +314,26 @@ def _is_non_source(rel: str) -> bool:
     return False
 
 
+#: What zipimport loads from an archive on sys.path.
+_IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
+
+
+def _carries_code(path: Path) -> bool:
+    """True for a zip archive that holds a module Python can import.
+
+    ``sys.path.insert(0, "deps.zip")`` imports from it, whatever the file is
+    called -- ``logo.png`` works as well. As a non-source suffix (or a test
+    fixture) it was never judged, and a patch whose logic sat inside one with
+    a covered import line in front reached MERGE (3.0.12). Decided by content.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return any(name.lower().endswith(_IMPORTABLE_SUFFIXES) for name in archive.namelist())
+    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError):
+        return False
+
+
 def _is_scan_noise(rel: str) -> bool:
     """True for directories the *directory scan* must not walk.
 
@@ -430,6 +450,8 @@ def changed_foreign_source_files(
     safe direction for a question whose answer is "we could not judge this".
     """
 
+    code: set = set()
+
     def snapshot(root: Path) -> Dict[str, bytes]:
         out: Dict[str, bytes] = {}
         if not root.is_dir():
@@ -438,7 +460,9 @@ def changed_foreign_source_files(
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
             rel = path.relative_to(root).as_posix()
-            if _is_test_path(rel) or _is_non_source(rel) or _is_scan_noise(rel):
+            if not rel.endswith(".py") and _carries_code(path):
+                code.add(rel)
+            elif _is_test_path(rel) or _is_scan_noise(rel):
                 continue
             try:
                 out[rel] = path.read_bytes()
@@ -455,15 +479,59 @@ def changed_foreign_source_files(
         candidates.update(
             rel for rel in changed_paths if rel and not rel.startswith(("/", "../"))
         )
+    # A document or data file is code once Python runs it: ``exec(open(
+    # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
+    # logic in the text file (3.0.12). Said by its content, or by a changed
+    # module that runs text it reads.
+    loads_text = any(_runs_text(patch[rel]) for rel in candidates
+                     if rel.endswith(".py") and rel in patch)
+    for rel in candidates:
+        if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
+                and (loads_text or _is_python(patch[rel])):
+            code.add(rel)
     return sorted(
         rel
         for rel in candidates
         # .py is judged by the mutation engine, tests are not code under test,
         # and documented non-code should not force an INCONCLUSIVE on its own.
-        if not rel.endswith(".py")
-        and not _is_test_path(rel)
-        and not _is_non_source(rel)
+        if rel in code
+        or (not rel.endswith(".py") and not _is_test_path(rel) and not _is_non_source(rel))
     )
+
+
+#: Calls that run source text a module read from somewhere.
+_TEXT_RUNNERS = frozenset({"exec", "eval", "compile", "run_path", "run_module",
+                           "SourceFileLoader", "spec_from_file_location",
+                           "spec_from_loader", "exec_module", "load_module"})
+
+
+def _runs_text(source: bytes) -> bool:
+    """True when ``source`` calls one of :data:`_TEXT_RUNNERS`, by any spelling."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else \
+                func.attr if isinstance(func, ast.Attribute) else None
+            if name in _TEXT_RUNNERS:
+                return True
+        elif isinstance(node, ast.Name) and node.id in _TEXT_RUNNERS:
+            return True  # passed around, aliased: ``run = exec``
+    return False
+
+
+def _is_python(data: bytes) -> bool:
+    """True for text that parses as Python and defines something."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError):
+        return False
+    return any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                                 ast.Lambda, ast.Import, ast.ImportFrom))
+               for node in ast.walk(tree))
 
 
 def classify_changes(
@@ -1243,6 +1311,8 @@ def measure_mutation_score(
         "stillborn": 0,
         "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
         "reference_run": None,
+        "reference_after": None,
+        "stillborn_lines": [],
         "source_sensitive_claims": False,
         "canary": {"files": [], "exit_code": None},
         "added_files": {},
@@ -1348,7 +1418,11 @@ def measure_mutation_score(
             # ``+``; the mutant turns it back) proves only what the claim
             # already did -- the test tells old from new -- and says nothing of
             # how strong the test is. Not counted (3.0.11).
-            if "\n".join(_apply(source_lines, *site)) == before:
+            # Only when this file is the whole patch: with another file
+            # changed too, the mutant is not the baseline -- a claim failing
+            # on the baseline because of b.py says nothing of a.py, and a
+            # flipped ``>`` there went unbroken (3.0.12).
+            if len(changed) == 1 and "\n".join(_apply(source_lines, *site)) == before:
                 if site[0][0] in edited:
                     rebuilt.append(f"{rel}:{site[0][0]}")
                 continue
@@ -1428,6 +1502,25 @@ def measure_mutation_score(
         if oracle_dir is not None and oracle_targets:
             twin = Path(tmp) / "oracle"
             shutil.copytree(oracle_dir, twin, ignore=_IGNORE)
+        # Every run starts from these. The tree is the one place a sandboxed
+        # run can write that the next run reads: a claim that counted its runs
+        # in a file there passed the reference and the canary and failed every
+        # mutant -- 0/12 became 12/12 and MERGE (3.0.12).
+        pristine = Path(tmp) / "pristine"
+        shutil.copytree(work, pristine)
+        pristine_twin: Optional[Path] = None
+        if twin is not None:
+            pristine_twin = Path(tmp) / "pristine-oracle"
+            shutil.copytree(twin, pristine_twin)
+
+        def _fresh(directory: Path) -> None:
+            """Put ``directory`` (and the oracle twin) back as the patch left it."""
+            pairs = [(directory, pristine)]
+            if twin is not None and pristine_twin is not None:
+                pairs.append((twin, pristine_twin))
+            for tree, source in pairs:
+                shutil.rmtree(tree)
+                shutil.copytree(source, tree)
 
         def _run(directory: Path = work):
             if twin is None:
@@ -1465,6 +1558,7 @@ def measure_mutation_score(
         # The reference runs with or without a time limit: it is what every
         # mutant is judged against, not only the yardstick for hangs (UX-4).
         started = time.monotonic()
+        _fresh(work)
         reference = _run()
         elapsed = time.monotonic() - started
         reference_passed = reference.exit_code == PYTEST_OK
@@ -1520,6 +1614,7 @@ def measure_mutation_score(
         # the neutral copy is reading the code, not running it.
         trees = [work] if twin is None else [work, twin]
         if canary_files:
+            _fresh(work)
             for rel, neutral in canary_files.items():
                 for tree in trees:
                     (tree / rel).write_text(neutral, encoding="utf-8")
@@ -1583,6 +1678,11 @@ def measure_mutation_score(
             # The oracle twin breaks with the tree it pairs with (one at a time).
             targets_ = [directory / rel] + ([twin / rel] if twin is not None else [])
             try:
+                if twin is None:
+                    shutil.rmtree(directory)
+                    shutil.copytree(pristine, directory)
+                else:
+                    _fresh(directory)
                 for target in targets_:
                     target.write_text(mutant_source, encoding="utf-8")
                 return _run(directory)
@@ -1656,6 +1756,20 @@ def measure_mutation_score(
 
         detail["survivors"] = survivors
 
+        # The unmutated claims once more, after every mutant. Outside a sandbox
+        # a run can leave state where the tree reset does not reach (/tmp, the
+        # home directory); claims that now fail were not judging the code.
+        _fresh(work)
+        after = _run()
+        detail["reference_after"] = {"exit_code": after.exit_code}
+        if after.exit_code != PYTEST_OK and not (after.timed_out or after.exit_code < 0):
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                f"the claims passed on the unmutated patch before the mutants and fail on it "
+                f"after them (exit {after.exit_code}): they depend on what earlier runs left "
+                "behind, not on the code, so their kills prove nothing",
+            )
+
     entries = detail["mutants"]  # type: ignore[assignment]
     odd = [m for m in entries if m.get("result") not in ("killed", "survived")]  # type: ignore[union-attr]
     why_not = ""
@@ -1702,6 +1816,26 @@ def measure_mutation_score(
              "a line the patch wrote is checked by no claim")
             + f": breaking it changed nothing ({shown}{more}). Line coverage counts that "
             "line as run, so no other mutant speaks for it",
+        )
+    # A line whose every mutant was stillborn was never judged: a mutant that
+    # breaks the import (``HOSTS = ["a"] + ["0.0.0.0/0"]``, ``+`` -> ``-``)
+    # stops collection, exit 2, and left the ratio with only a note -- the
+    # other lines' kills merged a change no claim had looked at (3.0.12).
+    by_row: Dict[str, List[object]] = {}
+    for m in entries:
+        if m.get("result") != "no-op":  # type: ignore[union-attr]
+            by_row.setdefault(f"{m['file']}:{m['line']}", []).append(m.get("result"))  # type: ignore[index,union-attr]
+    unborn = sorted(row for row, results in by_row.items()
+                    if results and all(r == "stillborn" for r in results))
+    if unborn:
+        detail["stillborn_lines"] = unborn
+        detail["blind_spots"] = [f"{row} -> every mutant stillborn" for row in unborn]
+        shown = ", ".join(unborn[:5]) + (f" (+{len(unborn) - 5} more)" if len(unborn) > 5 else "")
+        return finish(
+            replace(result, blind_spots=len(unborn)),
+            f"a line the patch wrote was never judged: every mutant of it was stillborn -- "
+            f"it stopped the tests from running at all ({shown}) -- so no claim was tried "
+            "against it",
         )
     if result.is_measured:
         notes = []
