@@ -474,6 +474,13 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
             mcp_server.verify_repo(str(ROOT))
         self.assertEqual(fake.call_args.kwargs.get("sandbox"), "bwrap")
 
+    def test_timeout_seconds_reaches_the_coverage_pass(self):
+        """It stayed at prepare's 600 s whatever the caller asked (3.0.11)."""
+        with mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
+                mock.patch.object(mcp_server, "prepare", side_effect=EvidenceError("stop")) as fake:
+            mcp_server.verify_repo(str(ROOT), timeout_seconds=7200)
+        self.assertEqual(fake.call_args.kwargs.get("timeout"), 7200)
+
 
 @unittest.skipUnless(HAS_GIT and HAS_COVERAGE, "needs git and coverage")
 class TestVerifyRepoTool(unittest.TestCase):

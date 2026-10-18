@@ -215,7 +215,8 @@ def verify_repo(
                                                "or have the operator set ADVERSARY_GATE_BASE_REF"}]}
         with tempfile.TemporaryDirectory(prefix="adversary-mcp-") as scratch:
             evidence = prepare(Path(repo), base, Path(scratch), python=interpreter,
-                               pytest_args=pytest_args or (), **_boundary(policy))
+                               pytest_args=pytest_args or (), timeout=timeout_seconds,
+                               **_boundary(policy))
             argv = [
                 "--baseline", str(evidence.baseline), "--patch", str(evidence.patch),
                 "--diff", str(evidence.diff), "--coverage-json", str(evidence.coverage),
