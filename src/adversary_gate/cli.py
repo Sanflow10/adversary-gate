@@ -609,13 +609,16 @@ def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
         return None
     text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
     files = validate_diff(text)
-    hidden = hidden_text_diffs(text, Path(args.patch)) if args.patch else []
+    hidden = hidden_text_diffs(
+        text, Path(args.patch), Path(args.baseline) if getattr(args, "baseline", None) else None,
+    ) if args.patch else []
     if hidden:
         raise UnparseableDiff(
-            "the diff writes 'Binary files ... differ' for " + ", ".join(hidden) + ", which "
-            "hold text in the patch: their changed lines are not in the diff. .gitattributes "
-            "(-diff, binary) does this; re-generate the diff with "
-            "'git --attr-source=<empty tree> diff' or 'git diff --text'"
+            "the diff writes 'Binary files ... differ' for " + ", ".join(hidden) + ", text on "
+            "the patch side or on the baseline's: their changed lines are not in the diff. "
+            ".gitattributes (-diff, binary) does this, and so does a text file rewritten with "
+            "a NUL byte; re-generate the diff with 'git --attr-source=<empty tree> diff', "
+            "and keep text files text"
         )
     return sorted(files)
 

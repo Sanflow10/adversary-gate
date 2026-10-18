@@ -239,30 +239,38 @@ def binary_python_diffs(diff_text: str) -> list[str]:
     return found
 
 
-def hidden_text_diffs(diff_text: str, patch_root: Path) -> list[str]:
-    """Files the diff calls binary whose patch-side content is text.
+def _is_text_file(path: Path) -> bool:
+    """Git's own test: binary means a NUL in the first 8000 bytes."""
+    try:
+        return path.is_file() and not path.is_symlink() and b"\0" not in path.read_bytes()[:8000]
+    except OSError:
+        return False
+
+
+def hidden_text_diffs(diff_text: str, patch_root: Path, baseline_root: Path | None = None) -> list[str]:
+    """Files the diff calls binary whose lines it should have shown.
 
     ``-diff`` or ``binary`` in .gitattributes -- which the patch may write --
     turns any file's hunks into ``Binary files ... differ``. For a ``.py`` file
     :func:`binary_python_diffs` refuses it; a ``settings.json`` hid its changed
-    lines from a ratio that counts config files (3.0.11). Git's own test is
-    used: binary means a NUL in the first 8000 bytes.
+    lines from a ratio that counts config files (3.0.11). So is a text file the
+    patch rewrote with one NUL byte: binary now, its lines gone, while the
+    baseline's copy was text. A file binary on both sides, an image, is left
+    alone, and so is one that is new and binary.
     """
     found: list[str] = []
     for kind, line, _ in _walk_hunks(diff_text):
         if kind != "header":
             continue
         match = _BINARY_DIFF.match(line)
-        if not match or match.group("new") == "/dev/null":
+        if not match:
             continue
-        path = _diff_target(match.group("new")) or ""
-        target = Path(patch_root) / path
-        try:
-            if path and target.is_file() and not target.is_symlink() \
-                    and b"\0" not in target.read_bytes()[:8000]:
-                found.append(path)
-        except OSError:
-            continue
+        new = _diff_target(match.group("new"))
+        old = _diff_target(match.group("old"))
+        if new and _is_text_file(Path(patch_root) / new):
+            found.append(new)
+        elif baseline_root is not None and old and _is_text_file(Path(baseline_root) / old):
+            found.append(old)
     return found
 
 

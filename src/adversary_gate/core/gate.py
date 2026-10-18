@@ -40,7 +40,7 @@ from adversary_gate.core.circuit_breaker import CircuitBreaker
 from adversary_gate.core.contestation import Contestation, ContestationResult, adjudicate
 from adversary_gate.core.exitmap import PYTEST_OK, PYTEST_TESTS_FAILED, describe
 from adversary_gate.core.evidence_log import EvidenceLog
-from adversary_gate.core.path_policy import PathPolicy, harness_drift
+from adversary_gate.core.path_policy import PathPolicy, harness_drift, in_virtualenv
 from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
@@ -248,6 +248,11 @@ class Gate:
                 return "test_path escapes repository"
             if not candidate.is_file():
                 return f"test file does not exist: {claim.test_path}"
+            if in_virtualenv(root, path.as_posix()):
+                # The harness check does not look inside a virtualenv's own
+                # parts, so a conftest there is unseen: no test runs from one
+                # (3.0.11).
+                return "test_path lies inside a virtualenv (beside a pyvenv.cfg)"
         return None
 
     def validate_changed_paths(

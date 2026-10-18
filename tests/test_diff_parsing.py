@@ -111,6 +111,24 @@ class TestABinaryLabelOnTextIsRefused(unittest.TestCase):
             (Path(d) / "settings.json").write_text('{"a": 2}\n')
             self.assertEqual(hidden_text_diffs(self.DIFF, Path(d)), ["settings.json"])
 
+    def test_a_text_file_rewritten_with_a_nul_is_found(self):
+        """T2: one NUL made the baseline's text file binary, and its lines left."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for side, data in (("baseline", b'{"a": 1}\n'), ("patch", b'{"a": 2}\x00\n')):
+                (Path(d) / side).mkdir()
+                (Path(d) / side / "settings.json").write_bytes(data)
+            self.assertEqual(hidden_text_diffs(self.DIFF, Path(d) / "patch", Path(d) / "baseline"),
+                             ["settings.json"])
+
+    def test_an_image_binary_on_both_sides_is_left_alone(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for side in ("baseline", "patch"):
+                (Path(d) / side).mkdir()
+                (Path(d) / side / "settings.json").write_bytes(b"\x89PNG\x00" + side.encode())
+            self.assertEqual(hidden_text_diffs(self.DIFF, Path(d) / "patch", Path(d) / "baseline"), [])
+
     def test_a_real_binary_file_is_left_alone(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
