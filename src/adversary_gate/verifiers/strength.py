@@ -314,6 +314,26 @@ def _is_non_source(rel: str) -> bool:
     return False
 
 
+#: What zipimport loads from an archive on sys.path.
+_IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
+
+
+def _carries_code(path: Path) -> bool:
+    """True for a zip archive that holds a module Python can import.
+
+    ``sys.path.insert(0, "deps.zip")`` imports from it, whatever the file is
+    called -- ``logo.png`` works as well. As a non-source suffix (or a test
+    fixture) it was never judged, and a patch whose logic sat inside one with
+    a covered import line in front reached MERGE (3.0.12). Decided by content.
+    """
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return any(name.lower().endswith(_IMPORTABLE_SUFFIXES) for name in archive.namelist())
+    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError):
+        return False
+
+
 def _is_scan_noise(rel: str) -> bool:
     """True for directories the *directory scan* must not walk.
 
@@ -430,6 +450,8 @@ def changed_foreign_source_files(
     safe direction for a question whose answer is "we could not judge this".
     """
 
+    code: set = set()
+
     def snapshot(root: Path) -> Dict[str, bytes]:
         out: Dict[str, bytes] = {}
         if not root.is_dir():
@@ -438,7 +460,9 @@ def changed_foreign_source_files(
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
             rel = path.relative_to(root).as_posix()
-            if _is_test_path(rel) or _is_non_source(rel) or _is_scan_noise(rel):
+            if not rel.endswith(".py") and _carries_code(path):
+                code.add(rel)
+            elif _is_test_path(rel) or _is_non_source(rel) or _is_scan_noise(rel):
                 continue
             try:
                 out[rel] = path.read_bytes()
@@ -460,9 +484,8 @@ def changed_foreign_source_files(
         for rel in candidates
         # .py is judged by the mutation engine, tests are not code under test,
         # and documented non-code should not force an INCONCLUSIVE on its own.
-        if not rel.endswith(".py")
-        and not _is_test_path(rel)
-        and not _is_non_source(rel)
+        if rel in code
+        or (not rel.endswith(".py") and not _is_test_path(rel) and not _is_non_source(rel))
     )
 
 

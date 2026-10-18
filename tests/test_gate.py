@@ -1862,6 +1862,26 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["lib.dylib", "native.pyd", "old.pyc", "rules.cpython-312-x86_64-linux-gnu.so"],
             )
 
+    def test_a_zip_with_a_module_inside_is_code_whatever_it_is_called(self):
+        """``sys.path.insert(0, "deps.zip")`` imports from it (3.0.12)."""
+        import zipfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "tests").mkdir()
+            for name in ("deps.zip", "logo.png", "tests/fixture.zip"):
+                with zipfile.ZipFile(root / "patch" / name, "w") as archive:
+                    archive.writestr("helper.py", "def decide(a):\n    return a\n")
+            with zipfile.ZipFile(root / "patch" / "data.zip", "w") as archive:
+                archive.writestr("table.csv", "a,b\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["deps.zip", "logo.png", "tests/fixture.zip"],
+            )
+
     def test_foreign_only_patch_cannot_reach_merge(self):
         """The observable consequence: before the fix this returned exit 0."""
         with tempfile.TemporaryDirectory() as directory:
