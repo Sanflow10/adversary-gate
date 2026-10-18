@@ -286,6 +286,15 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
                 f"--full-suite-memory ({args.full_suite_memory} bytes) is the "
                 "measured cause on large suites); the collateral check did not run"
             )
+        if decision is Decision.INCONCLUSIVE and base_code != 0 and patch_code != 0:
+            # Red on both sides (3.0.11): this fell through to a held claim's
+            # reason, "the patch fixes the test", and named nothing to do.
+            return (
+                f"the full suite already failed on the baseline (exit {base_code}) and "
+                f"fails on the patch (exit {patch_code}), so it cannot tell whether the "
+                "patch broke anything outside the claims; point --full-suite-path at "
+                "tests that pass on the baseline"
+            )
     if (
         decision is Decision.INCONCLUSIVE
         and verdicts
@@ -412,6 +421,10 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
             steps.append({"action": "raise_limit",
                           "flags": ["--full-suite-timeout", "--full-suite-memory"],
                           "why": "the collateral full suite could not run on either side"})
+        elif base_code != 0 and patch_code != 0:
+            steps.append({"action": "see_reason", "flags": ["--full-suite-path"],
+                          "why": "the full suite already fails on the baseline, so it cannot "
+                                 "judge the patch; point --full-suite-path at tests that pass there"})
     if decision is Decision.BLOCK:
         return steps
     if not verdicts:
@@ -728,6 +741,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--aggression", default="normal", type=_aggression,
         choices=[x.value for x in AggressionLevel if x is not AggressionLevel.PARANOID],
+        help="'nuclear' only refuses a MERGE while --rounds-used is below --max-rounds. "
+        "Both default to 4 and --rounds-used is the caller's own count, never measured "
+        "by the gate, so with the defaults 'nuclear' decides exactly as 'normal'.",
     )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--changed-path", action="append", default=[])
@@ -927,7 +943,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME=VALUE",
         help="set a variable in the test runs; repeatable. Only names are recorded.",
     )
-    parser.add_argument("--rounds-used", type=int, default=4)
+    parser.add_argument(
+        "--rounds-used", type=int, default=4,
+        help="adversarial rounds the caller ran, as the caller declares it: the gate "
+        "does not count them. Only --aggression nuclear reads it.",
+    )
     parser.add_argument(
         "--require-network-isolation",
         action="store_true",
@@ -1105,6 +1125,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         full_suite_ran = bool(full_command) or bool(args.full_suite_path)
         rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
         oracle_full_code: Optional[int] = None
+        suite_unsettled: Optional[str] = None
 
         # The suite runs under its own limits (AG-033): the per-test ones killed
         # it on both sides (time) or made pytest die with MemoryError (address
@@ -1346,17 +1367,38 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # pass is the *baseline's*, run against the patch's code. The
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
+            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int]]:
+                if rewritten_tests:
+                    with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
+                        tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                        return _patch_suite(Path(args.patch), tree)
+                return _patch_suite(Path(args.patch), None)
+
             if suite_future is not None:
                 patch_full, oracle_full_code = suite_future.result()
-            elif rewritten_tests:
-                with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
-                    tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
-                    patch_full, oracle_full_code = _patch_suite(Path(args.patch), tree)
             else:
-                patch_full, oracle_full_code = _patch_suite(Path(args.patch), None)
+                patch_full, oracle_full_code = _patch_suite_alone()
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
+                # The patch side ran alongside the mutants and the baseline
+                # alone: a wall-clock limit that fired under that load read as
+                # a regression and BLOCKed (3.0.11). It runs again, alone. Still
+                # failing is a regression; passing now is a suite that failed
+                # once, slow or flaky, which is not a pass either.
+                if suite_future is not None and base_full.exit_code == PYTEST_OK:
+                    again, again_oracle = _patch_suite_alone()
+                    execution["full_suite_rerun_alone"] = again.exit_code
+                    if again.exit_code == PYTEST_OK:
+                        full_codes = None
+                        oracle_full_code = again_oracle
+                        suite_unsettled = (
+                            f"the patch's full suite failed (exit {patch_full.exit_code}) while "
+                            "it ran alongside the mutants and passed when run again alone: a "
+                            "time limit under load, or a flaky test; re-run with --serial-sides"
+                        )
+                    else:
+                        full_codes = (base_full.exit_code, again.exit_code)
         mutation_seconds = time.monotonic() - started
 
         decision = gate.decide(
@@ -1372,6 +1414,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # the claims that were kept could MERGE without them.
         cut = int((discovery or {}).get("truncated") or 0)
         unjudged_reason = None
+        unjudged_flags = ["--max-claims", "--full-suite-path"]
         if decision is Decision.MERGE and cut and not full_suite_ran:
             decision = Decision.INCONCLUSIVE
             unjudged_reason = (
@@ -1379,6 +1422,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 f"({args.max_claims}) and the full suite is off, so nothing judged them; "
                 "raise --max-claims or run the full suite"
             )
+        if decision is Decision.MERGE and suite_unsettled:
+            decision = Decision.INCONCLUSIVE
+            unjudged_reason = suite_unsettled
+            unjudged_flags = ["--serial-sides", "--full-suite-timeout"]
 
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
@@ -1425,7 +1472,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "next_steps": _next_steps(
                 decision, verdicts, full_codes, args,
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
-            ) + ([{"action": "raise_limit", "flags": ["--max-claims", "--full-suite-path"],
+            ) + ([{"action": "raise_limit", "flags": unjudged_flags,
                    "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": summary["claims_total"],
