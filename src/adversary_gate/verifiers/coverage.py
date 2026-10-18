@@ -55,6 +55,36 @@ class DiffCoverage:
         return 1.0 if self.changed_lines == 0 else self.covered_lines / self.changed_lines
 
 
+_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _unquote(body: str) -> str:
+    """Git's C-style quoting undone: ``caf\\303\\251.py`` -> ``café.py``.
+
+    Git quotes a path that holds a byte outside ASCII, a quote, a backslash or
+    a control character. Until 3.0.11 the quoted spelling was the key, so a
+    path check missed ``"b/.github/workflows/\\303\\251.yml"`` and a source
+    named ``café.py`` lost its coverage.
+    """
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in "01234567" and re.fullmatch(r"[0-7]{3}", body[i + 1:i + 4]):
+                out.append(int(body[i + 1:i + 4], 8))
+                i += 4
+                continue
+            if nxt in _ESCAPES:
+                out.append(_ESCAPES[nxt])
+                i += 2
+                continue
+        out += ch.encode("utf-8")
+        i += 1
+    return out.decode("utf-8", "replace")
+
+
 def _diff_target(header: str) -> str | None:
     """``+++ b/calc.py\\t2026-01-01`` -> ``calc.py``; ``/dev/null`` -> ``None``.
 
@@ -64,6 +94,8 @@ def _diff_target(header: str) -> str | None:
     fail-open, in a gate whose whole thesis is fail-closed.
     """
     path = header.split("\t", 1)[0].strip()
+    if len(path) >= 2 and path[0] == path[-1] == '"':
+        path = _unquote(path[1:-1])
     if path == "/dev/null":
         return None
     if path.startswith("b/"):
@@ -116,6 +148,13 @@ def _walk_hunks(diff_text: str):
                 old_left -= 1
                 yield "removed", line, row
                 continue
+            if line and not line.startswith(" "):
+                # A hunk that declares more lines than it holds: what follows
+                # is the next file's header. Read as context, it swallowed that
+                # file, whose lines then counted as this one's (3.0.11).
+                raise UnparseableDiff(
+                    f"a hunk ends before the {old_left} old and {new_left} new lines its "
+                    f"header declares (at {line[:60]!r}); re-generate the diff")
             old_left -= 1
             new_left -= 1
             yield "context", line, row
@@ -129,6 +168,10 @@ def _walk_hunks(diff_text: str):
             yield "hunk", line, row
             continue
         yield "header", line, row
+    if old_left > 0 or new_left > 0:
+        raise UnparseableDiff(
+            f"the diff ends {old_left} old and {new_left} new lines short of what its "
+            "last hunk header declares; re-generate the diff")
 
 
 def changed_lines_from_unified_diff(diff_text: str) -> dict[str, set[int]]:
@@ -189,11 +232,45 @@ def binary_python_diffs(diff_text: str) -> list[str]:
         match = _BINARY_DIFF.match(line)
         if not match:
             continue
-        path = match.group("new") if match.group("new") != "/dev/null" else match.group("old")
-        if path[:2] in ("a/", "b/"):
-            path = path[2:]
+        side = match.group("new") if match.group("new") != "/dev/null" else match.group("old")
+        path = _diff_target(side) or ""
         if path.endswith(".py"):
             found.append(path)
+    return found
+
+
+def _is_text_file(path: Path) -> bool:
+    """Git's own test: binary means a NUL in the first 8000 bytes."""
+    try:
+        return path.is_file() and not path.is_symlink() and b"\0" not in path.read_bytes()[:8000]
+    except OSError:
+        return False
+
+
+def hidden_text_diffs(diff_text: str, patch_root: Path, baseline_root: Path | None = None) -> list[str]:
+    """Files the diff calls binary whose lines it should have shown.
+
+    ``-diff`` or ``binary`` in .gitattributes -- which the patch may write --
+    turns any file's hunks into ``Binary files ... differ``. For a ``.py`` file
+    :func:`binary_python_diffs` refuses it; a ``settings.json`` hid its changed
+    lines from a ratio that counts config files (3.0.11). So is a text file the
+    patch rewrote with one NUL byte: binary now, its lines gone, while the
+    baseline's copy was text. A file binary on both sides, an image, is left
+    alone, and so is one that is new and binary.
+    """
+    found: list[str] = []
+    for kind, line, _ in _walk_hunks(diff_text):
+        if kind != "header":
+            continue
+        match = _BINARY_DIFF.match(line)
+        if not match:
+            continue
+        new = _diff_target(match.group("new"))
+        old = _diff_target(match.group("old"))
+        if new and _is_text_file(Path(patch_root) / new):
+            found.append(new)
+        elif baseline_root is not None and old and _is_text_file(Path(baseline_root) / old):
+            found.append(old)
     return found
 
 

@@ -16,8 +16,10 @@ environment the operator sets in the agent's MCP configuration:
 * ``ADVERSARY_GATE_POLICY``   extra CLI flags (``--sandbox bwrap --triage jev``);
 * ``ADVERSARY_GATE_BASE_REF`` the baseline (e.g. ``origin/main``). Whoever
   picks the baseline picks the oracle: an agent could commit a rewritten test
-  and name that commit. Unset, the agent may pass ``base_ref`` and the answer
-  says ``"baseline_chosen_by": "agent"``. Pinning names the baseline; it is
+  and name that commit. Unset, the agent may pass ``base_ref`` (default
+  ``HEAD``), which must already be on a remote-tracking branch -- a commit the
+  agent made locally is refused, nothing runs (3.0.11) -- and the answer says
+  ``"baseline_chosen_by": "agent"``. Pinning names the baseline; it is
   not a defence against an agent that can write the repository's ``.git``
   (refs, objects, configuration) -- run such an agent where it cannot;
 * ``ADVERSARY_GATE_REQUIRE_PINNED_BASE`` ``1`` makes the pin mandatory: with
@@ -51,7 +53,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from adversary_gate import __version__
-from adversary_gate.integrations.gitevidence import EvidenceError, prepare
+from adversary_gate.integrations.gitevidence import EvidenceError, _git, prepare
 
 #: Flags only the operator may set. A tool call carrying one is refused.
 _EVIDENCE_FLAGS = ("--baseline", "--patch", "--diff", "--coverage-json", "--claim",
@@ -104,10 +106,14 @@ def _run_gate(argv: List[str], timeout: int) -> Dict[str, Any]:
 def _summary(result: Dict[str, Any]) -> Dict[str, Any]:
     payload = result["payload"] or {}
     code = result["exit_code"]
+    # Mergeable only when the exit code and the gate's own answer agree. Exit 0
+    # with output that did not parse said mergeable with no evidence (3.0.11).
+    merged = code == 0 and payload.get("decision") == "merge"
     return {
-        "decision": payload.get("decision") or EXIT_MEANING.get(code, "error"),
+        "decision": (payload.get("decision") if payload else None)
+        or ("inconclusive" if code == 0 else EXIT_MEANING.get(code, "error")),
         "exit_code": code,
-        "mergeable": code == 0,
+        "mergeable": merged,
         "fix_proven": payload.get("fix_proven"),
         "reason": payload.get("reason") or (result["stderr"].strip().splitlines() or [""])[-1],
         "claims": [
@@ -194,9 +200,23 @@ def verify_repo(
         options = [a for a in (pytest_args or []) if a.startswith(("-", "@"))]
         if options:
             raise ValueError(f"pytest_args takes test paths only, not options: {options}")
+        if not pinned:
+            # The agent's own baseline is its own oracle: with the default
+            # "HEAD", a commit that rewrote a test judged the patch by that
+            # test. Until 3.0.11 any commit was taken. Now it must already be
+            # on a remote-tracking branch, which a local commit is not, and it
+            # is resolved once, so the commit checked is the commit judged.
+            base, refused = _agent_base(Path(repo), base)
+            if refused:
+                return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
+                        "reason": refused, "claims": [], "baseline_chosen_by": "agent",
+                        "next_steps": [{"action": "see_reason",
+                                        "why": "pass a base_ref already pushed (origin/main), "
+                                               "or have the operator set ADVERSARY_GATE_BASE_REF"}]}
         with tempfile.TemporaryDirectory(prefix="adversary-mcp-") as scratch:
             evidence = prepare(Path(repo), base, Path(scratch), python=interpreter,
-                               pytest_args=pytest_args or (), **_boundary(policy))
+                               pytest_args=pytest_args or (), timeout=timeout_seconds,
+                               **_boundary(policy))
             argv = [
                 "--baseline", str(evidence.baseline), "--patch", str(evidence.patch),
                 "--diff", str(evidence.diff), "--coverage-json", str(evidence.coverage),
@@ -219,6 +239,25 @@ def verify_repo(
     except (EvidenceError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
                 "reason": f"the gate could not run: {exc}", "claims": []}
+
+
+def _agent_base(repo: Path, base: str) -> "tuple[str, str]":
+    """``(commit, "")`` for an agent-chosen ``base`` a remote-tracking branch
+    contains, or ``(base, why it is refused)``.
+
+    An agent that can push, or write ``.git/refs/remotes``, gets past this, as
+    the module docstring says of ``.git`` in general; one that can only commit
+    does not.
+    """
+    commit = _git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").strip()
+    remote = _git(repo, "for-each-ref", "--count=1", "--format=%(refname)",
+                  "--contains", commit, "refs/remotes").strip()
+    if remote:
+        return commit, ""
+    return base, (f"the baseline {base!r} ({commit[:12]}) is on no remote-tracking branch: "
+                  "a baseline the agent committed itself is an oracle the agent wrote, so "
+                  "nothing was run. Pass a base_ref already pushed (e.g. origin/main), or have "
+                  "the operator pin one with ADVERSARY_GATE_BASE_REF")
 
 
 def _too_slow(timeout_seconds: int) -> Dict[str, Any]:

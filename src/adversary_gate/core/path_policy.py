@@ -163,13 +163,35 @@ _SKIP_DIRS = frozenset(
 )
 
 
+#: What a virtualenv holds below its ``pyvenv.cfg``. Only these are skipped:
+#: until 3.0.11 a ``pyvenv.cfg`` -- empty, or kept out of the diff by
+#: ``.gitignore`` -- hid the whole directory, and a ``conftest.py`` beside it
+#: configured the runner unseen.
+_VENV_PARTS = frozenset({"bin", "Scripts", "lib", "lib64", "Lib", "include", "Include", "share", "etc", "man"})
+
+
+def _walk_into(here: Path, dirs: List[str]) -> List[str]:
+    """The subdirectories of ``here`` a tree walk descends into."""
+    venv = (here / "pyvenv.cfg").is_file()
+    return sorted(d for d in dirs if d not in _SKIP_DIRS and not (venv and d in _VENV_PARTS))
+
+
+def in_virtualenv(root: Path, rel: str) -> bool:
+    """True when ``rel`` lies in a virtualenv's own parts (:data:`_VENV_PARTS`)."""
+    parts = PurePosixPath(str(rel).replace("\\", "/")).parts
+    here = Path(root)
+    for part in parts[:-1]:
+        if part in _VENV_PARTS and (here / "pyvenv.cfg").is_file():
+            return True
+        here = here / part
+    return False
+
+
 def _harness_files(root: Path) -> dict:
     found = {}
     for current, dirs, files in os.walk(root):
         here = Path(current)
-        dirs[:] = sorted(
-            d for d in dirs if d not in _SKIP_DIRS and not (here / d / "pyvenv.cfg").is_file()
-        )
+        dirs[:] = _walk_into(here, dirs)
         for name in files:
             if name in HARNESS_FILENAMES or name.endswith(HARNESS_SUFFIXES):
                 path = here / name
@@ -237,8 +259,7 @@ def _import_roots(root: Path) -> set:
     dirs = {""}
     for current, subdirs, files in os.walk(root):
         here = Path(current)
-        subdirs[:] = [d for d in subdirs
-                      if d not in _SKIP_DIRS and not (here / d / "pyvenv.cfg").is_file()]
+        subdirs[:] = _walk_into(here, subdirs)
         if not any(_is_collected(name) for name in files):
             continue
         base = here
@@ -260,8 +281,7 @@ def _plain_directories(root: Path) -> set:
     dirs = {""}
     for current, subdirs, _files in os.walk(root):
         here = Path(current)
-        subdirs[:] = [d for d in subdirs
-                      if d not in _SKIP_DIRS and not (here / d / "pyvenv.cfg").is_file()]
+        subdirs[:] = _walk_into(here, subdirs)
         if here != root and not (here / "__init__.py").is_file():
             dirs.add(here.relative_to(root).as_posix())
     return dirs

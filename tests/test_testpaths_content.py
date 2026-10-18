@@ -133,6 +133,35 @@ class TestProductionImportedTests(unittest.TestCase):
             # Without the declaration, support.py is product-imported -> source.
             self.assertEqual(production_imported_tests(root), frozenset({"tests/support.py"}))
 
+    def test_a_test_package_imported_whole_makes_its_modules_product(self):
+        """``import tests`` names only the package; what it reaches once a
+        conftest loads a submodule has many spellings -- an attribute, an alias
+        by assignment, ``getattr``, a star import. Following each did not
+        converge, so a package imported whole is product, helpers included
+        (3.0.11)."""
+        whole = ("import tests\n\n\ndef f():\n    return tests.rates.X\n",
+                 "import tests as t\n\n\ndef f():\n    return t.rates.X\n",
+                 "import tests\nT = tests\n\n\ndef f():\n    return T.rates.X\n",
+                 "import tests\n\n\ndef f():\n    return getattr(tests, 'rates').X\n",
+                 "from tests import *\n\n\ndef f():\n    return rates.X\n")
+        named = ("from tests import rates as r\n\n\ndef f():\n    return r.X\n",
+                 "import importlib\n\n\ndef f():\n    return importlib.import_module('tests.rates').X\n")
+        for app in (*whole, *named):
+            with self.subTest(app=app.splitlines()[-1]), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                _tree(root, {
+                    "app.py": app,
+                    "tests/__init__.py": "",
+                    "tests/rates.py": "X = 1\n",
+                    "tests/helper.py": "Y = 1\n",
+                    "other/helper.py": "Z = 1\n",
+                    "other/test_o.py": "def test_o():\n    pass\n",
+                })
+                found = production_imported_tests(root)
+                self.assertIn("tests/rates.py", found)
+                self.assertEqual("tests/helper.py" in found, app in whole, found)
+                self.assertNotIn("other/helper.py", found)
+
 
 class TestIsTestFileIn(unittest.TestCase):
     def test_disguised_module_is_source_real_test_is_test(self):

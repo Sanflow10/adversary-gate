@@ -124,9 +124,21 @@ rm -rf "$BASE_INDEX_DIR"
 # --text goes to the Python files only: on an image it writes the bytes out as
 # lines no test can run, and a patch whose code was all covered fell to 0.25.
 # The MCP server's evidence code splits the files the same way.
-git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --no-color "$BASE_SHA...HEAD" \
+# --attr-source on an empty tree (git 2.40+): `-diff` hid any file's lines, not
+# only a Python file's (3.0.11). With no attributes, git's own content test is
+# left: binary only with a NUL byte. Older git keeps the split alone.
+ATTRS=()
+if [ "$(git -C "$WORKSPACE" rev-parse --show-object-format 2>/dev/null)" = "sha256" ]; then
+  EMPTY_TREE=6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321
+else
+  EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+fi
+if git --attr-source="$EMPTY_TREE" version >/dev/null 2>&1; then
+  ATTRS=(--attr-source="$EMPTY_TREE")
+fi
+git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-textconv --no-color "$BASE_SHA...HEAD" \
   -- ':(exclude,glob)**/*.py' > "$DIFF_FILE"
-git -C "$WORKSPACE" diff --no-ext-diff --no-textconv --text --no-color "$BASE_SHA...HEAD" \
+git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-textconv --text --no-color "$BASE_SHA...HEAD" \
   -- ':(glob)**/*.py' >> "$DIFF_FILE"
 if [ ! -s "$DIFF_FILE" ]; then
   echo "adversary-gate: warning: the diff is empty; the gate will see no changed lines" >&2

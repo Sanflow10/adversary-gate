@@ -39,7 +39,13 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
-from adversary_gate.verifiers.coverage import covered_diff_ratio, uncovered_lines, validate_diff
+from adversary_gate.verifiers.coverage import (
+    UnparseableDiff,
+    covered_diff_ratio,
+    hidden_text_diffs,
+    uncovered_lines,
+    validate_diff,
+)
 from adversary_gate.verifiers.discovery import discover_claims
 from adversary_gate.verifiers.strength import (
     DEFAULT_CONFIDENCE,
@@ -286,6 +292,17 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
                 f"--full-suite-memory ({args.full_suite_memory} bytes) is the "
                 "measured cause on large suites); the collateral check did not run"
             )
+        if (decision is Decision.INCONCLUSIVE and base_code != 0 and patch_code != 0
+                and all(v.outcome is Outcome.VERIFIED for v in verdicts)):
+            # Red on both sides (3.0.11): this fell through to a held claim's
+            # reason, "the patch fixes the test", and named nothing to do. A
+            # claim that did not hold still explains itself first.
+            return (
+                f"the full suite already failed on the baseline (exit {base_code}) and "
+                f"fails on the patch (exit {patch_code}), so it cannot tell whether the "
+                "patch broke anything outside the claims; point --full-suite-path at "
+                "tests that pass on the baseline"
+            )
     if (
         decision is Decision.INCONCLUSIVE
         and verdicts
@@ -300,9 +317,20 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
         if coverage_ratio is None and args.coverage_floor > 0:
             return f"{proven}, but no diff coverage was measured; the {args.coverage_floor:.2f} floor needs it"
         if coverage_ratio is not None and coverage_ratio < args.coverage_floor:
+            # A configuration or data file counts on purpose -- it can change
+            # what the code does -- but a reason that only said "changed lines
+            # no test executes" read as a bug when it was package.json (3.0.11).
+            from adversary_gate.verifiers.strength import _is_non_source  # noqa: PLC0415 -- the one list
+
+            config = sorted(name for name in _uncovered(args) if _is_non_source(name))
+            note = ""
+            if config:
+                shown = ", ".join(config[:3]) + (f" (+{len(config) - 3} more)" if len(config) > 3 else "")
+                note = (f"; {len(config)} of the files are configuration or data ({shown}), "
+                        "which count because they can change behaviour")
             return (
                 f"{proven}, but diff coverage is {coverage_ratio:.2f}, below the "
-                f"{args.coverage_floor:.2f} floor: changed lines no test executes"
+                f"{args.coverage_floor:.2f} floor: changed lines no test executes{note}"
             )
         if strength_unverified:
             why = (mutation or {}).get("reason") or "the changed code could not be mutated and measured"
@@ -401,6 +429,10 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
             steps.append({"action": "raise_limit",
                           "flags": ["--full-suite-timeout", "--full-suite-memory"],
                           "why": "the collateral full suite could not run on either side"})
+        elif base_code != 0 and patch_code != 0:
+            steps.append({"action": "see_reason", "flags": ["--full-suite-path"],
+                          "why": "the full suite already fails on the baseline, so it cannot "
+                                 "judge the patch; point --full-suite-path at tests that pass there"})
     if decision is Decision.BLOCK:
         return steps
     if not verdicts:
@@ -555,6 +587,17 @@ def _resolve_coverage(args: argparse.Namespace):
     }
 
 
+def _aggression(value: str) -> str:
+    """``paranoid`` was accepted and ran as ``normal``: nothing reads it. Refused
+    (3.0.11), so a run that asked for more rigour is not told it got it."""
+    if value == AggressionLevel.PARANOID.value:
+        raise argparse.ArgumentTypeError(
+            "'paranoid' is not implemented and ran as 'normal' until 3.0.11; "
+            "use 'normal' or 'nuclear'"
+        )
+    return value
+
+
 def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     """File paths named by ``--diff``, or ``None`` when the caller gave none.
 
@@ -567,7 +610,19 @@ def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     if not args.diff:
         return None
     text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-    return sorted(validate_diff(text))
+    files = validate_diff(text)
+    hidden = hidden_text_diffs(
+        text, Path(args.patch), Path(args.baseline) if getattr(args, "baseline", None) else None,
+    ) if args.patch else []
+    if hidden:
+        raise UnparseableDiff(
+            "the diff writes 'Binary files ... differ' for " + ", ".join(hidden) + ", text on "
+            "the patch side or on the baseline's: their changed lines are not in the diff. "
+            ".gitattributes (-diff, binary) does this, and so does a text file rewritten with "
+            "a NUL byte; re-generate the diff with 'git --attr-source=<empty tree> diff', "
+            "and keep text files text"
+        )
+    return sorted(files)
 
 
 def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
@@ -704,7 +759,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--criterion", action="append", default=[], metavar="ID:TEXT")
     parser.add_argument("--rationale", default="")
     parser.add_argument(
-        "--aggression", default="normal", choices=[x.value for x in AggressionLevel]
+        "--aggression", default="normal", type=_aggression,
+        choices=[x.value for x in AggressionLevel if x is not AggressionLevel.PARANOID],
+        help="'nuclear' only refuses a MERGE while --rounds-used is below --max-rounds. "
+        "Both default to 4 and --rounds-used is the caller's own count, never measured "
+        "by the gate, so with the defaults 'nuclear' decides exactly as 'normal'.",
     )
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--changed-path", action="append", default=[])
@@ -796,6 +855,14 @@ def build_parser() -> argparse.ArgumentParser:
         "mutant) and there are at least N, judge the exact ratio instead of the "
         "Wilson lower bound: an interval bounds a sample, and a census is not one. "
         "0 (default) keeps the interval always.",
+    )
+    parser.add_argument(
+        "--mutate-constants",
+        action="store_true",
+        help="also mutate integer literals on changed lines (n -> n+1), so a test "
+        "that pins a value scores above one that only checks it changed. Off by "
+        "default: a constant no test can observe (a timeout, a buffer size) "
+        "survives and counts against the tests, so turning it on changes verdicts.",
     )
     parser.add_argument(
         "--full-suite-timeout",
@@ -896,7 +963,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME=VALUE",
         help="set a variable in the test runs; repeatable. Only names are recorded.",
     )
-    parser.add_argument("--rounds-used", type=int, default=4)
+    parser.add_argument(
+        "--rounds-used", type=int, default=4,
+        help="adversarial rounds the caller ran, as the caller declares it: the gate "
+        "does not count them. Only --aggression nuclear reads it.",
+    )
     parser.add_argument(
         "--require-network-isolation",
         action="store_true",
@@ -1074,6 +1145,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         full_suite_ran = bool(full_command) or bool(args.full_suite_path)
         rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
         oracle_full_code: Optional[int] = None
+        suite_unsettled: Optional[str] = None
 
         # The suite runs under its own limits (AG-033): the per-test ones killed
         # it on both sides (time) or made pytest die with MemoryError (address
@@ -1262,6 +1334,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 targets=sorted({node(claim) for claim in claims} - set(by_baseline)),
                 run_kwargs=run_options,
                 census_min=max(0, args.census_min_mutants),
+                mutate_constants=args.mutate_constants,
                 alongside=suite_future,
                 parallel=execution["mutation_workers"],
                 **limits,
@@ -1314,17 +1387,38 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # pass is the *baseline's*, run against the patch's code. The
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
+            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int]]:
+                if rewritten_tests:
+                    with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
+                        tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                        return _patch_suite(Path(args.patch), tree)
+                return _patch_suite(Path(args.patch), None)
+
             if suite_future is not None:
                 patch_full, oracle_full_code = suite_future.result()
-            elif rewritten_tests:
-                with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
-                    tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
-                    patch_full, oracle_full_code = _patch_suite(Path(args.patch), tree)
             else:
-                patch_full, oracle_full_code = _patch_suite(Path(args.patch), None)
+                patch_full, oracle_full_code = _patch_suite_alone()
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
+                # The patch side ran alongside the mutants and the baseline
+                # alone: a wall-clock limit that fired under that load read as
+                # a regression and BLOCKed (3.0.11). It runs again, alone. Still
+                # failing is a regression; passing now is a suite that failed
+                # once, slow or flaky, which is not a pass either.
+                if suite_future is not None and base_full.exit_code == PYTEST_OK:
+                    again, again_oracle = _patch_suite_alone()
+                    execution["full_suite_rerun_alone"] = again.exit_code
+                    if again.exit_code == PYTEST_OK:
+                        full_codes = None
+                        oracle_full_code = again_oracle
+                        suite_unsettled = (
+                            f"the patch's full suite failed (exit {patch_full.exit_code}) while "
+                            "it ran alongside the mutants and passed when run again alone: a "
+                            "time limit under load, or a flaky test; re-run with --serial-sides"
+                        )
+                    else:
+                        full_codes = (base_full.exit_code, again.exit_code)
         mutation_seconds = time.monotonic() - started
 
         decision = gate.decide(
@@ -1340,6 +1434,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # the claims that were kept could MERGE without them.
         cut = int((discovery or {}).get("truncated") or 0)
         unjudged_reason = None
+        unjudged_flags = ["--max-claims", "--full-suite-path"]
         if decision is Decision.MERGE and cut and not full_suite_ran:
             decision = Decision.INCONCLUSIVE
             unjudged_reason = (
@@ -1347,6 +1442,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 f"({args.max_claims}) and the full suite is off, so nothing judged them; "
                 "raise --max-claims or run the full suite"
             )
+        if decision is Decision.MERGE and suite_unsettled:
+            decision = Decision.INCONCLUSIVE
+            unjudged_reason = suite_unsettled
+            unjudged_flags = ["--serial-sides", "--full-suite-timeout"]
 
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
@@ -1393,7 +1492,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "next_steps": _next_steps(
                 decision, verdicts, full_codes, args,
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
-            ) + ([{"action": "raise_limit", "flags": ["--max-claims", "--full-suite-path"],
+            ) + ([{"action": "raise_limit", "flags": unjudged_flags,
                    "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": summary["claims_total"],

@@ -1097,7 +1097,7 @@ class TestAClaimThatHashesTheTreeIsNotMeasured(unittest.TestCase):
 
     BASE = ("def add(a, b):\n    return a - b\n\n\ndef total(values):\n    out = 0\n"
             "    for v in values:\n        out = out + v * 2 - 1\n    return out + len(values) * 3\n")
-    PATCH = BASE.replace("return a - b", "return a + b")
+    PATCH = BASE.replace("return a - b", "return b + a")
 
     def _measure(self, test_text: str):
         import ast as _ast
@@ -1234,6 +1234,24 @@ class TestAPythonFileGitHidesIsNotJudgedBlind(unittest.TestCase):
         self.assertIn("calc.py", str(caught.exception))
         self.assertIn("--text", str(caught.exception))
 
+    def test_the_gate_refuses_a_text_file_its_diff_calls_binary(self):
+        # 3.0.11: a caller's diff could hide a settings.json the same way.
+        import argparse
+
+        from adversary_gate.cli import _diff_paths
+        from adversary_gate.verifiers.coverage import UnparseableDiff
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "patch").mkdir()
+            (root / "patch" / "settings.json").write_text('{"a": 2}\n')
+            (root / "change.diff").write_text(
+                "diff --git a/settings.json b/settings.json\n"
+                "Binary files a/settings.json and b/settings.json differ\n")
+            args = argparse.Namespace(diff=str(root / "change.diff"), patch=str(root / "patch"))
+            with self.assertRaises(UnparseableDiff) as caught:
+                _diff_paths(args)
+        self.assertIn("settings.json", str(caught.exception))
+
     def test_a_binary_asset_that_is_not_python_is_not_refused(self):
         from adversary_gate.verifiers.coverage import validate_diff
         diff = ("diff --git a/logo.png b/logo.png\nindex 1..2 100644\n"
@@ -1266,6 +1284,35 @@ class TestAPythonFileGitHidesIsNotJudgedBlind(unittest.TestCase):
             diff = (out / "change.diff").read_text()
             self.assertNotIn("Binary files", diff)
             self.assertIn("+    return a + b", diff)
+
+    def test_the_evidence_script_keeps_the_lines_of_a_config_file_marked_minus_diff(self):
+        # 3.0.11: the split gave --text to Python files only, so ``-diff`` on a
+        # settings.json hid lines the ratio counts.
+        import subprocess
+        script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_evidence.sh"
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            (repo / "settings.json").write_text('{"a": 1}\n')
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "base"], cwd=repo, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            (repo / "settings.json").write_text('{"a": 2}\n')
+            (repo / ".gitattributes").write_text("settings.json -diff\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "patch"], cwd=repo, check=True)
+            out = Path(directory) / "out"
+            result = subprocess.run(
+                ["bash", str(script), "--base-sha", base, "--baseline-dir", str(out / "baseline"),
+                 "--diff-file", str(out / "change.diff"), "--skip-coverage", "--workspace", str(repo)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            diff = (out / "change.diff").read_text()
+            self.assertNotIn("Binary files", diff)
+            self.assertIn('+{"a": 2}', diff)
 
     def test_the_evidence_script_leaves_a_binary_asset_binary(self):
         # ``--text`` on every file turned a changed image into lines of text that
@@ -1425,6 +1472,27 @@ class TestMessagesThatNameTheRealCause(unittest.TestCase):
         self.assertIn("SIGABRT", reason)
         self.assertIn("--full-suite-memory", reason)
         self.assertNotIn("Raise the limit", reason)
+
+    def test_low_coverage_names_the_configuration_files_it_counted(self):
+        """A package.json counts against coverage on purpose; the reason says so
+        instead of reading like a bug (3.0.11)."""
+        from types import SimpleNamespace
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.gate import Decision
+        verdict = mock.Mock(outcome=Outcome.VERIFIED)
+        verdict.classification.value = "fixed"
+        args = SimpleNamespace(coverage_floor=0.8, suite_strength_floor=0.75)
+        with mock.patch("adversary_gate.cli._uncovered",
+                        return_value={"package.json": [3], "app.py": [7]}):
+            reason = _reason(Decision.INCONCLUSIVE, [verdict], None, None, args,
+                             coverage_ratio=0.5)
+        self.assertIn("package.json", reason)
+        self.assertIn("configuration or data", reason)
+        self.assertNotIn("app.py", reason)
+        with mock.patch("adversary_gate.cli._uncovered", return_value={"app.py": [7]}):
+            reason = _reason(Decision.INCONCLUSIVE, [verdict], None, None, args,
+                             coverage_ratio=0.5)
+        self.assertNotIn("configuration", reason)
 
 
 class TestADocumentCannotPassAsCoverage(unittest.TestCase):

@@ -496,9 +496,14 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
     patch did not write, and tests that cover the untouched lines would kill
     those mutants and report a high score for a diff nobody checked. Only the
     lines the patch actually introduced are mutation targets.
+
+    Rows are counted at ``\\n`` only, as tokenize, ast and the canary count
+    them. ``splitlines`` also breaks at a form feed, U+2028 and others, so after
+    one of those the rows drifted and the mutants broke the line below the one
+    the patch wrote (3.0.11; the diff parser had the same fix in 3.0.7).
     """
-    old = baseline_text.splitlines()
-    new = patch_text.splitlines()
+    old = baseline_text.split("\n")
+    new = patch_text.split("\n")
     differing: set = set()
     matcher = difflib.SequenceMatcher(None, old, new, autojunk=False)
     for tag, _i1, _i2, start, stop in matcher.get_opcodes():
@@ -841,8 +846,28 @@ def _is_operand_end(token: Optional[tokenize.TokenInfo]) -> bool:
     return token.type == tokenize.OP and token.string in _OPERAND_END
 
 
-def _mutants_in(source: str, limit: int) -> List[Mutation]:
-    """Ordered, deterministic mutation sites in one module."""
+def _number_mutation(text: str) -> Optional[str]:
+    """``n`` -> ``n + 1`` for an integer literal, or ``None``.
+
+    Until 3.0.11 no mutant touched a constant, so on a patch that only swapped
+    an operator the one mutant was the baseline itself, and a test asserting
+    ``!= 1`` scored the same as one asserting ``== 3``. Integers only: a float
+    or complex literal moved by one is often a value no test pins.
+    """
+    try:
+        value = int(text, 0)
+    except ValueError:
+        return None
+    return str(value + 1)
+
+
+def _mutants_in(source: str, limit: int, constants: bool = False) -> List[Mutation]:
+    """Ordered, deterministic mutation sites in one module.
+
+    ``constants`` adds :func:`_number_mutation`; off by default (3.0.11): a
+    literal no test can observe, a timeout or a buffer size, survives and is
+    counted against the tests, so turning it on changes verdicts.
+    """
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
@@ -858,6 +883,8 @@ def _mutants_in(source: str, limit: int) -> List[Mutation]:
                 replacement = None
         elif token.type == tokenize.NAME:
             replacement = _KEYWORD_MUTATIONS.get(token.string)
+        elif token.type == tokenize.NUMBER:
+            replacement = _number_mutation(token.string) if constants else None
         if token.type not in _TRIVIA:
             previous = token
         if replacement is None:
@@ -1146,6 +1173,7 @@ def measure_mutation_score(
     parallel: int = 1,
     oracle_dir: Optional[Path] = None,
     oracle_targets: Optional[Sequence[str]] = None,
+    mutate_constants: bool = False,
 ) -> Tuple[SuiteStrength, Dict[str, object]]:
     """Break the patch's own code and see whether ``test_path`` notices.
 
@@ -1275,6 +1303,8 @@ def measure_mutation_score(
     #: changing ``>=`` to ``>`` merged next to a tested file (3.0.3).
     undecodable: List[str] = []
     removal_only: List[str] = []
+    #: Sites on changed lines whose only mutant was the baseline again.
+    rebuilt: List[str] = []
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -1312,7 +1342,16 @@ def measure_mutation_score(
         # Scan generously, then keep only sites on lines this patch wrote,
         # grouped by line.
         operator_rows = set()
-        for site in _mutants_in(source, 10_000):
+        source_lines = source.split("\n")
+        for site in _mutants_in(source, 10_000, constants=mutate_constants):
+            # A mutant that rebuilds the baseline (the patch turned ``-`` into
+            # ``+``; the mutant turns it back) proves only what the claim
+            # already did -- the test tells old from new -- and says nothing of
+            # how strong the test is. Not counted (3.0.11).
+            if "\n".join(_apply(source_lines, *site)) == before:
+                if site[0][0] in edited:
+                    rebuilt.append(f"{rel}:{site[0][0]}")
+                continue
             if site[0][0] in edited:
                 by_line.setdefault((rel, site[0][0]), []).append(site)
                 operator_rows.add(site[0][0])
@@ -1696,6 +1735,19 @@ def measure_mutation_score(
     if not codes:
         # Nothing was stillborn: no mutant could be counted. Until 3.0.9 this
         # fell through to "every mutant was stillborn (exit codes [])".
+        if rebuilt:
+            # The changed lines had operators, but breaking them only turned
+            # the patch back into the baseline (``+`` back to ``-``), which the
+            # claim already tells apart. "No operator site" sent the reader
+            # looking for a missing operator (3.0.11).
+            detail["baseline_mutants_skipped"] = sorted(set(rebuilt))
+            return finish(
+                result,
+                "no mutant could be counted: the only operator mutants on the changed lines "
+                "(" + ", ".join(sorted(set(rebuilt))[:5]) + ") turn the patch back into the "
+                "baseline, which proves only what the claim already did; statement-level "
+                "mutants never count toward a sampled score",
+            )
         return finish(
             result,
             "no mutant could be counted: the changed lines hold no operator site, and "

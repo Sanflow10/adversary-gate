@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import threading
@@ -97,7 +98,11 @@ class Evidence:
 #: (``refs/replace``, grafts) would let the repository answer for a commit with
 #: another one's content; the gate reads the objects the ids name.
 _GIT_FIXED = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat", "GIT_NO_REPLACE_OBJECTS": "1"}
-_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull)
+# core.quotepath=false: a path outside ASCII is written as itself, not as
+# "b/caf\303\251.py" -- the parser undoes the quoting git still applies to a
+# quote, a backslash or a control character (3.0.11).
+_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull,
+               "-c", "core.quotepath=false")
 
 
 def _git_env(extra: Optional[dict] = None) -> dict:
@@ -117,6 +122,21 @@ def _git(repo: Path, *args: str, binary: bool = False, env: Optional[dict] = Non
     return proc.stdout
 
 
+def _empty_tree(object_format: str) -> str:
+    if object_format == "sha256":
+        return "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+    return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _attr_source_works(repo: Path) -> bool:
+    """``--attr-source`` exists from git 2.40; older git keeps the per-file split."""
+    try:
+        _git(repo, "--attr-source=" + _empty_tree("sha1"), "version")
+        return True
+    except EvidenceError:
+        return False
+
+
 def _new_file_hunk(rel: str, path: Path) -> str:
     """An untracked file as ``git diff`` would show it once added.
 
@@ -124,6 +144,12 @@ def _new_file_hunk(rel: str, path: Path) -> str:
     was followed, so a link put a file from outside the repository into the
     diff, and a FIFO or device hung the server on read. Anything that is not a
     regular file is left out. Lines end at ``\\n`` only, as in the diff parser.
+
+    Binary is what git calls binary: a NUL in the first 8000 bytes. Until
+    3.0.11 a file that was not UTF-8 counted as binary and left the diff, so a
+    new ``# coding: latin-1`` module had no line in the coverage ratio and its
+    path reached no path check, while the same file tracked was in the diff --
+    those are read as bytes and decoded with replacement, and so is this.
     """
     try:
         if path.is_symlink():
@@ -131,9 +157,12 @@ def _new_file_hunk(rel: str, path: Path) -> str:
         elif not path.is_file():
             return ""
         else:
-            text = path.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError):
-        return ""  # binary or unreadable: nothing line-based to cover
+            data = path.read_bytes()
+            if b"\0" in data[:8000]:
+                return ""  # binary: nothing line-based to cover
+            text = data.decode("utf-8", "replace")
+    except OSError:
+        return ""  # unreadable
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
@@ -224,6 +253,27 @@ def _write_tree(repo: Path, commit: str, dest: Path, object_format: str) -> None
             raise EvidenceError(f"unexpected mode {mode} for {rel!r} in the baseline tree")
 
 
+def _copy_files(repo: Path, dest: Path, rels: Sequence[str]) -> None:
+    """Copy ``rels`` from the working tree, symlinks as symlinks.
+
+    A path listed but gone (a deletion not yet staged) is left out, as a
+    commit would leave it; a directory (a submodule) is not the repository's
+    own file, as for the baseline.
+    """
+    for rel in rels:
+        parts = rel.split("/")
+        if rel.startswith("/") or ".." in parts or ".git" in (p.lower() for p in parts):
+            raise EvidenceError(f"refusing to copy {rel!r} into the patch tree")
+        source = repo / rel
+        target = dest / rel
+        if source.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(os.readlink(source), target)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
 def prepare(
     repo: Path,
     base_ref: str,
@@ -258,8 +308,12 @@ def prepare(
     # hide their lines (C), but on an image --text writes bytes that are not text,
     # and decoding them stopped the run (a UnicodeDecodeError in 3.0.0). Read as
     # bytes, so a source in another encoding does not stop it either.
+    # .gitattributes is the patch's to write, and ``-diff`` hides any file's
+    # lines, not only a Python file's (3.0.11). An empty tree as the attribute
+    # source leaves git's own content test: binary only with a NUL byte.
+    attrs = ("--attr-source=" + _empty_tree(object_format),) if _attr_source_works(repo) else ()
     diff_text = "".join(
-        _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
+        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
              "--no-color", commit, "--", pathspec, binary=True).decode("utf-8", "replace")
         for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
     )
@@ -270,6 +324,18 @@ def prepare(
     diff_text += "".join(_new_file_hunk(rel, repo / rel) for rel in sorted(untracked))
     diff = workdir / "change.diff"
     diff.write_text(diff_text, encoding="utf-8")
+
+    # The patch side is what a commit would hold: the tracked files as they
+    # are now and the untracked ones git does not ignore. Until 3.0.11 it was
+    # the working tree itself, so a file kept out by .gitignore or
+    # .git/info/exclude ran in every test yet was in no diff, no coverage and
+    # no denylist -- and a MERGE judged code that would never be committed.
+    patch = workdir / "patch"
+    patch.mkdir()
+    tracked = [
+        rel for rel in _git(repo, "ls-files", "--cached", "-z").split("\0") if rel
+    ]
+    _copy_files(repo, patch, sorted(set(tracked) | set(untracked)))
 
     coverage_path: Optional[Path] = None
     if coverage:
@@ -292,7 +358,7 @@ def prepare(
         command = shlex.join([python, "-m", "coverage", "run", "--rcfile", str(rc), "-m", "pytest",
                               "-q", "-p", "no:cacheprovider", *pytest_args])
         try:
-            run = run_test(repo, "", command=command, sandbox=sandbox, python=python, env=env,
+            run = run_test(patch, "", command=command, sandbox=sandbox, python=python, env=env,
                            timeout_seconds=timeout, cpu_seconds=None, mem_bytes=None,
                            file_bytes=_COVERAGE_FILE_BYTES, open_files=4096,
                            require_network_isolation=require_network_isolation,
@@ -314,7 +380,7 @@ def prepare(
         }), encoding="utf-8")
         report = subprocess.run(
             [python, "-c", _EXTRACT, str(workdir / ".coverage"), str(wanted),
-             str(repo), str(coverage_path)],
+             str(patch), str(coverage_path)],
             # Not from the repository: ``-c`` puts the working directory first
             # on sys.path, and a ``json.py`` the patch added would run here, in
             # the gate's own process, outside any sandbox.
@@ -324,4 +390,4 @@ def prepare(
             raise EvidenceError(
                 "coverage produced no report: " + (report.stderr or run.stderr)[-500:].strip()
             )
-    return Evidence(baseline, repo, diff, coverage_path, sorted(untracked), commit)
+    return Evidence(baseline, patch, diff, coverage_path, sorted(untracked), commit)

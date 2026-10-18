@@ -263,6 +263,59 @@ class TestAPatchCannotWriteAVirtualenvMarker(unittest.TestCase):
                 self.assertTrue(policy.violations([path]), path)
 
 
+class TestAVirtualenvMarkerHidesOnlyAVirtualenv(unittest.TestCase):
+    """W1 (3.0.11): an empty ``tests/pyvenv.cfg``, or one kept out of the diff by
+    .gitignore, made the tree walk skip ``tests/`` and a ``conftest.py`` there
+    configured the runner unseen. Only a virtualenv's own parts are skipped."""
+
+    def _drift(self, patch: dict) -> set:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, files in (("baseline", {}), ("patch", patch)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text("x = 1\n")
+                for rel, text in files.items():
+                    (root / side / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (root / side / rel).write_text(text)
+            return {v.path for v in harness_drift(root / "baseline", root / "patch")}
+
+    def test_a_conftest_beside_a_pyvenv_cfg_is_seen(self):
+        self.assertIn("tests/conftest.py",
+                      self._drift({"tests/pyvenv.cfg": "", "tests/conftest.py": "x = 1\n"}))
+
+    def test_a_real_virtualenv_is_still_skipped(self):
+        self.assertEqual(self._drift({
+            ".venv/pyvenv.cfg": "home = /usr/bin\n",
+            ".venv/lib/python3.12/site-packages/x.pth": "import os\n",
+            ".venv/lib/python3.12/site-packages/pkg/conftest.py": "x = 1\n",
+        }), set())
+
+    def test_the_harness_reason_is_not_hidden_by_a_red_suite(self):
+        """W4: the claim was refused for the harness, but the top-level reason
+        named the full suite failing on both sides instead (3.0.11)."""
+        import argparse
+
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.types import FailureClass, GateVerdict
+        verdict = GateVerdict(CriticClaim("tests/test_calc.py", "test_f0"), FailureClass.INVALID,
+                              Outcome.UNVERIFIED, "test harness differs from the baseline: x")
+        args = argparse.Namespace(full_suite_timeout=1, full_suite_cpu_seconds=1,
+                                  full_suite_memory=1, coverage_floor=0.8)
+        reason = _reason(Decision.INCONCLUSIVE, [verdict], verdict, (1, 5), args,
+                         coverage_ratio=1.0, strength_judged=None, strength_unverified=False,
+                         mutation=None)
+        self.assertIn("harness", reason)
+
+    def test_a_claim_inside_a_virtualenv_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests" / "lib").mkdir(parents=True)
+            (root / "tests" / "pyvenv.cfg").write_text("")
+            (root / "tests" / "lib" / "test_f.py").write_text("def test_f0():\n    pass\n")
+            error = Gate([]).validate_claim(CriticClaim("tests/lib/test_f.py", "test_f0"), root)
+        self.assertIn("virtualenv", error or "")
+
+
 class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
     """AG-048: ``python -m pytest`` puts the tree's root first on ``sys.path``,
     so a top-level ``inspect.py`` or ``pytest/`` the patch adds runs in place of

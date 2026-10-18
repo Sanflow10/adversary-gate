@@ -38,6 +38,77 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.11] — 2026-10-18
+
+Holes and false verdicts found by reading the code and by crafted repositories
+run through the MCP server. Each change has a test that fails on 3.0.10.
+
+> **Breaking for MCP callers.** `verify_repo` now refuses an agent-chosen
+> `base_ref` that is not on a remote-tracking branch (a local `HEAD` or an
+> unpushed commit) and answers `inconclusive` without running anything. Pass a
+> pushed ref such as `origin/main`, or have the operator set
+> `ADVERSARY_GATE_BASE_REF`. A repository with no remote cannot be judged from
+> an agent-chosen base. The patch side is also no longer the working tree but a
+> copy of what a commit would hold: files git ignores are not in it.
+
+### Security
+
+- **The MCP server judges what a commit would hold.** The patch side was the
+  working tree itself, so a file kept out by `.gitignore` or
+  `.git/info/exclude` ran in every test while appearing in no diff, no
+  coverage and no denylist check, and a `MERGE` described code that would not
+  be committed. It is now a copy of the tracked files plus the untracked ones
+  git does not ignore; the coverage pass runs there too.
+- **A `pyvenv.cfg` hides only a virtualenv's own parts.** The harness check
+  skipped any directory holding one, so an empty `tests/pyvenv.cfg` (left out
+  of the diff) made a `tests/conftest.py` beside it invisible, and that
+  conftest could make every mutant pass. Only `bin`, `lib`, `Scripts`,
+  `include` and the like are skipped now, and a claim inside them is refused.
+- **`.gitattributes` no longer hides a file's lines.** The MCP server and the
+  Action diff with an empty tree as the attribute source (git 2.40+), so
+  `-diff` or `binary` on a `settings.json` cannot turn its hunks into "Binary
+  files differ". The gate also refuses a caller's diff that calls a file
+  binary when it is text on the patch side, or was text on the baseline (a
+  text file rewritten with one NUL byte).
+- **A new file in another encoding stays in the MCP diff.** An untracked file
+  that was not UTF-8 counted as binary and left the diff, so its lines were
+  never counted (a latin-1 `settings.json` measured 1.0 coverage). Only a NUL
+  byte makes a file binary now.
+- **Git-quoted paths are unquoted.** A path outside ASCII came through as
+  `"b/caf\303\251.py"`, which no path check recognised. The diff is written
+  with `core.quotepath=false` and the parser undoes git's quoting.
+- **A hunk shorter than its header is refused.** It swallowed the next file's
+  header and lines, which then vanished from coverage and the path checks.
+- **AG-047: more ways the product reaches a test-pathed module.** Attribute
+  chains from an imported name, a test package imported whole, and
+  `importlib.import_module` / `__import__` with a literal name.
+- **The Action runs its own gate** with `python -I`, not a copy the PR could
+  put on `PYTHONPATH`.
+- **MCP `mergeable` needs the gate's own `merge`.** Exit 0 with no parsable
+  payload, or next to another decision, was reported as mergeable.
+- **`--aggression paranoid` is refused.** It was never implemented and ran as
+  `normal`. The unused quarantine store is removed.
+
+### Changed
+
+- **The full suite gets a second run before it blocks.** The patch side runs
+  alongside the mutants; when it failed there and the baseline passed alone,
+  the result was `BLOCK`. It now runs again alone: still failing is `BLOCK`,
+  passing is `INCONCLUSIVE` (a time limit under load, or a flaky test).
+- **A suite red on both sides says so** in the reason and in `next_steps`,
+  instead of quoting a claim that held.
+- **A mutant that rebuilds the baseline is not counted,** and the reason says
+  when that left a changed line with no mutant (`baseline_mutants_skipped`).
+- **`--mutate-constants`** adds integer mutants (`n` → `n+1`); off by default.
+- **The MCP coverage pass uses `timeout_seconds`**, not a fixed 600 s.
+- **Changed rows are counted at newlines only,** as Python counts them.
+- **A low coverage names the configuration and data files** it counted.
+- **`--aggression` and `--rounds-used` help** says the rounds are the
+  caller's count, never measured; with the defaults `nuclear` decides as
+  `normal`.
+
+---
+
 ## [3.0.10] — 2026-10-17
 
 Two fixes, both found by reading the code. Each has a test that fails on 3.0.9.

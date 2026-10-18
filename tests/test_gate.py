@@ -16,6 +16,7 @@ previous version, not theorized:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import subprocess
@@ -37,7 +38,6 @@ from adversary_gate.core.exitmap import classify_exit, describe
 from adversary_gate.core.gate import Gate, GateConfig
 from adversary_gate.core.metrics import compute_metrics, compare_models, format_report
 from adversary_gate.core.path_policy import PathPolicy
-from adversary_gate.core.quarantine import QuarantineStore
 from adversary_gate.core.types import (
     AcceptanceCriterion,
     AggressionLevel,
@@ -532,6 +532,59 @@ class TestSidesTogether(unittest.TestCase):
         self.assertEqual(dirs, [root / "patch"])
         self.assertIs(payload["execution"]["full_suite_alongside"], False)
 
+    def _suite_codes(self, codes):
+        """Run with the full suite's exits forced, in call order: patch alongside,
+        baseline, then patch alone. Claim runs are left real."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side).mkdir()
+                (root / side / "test_calc.py").write_text("def test_add():\n    assert 1 + 1 == 2\n")
+            import dataclasses
+
+            import adversary_gate.cli as cli
+
+            real_run, left = cli.run_test, list(codes)
+
+            def forced(directory, path, name, *a, **k):
+                result = real_run(directory, path, name, *a, **k)
+                if name == "" and left:
+                    return dataclasses.replace(result, exit_code=left.pop(0))
+                return result
+
+            out = root / "out.json"
+            with patch.object(cli, "run_test", forced), \
+                    patch("sys.stdout", new_callable=lambda: open(out, "w")):
+                main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "test_calc.py::test_add", "--max-rounds", "1",
+                    "--rounds-used", "1", "--full-suite-path", "test_calc.py",
+                    *TestCliExitCodes.UNTRUSTED_COVERAGE,
+                ])
+            return json.loads(out.read_text()), left
+
+    def test_a_suite_that_failed_alongside_runs_again_alone(self):
+        """Failed beside the mutants, passed alone: not a regression, not a pass (3.0.11)."""
+        payload, left = self._suite_codes([-9, 0, 0])
+        self.assertEqual(left, [])
+        self.assertEqual(payload["execution"]["full_suite_rerun_alone"], 0)
+        self.assertNotEqual(payload["decision"], "block")
+        self.assertNotEqual(payload["decision"], "merge")
+
+    def test_a_suite_that_fails_again_alone_still_blocks(self):
+        payload, _ = self._suite_codes([1, 0, 1])
+        self.assertEqual(payload["execution"]["full_suite_rerun_alone"], 1)
+        self.assertEqual(payload["decision"], "block")
+        self.assertEqual(payload["full_suite_exit_codes"], [0, 1])
+
+    def test_a_suite_red_on_both_sides_says_so(self):
+        """It fell through to a held claim's reason and named no next step (3.0.11)."""
+        payload, _ = self._suite_codes([1, 1])
+        self.assertNotIn("full_suite_rerun_alone", payload["execution"])
+        self.assertEqual(payload["decision"], "inconclusive")
+        self.assertIn("already failed on the baseline", payload["reason"])
+        self.assertTrue(any("--full-suite-path" in s.get("flags", []) for s in payload["next_steps"]))
+
     def test_an_error_on_one_side_still_raises(self):
         gate = make_gate()
 
@@ -705,25 +758,18 @@ class TestMetrics(unittest.TestCase):
             self.assertIn("unverified merges", text)
 
 
-class TestQuarantineAndContestation(unittest.TestCase):
-    def test_quarantine_only_accepts_refuted(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = QuarantineStore(Path(directory) / "q.json")
-            for classification in (
-                FailureClass.REGRESSION,
-                FailureClass.UNRUNNABLE,
-                FailureClass.FLAKY,
-                FailureClass.CLAIM_DISCARDED,
-            ):
-                gate = make_gate()
-                v = verdict_with(gate, classification)
-                stored = store.add(v, "src")
-                if classification is FailureClass.REGRESSION:
-                    self.assertTrue(stored)
-                else:
-                    self.assertFalse(stored, f"{classification} must not be quarantined")
-            self.assertEqual(len(store.load()), 1)
+class TestParanoidIsRefused(unittest.TestCase):
+    """``--aggression paranoid`` was accepted and ran as ``normal`` (3.0.11)."""
 
+    def test_paranoid_is_a_usage_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = main(["--aggression", "paranoid"])
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("not implemented", err.getvalue())
+
+
+class TestContestation(unittest.TestCase):
     def test_contestation_rejects_unrelated_counter_test(self):
         claim = CriticClaim("tests/critical_bug.py", "t1")
         original = GateVerdict(
@@ -1227,7 +1273,7 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             # patch edits `sub`, which no test touches
-            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            self._tree(root, self.BASE.replace("return a - b", "return b + a"))
             score, detail = self._strength(root, max_mutants=2)
             self.assertTrue(score.is_measured, detail)
             self.assertLess(score.mutation_score, 1.0)
@@ -1295,11 +1341,21 @@ class TestSuiteStrengthIsMeasured(unittest.TestCase):
             for mutant in detail["mutants"]:
                 self.assertEqual(mutant["line"], 2)
 
+    def test_rows_are_counted_as_python_counts_them(self):
+        """A form feed or U+2028 earlier in the file split the line for
+        ``splitlines`` but not for tokenize: the rows drifted and the mutants
+        broke the line below the change (3.0.11)."""
+        for mark in ("\x0c", "\u2028"):
+            with self.subTest(mark=repr(mark)):
+                before = f"# page{mark}break\ndef f(a, b):\n    return a >= b\n    x = 1\n"
+                after = before.replace("a >= b", "a > b")
+                self.assertEqual(changed_lines(before, after), {3})
+
     def test_evidence_artifact_carries_the_measured_value(self):
         """A strength the log cannot show is as unauditable as no strength."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._tree(root, self.BASE.replace("return a - b", "return a + b"))
+            self._tree(root, self.BASE.replace("return a - b", "return b + a"))
             log_path = root / "evidence.jsonl"
             code = main([
                 "--baseline", str(root / "baseline"),

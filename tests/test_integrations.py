@@ -234,7 +234,10 @@ def _git_repo(root: Path) -> Path:
     repo.mkdir()
     (repo / "calc.py").write_text(CALC)
     (repo / "test_calc.py").write_text(TESTS)
-    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"]):
+    # The base is "pushed": an agent-chosen baseline must be on a
+    # remote-tracking branch (3.0.11).
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "base"],
+                 ["update-ref", "refs/remotes/origin/main", "HEAD"]):
         subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
     return repo
 
@@ -394,6 +397,39 @@ class TestGitEvidence(unittest.TestCase):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
             self.assertIn("+    return (a + b)", evidence.diff.read_text())
 
+    def test_an_ignored_file_is_not_in_the_patch_tree(self):
+        """Kept out by .git/info/exclude, it ran in the tests and was in no diff;
+        the patch tree is now what a commit would hold (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "_impl.py").write_text("x = 1\n")
+            (repo / "conftest.py").write_text("x = 1\n")
+            (repo / ".git" / "info" / "exclude").write_text("_impl.py\nconftest.py\n")
+            (repo / "new.py").write_text("y = 2\n")
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertNotEqual(evidence.patch, repo)
+            self.assertFalse((evidence.patch / "_impl.py").exists())
+            self.assertFalse((evidence.patch / "conftest.py").exists())
+            self.assertTrue((evidence.patch / "new.py").is_file())
+            self.assertEqual((evidence.patch / "calc.py").read_text(), _clean_patch(CALC))
+
+    def test_minus_diff_does_not_hide_a_config_file(self):
+        """.gitattributes ``-diff`` hid a settings.json's lines (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "settings.json").write_text('{"a": 1}\n')
+            for args in (["add", "-A"], ["commit", "-qm", "config"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
+            (repo / "settings.json").write_text('{"a": 2}\n')
+            (repo / ".gitattributes").write_text("settings.json -diff\n")
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            diff = evidence.diff.read_text()
+            self.assertNotIn("Binary files", diff)
+            self.assertIn('+{"a": 2}', diff)
+
     def test_a_blob_that_does_not_match_its_id_is_refused(self):
         from adversary_gate.integrations import gitevidence
         with tempfile.TemporaryDirectory() as directory:
@@ -453,7 +489,8 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, **kwargs)
         self.assertTrue(evidence.coverage.is_file())
-        return (repo / "seen.txt").read_text().split("|")
+        # The coverage pass runs in the patch tree, a copy (3.0.11).
+        return (evidence.patch / "seen.txt").read_text().split("|")
 
     def test_the_servers_environment_does_not_reach_the_tests(self):
         secret, _ = self._run()
@@ -466,9 +503,17 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
 
     def test_the_policy_reaches_the_coverage_pass(self):
         with mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY": "--sandbox bwrap"}), \
+                mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
                 mock.patch.object(mcp_server, "prepare", side_effect=EvidenceError("stop")) as fake:
             mcp_server.verify_repo(str(ROOT))
         self.assertEqual(fake.call_args.kwargs.get("sandbox"), "bwrap")
+
+    def test_timeout_seconds_reaches_the_coverage_pass(self):
+        """It stayed at prepare's 600 s whatever the caller asked (3.0.11)."""
+        with mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
+                mock.patch.object(mcp_server, "prepare", side_effect=EvidenceError("stop")) as fake:
+            mcp_server.verify_repo(str(ROOT), timeout_seconds=7200)
+        self.assertEqual(fake.call_args.kwargs.get("timeout"), 7200)
 
 
 @unittest.skipUnless(HAS_GIT and HAS_COVERAGE, "needs git and coverage")
@@ -480,6 +525,26 @@ class TestVerifyRepoTool(unittest.TestCase):
         for name in ("ADVERSARY_GATE_POLICY", "ADVERSARY_GATE_BASE_REF", "ADVERSARY_GATE_PYTHON",
                      "ADVERSARY_GATE_REQUIRE_PINNED_BASE"):
             os.environ.pop(name, None)
+
+    def test_a_baseline_the_agent_committed_itself_is_refused(self):
+        """With no pin, the default ``HEAD`` made the agent's last commit the
+        oracle: commit a weakened test, and the patch is judged by it (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            (repo / "test_calc.py").write_text("def test_nothing():\n    pass\n")
+            for args in (["add", "-A"], ["commit", "-qm", "weaken"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True,
+                               env={**os.environ, **GIT_ENV})
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.object(mcp_server, "prepare") as never:
+                local = mcp_server.verify_repo(str(repo))
+            never.assert_not_called()
+            (repo / "test_calc.py").write_text(TESTS)
+            pushed = mcp_server.verify_repo(str(repo), base_ref="origin/main")
+        self.assertEqual(local["decision"], "inconclusive")
+        self.assertFalse(local["mergeable"])
+        self.assertIn("no remote-tracking branch", local["reason"])
+        self.assertEqual(pushed["decision"], "merge", pushed["reason"])
 
     def test_clean_change_merges_and_names_who_chose_the_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -659,6 +724,7 @@ class TestVerifyRepoTimeLimit(unittest.TestCase):
         late = subprocess.TimeoutExpired(cmd="adversary_gate", timeout=5)
         with tempfile.TemporaryDirectory() as directory, \
                 mock.patch.object(mcp_server, "prepare", return_value=evidence), \
+                mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
                 mock.patch.object(mcp_server, "_run_gate", side_effect=late):
             result = mcp_server.verify_repo(directory, timeout_seconds=5)
         self.assertEqual(result["decision"], "inconclusive")
@@ -710,3 +776,39 @@ class TestAnUntrackedFileIsReadAsGitWould(unittest.TestCase):
             path = Path(directory) / "m.py"
             path.write_text("x = 1\n\x0c\ny = 2\n")
             self.assertIn("@@ -0,0 +1,3 @@", _new_file_hunk("m.py", path))
+
+    def test_a_module_in_another_encoding_is_in_the_diff(self):
+        """A new latin-1 module counted as binary and left the diff: no line in
+        the coverage ratio, no path for the path checks (3.0.11)."""
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "m.py"
+            path.write_bytes("# -*- coding: latin-1 -*-\nNAME = 'é'\nx = 1\n".encode("latin-1"))
+            hunk = _new_file_hunk("m.py", path)
+        self.assertIn("+++ b/m.py", hunk)
+        self.assertIn("@@ -0,0 +1,3 @@", hunk)
+        self.assertIn("+x = 1", hunk)
+
+    def test_a_file_with_a_nul_byte_is_still_binary(self):
+        from adversary_gate.integrations.gitevidence import _new_file_hunk
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "logo.png"
+            path.write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+            self.assertEqual(_new_file_hunk("logo.png", path), "")
+
+
+class TestMergeableNeedsTheGatesOwnAnswer(unittest.TestCase):
+    """Exit 0 with output that did not parse said mergeable with no evidence;
+    exit 0 next to a decision that is not merge said it too (3.0.11)."""
+
+    def test_exit_zero_without_a_merge_payload_is_not_mergeable(self):
+        for payload in (None, {"decision": "inconclusive"}, {"decision": "block"}):
+            with self.subTest(payload=payload):
+                out = mcp_server._summary({"exit_code": 0, "payload": payload, "stderr": "noise"})
+                self.assertFalse(out["mergeable"])
+                self.assertNotEqual(out["decision"], "merge")
+
+    def test_a_merge_payload_with_exit_zero_is_mergeable(self):
+        out = mcp_server._summary({"exit_code": 0, "payload": {"decision": "merge"}, "stderr": ""})
+        self.assertTrue(out["mergeable"])
+        self.assertEqual(out["decision"], "merge")
