@@ -292,9 +292,11 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
                 f"--full-suite-memory ({args.full_suite_memory} bytes) is the "
                 "measured cause on large suites); the collateral check did not run"
             )
-        if decision is Decision.INCONCLUSIVE and base_code != 0 and patch_code != 0:
+        if (decision is Decision.INCONCLUSIVE and base_code != 0 and patch_code != 0
+                and all(v.outcome is Outcome.VERIFIED for v in verdicts)):
             # Red on both sides (3.0.11): this fell through to a held claim's
-            # reason, "the patch fixes the test", and named nothing to do.
+            # reason, "the patch fixes the test", and named nothing to do. A
+            # claim that did not hold still explains itself first.
             return (
                 f"the full suite already failed on the baseline (exit {base_code}) and "
                 f"fails on the patch (exit {patch_code}), so it cannot tell whether the "

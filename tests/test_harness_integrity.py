@@ -290,6 +290,22 @@ class TestAVirtualenvMarkerHidesOnlyAVirtualenv(unittest.TestCase):
             ".venv/lib/python3.12/site-packages/pkg/conftest.py": "x = 1\n",
         }), set())
 
+    def test_the_harness_reason_is_not_hidden_by_a_red_suite(self):
+        """W4: the claim was refused for the harness, but the top-level reason
+        named the full suite failing on both sides instead (3.0.11)."""
+        import argparse
+
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.types import FailureClass, GateVerdict
+        verdict = GateVerdict(CriticClaim("tests/test_calc.py", "test_f0"), FailureClass.INVALID,
+                              Outcome.UNVERIFIED, "test harness differs from the baseline: x")
+        args = argparse.Namespace(full_suite_timeout=1, full_suite_cpu_seconds=1,
+                                  full_suite_memory=1, coverage_floor=0.8)
+        reason = _reason(Decision.INCONCLUSIVE, [verdict], verdict, (1, 5), args,
+                         coverage_ratio=1.0, strength_judged=None, strength_unverified=False,
+                         mutation=None)
+        self.assertIn("harness", reason)
+
     def test_a_claim_inside_a_virtualenv_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
