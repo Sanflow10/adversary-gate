@@ -496,7 +496,14 @@ def _detect_resource_death(exit_code: int, stdout: str, stderr: str) -> int:
 
 
 def _detect_harness_error(exit_code: int, stdout: str, stderr: str) -> int:
-    """Ensure missing pytest or harness crashes become UNRUNNABLE (3/4)."""
+    """Ensure missing pytest or harness crashes become UNRUNNABLE (3/4).
+
+    Never exit 0: pytest ran and every test passed, and those markers are text
+    a test can print. A surviving mutant whose run printed one was rewritten
+    to "stillborn" and left the score (3.0.12).
+    """
+    if exit_code == 0:
+        return exit_code
     combined = f"{stdout}\n{stderr}".lower()
     if "no module named pytest" in combined or "no module named 'pytest'" in combined:
         return 3

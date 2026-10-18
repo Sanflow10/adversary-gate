@@ -224,6 +224,11 @@ class TestHarnessErrorDetection(unittest.TestCase):
     def test_plain_failure_is_left_alone(self):
         self.assertEqual(_detect_harness_error(1, "", "assert False"), 1)
 
+    def test_a_passing_run_that_prints_the_markers_still_passed(self):
+        """3.0.12: a surviving mutant that printed one left the score as stillborn."""
+        for text in ("pytest: error: x", "No module named pytest"):
+            self.assertEqual(_detect_harness_error(0, text, ""), 0)
+
 
 class TestRunValidation(unittest.TestCase):
     def setUp(self):
