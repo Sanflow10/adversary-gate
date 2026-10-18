@@ -97,7 +97,11 @@ class Evidence:
 #: (``refs/replace``, grafts) would let the repository answer for a commit with
 #: another one's content; the gate reads the objects the ids name.
 _GIT_FIXED = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_PAGER": "cat", "GIT_NO_REPLACE_OBJECTS": "1"}
-_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull)
+# core.quotepath=false: a path outside ASCII is written as itself, not as
+# "b/caf\303\251.py" -- the parser undoes the quoting git still applies to a
+# quote, a backslash or a control character (3.0.11).
+_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull,
+               "-c", "core.quotepath=false")
 
 
 def _git_env(extra: Optional[dict] = None) -> dict:
