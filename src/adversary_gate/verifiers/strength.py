@@ -462,7 +462,7 @@ def changed_foreign_source_files(
             rel = path.relative_to(root).as_posix()
             if not rel.endswith(".py") and _carries_code(path):
                 code.add(rel)
-            elif _is_test_path(rel) or _is_non_source(rel) or _is_scan_noise(rel):
+            elif _is_test_path(rel) or _is_scan_noise(rel):
                 continue
             try:
                 out[rel] = path.read_bytes()
@@ -479,6 +479,16 @@ def changed_foreign_source_files(
         candidates.update(
             rel for rel in changed_paths if rel and not rel.startswith(("/", "../"))
         )
+    # A document or data file is code once Python runs it: ``exec(open(
+    # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
+    # logic in the text file (3.0.12). Said by its content, or by a changed
+    # module that runs text it reads.
+    loads_text = any(_runs_text(patch[rel]) for rel in candidates
+                     if rel.endswith(".py") and rel in patch)
+    for rel in candidates:
+        if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
+                and (loads_text or _is_python(patch[rel])):
+            code.add(rel)
     return sorted(
         rel
         for rel in candidates
@@ -487,6 +497,41 @@ def changed_foreign_source_files(
         if rel in code
         or (not rel.endswith(".py") and not _is_test_path(rel) and not _is_non_source(rel))
     )
+
+
+#: Calls that run source text a module read from somewhere.
+_TEXT_RUNNERS = frozenset({"exec", "eval", "compile", "run_path", "run_module",
+                           "SourceFileLoader", "spec_from_file_location",
+                           "spec_from_loader", "exec_module", "load_module"})
+
+
+def _runs_text(source: bytes) -> bool:
+    """True when ``source`` calls one of :data:`_TEXT_RUNNERS`, by any spelling."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else \
+                func.attr if isinstance(func, ast.Attribute) else None
+            if name in _TEXT_RUNNERS:
+                return True
+        elif isinstance(node, ast.Name) and node.id in _TEXT_RUNNERS:
+            return True  # passed around, aliased: ``run = exec``
+    return False
+
+
+def _is_python(data: bytes) -> bool:
+    """True for text that parses as Python and defines something."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError):
+        return False
+    return any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                                 ast.Lambda, ast.Import, ast.ImportFrom))
+               for node in ast.walk(tree))
 
 
 def classify_changes(

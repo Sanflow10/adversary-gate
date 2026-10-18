@@ -1882,6 +1882,23 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["deps.zip", "logo.png", "tests/fixture.zip"],
             )
 
+    def test_a_document_python_runs_is_code(self):
+        """``exec(open("NOTICE.txt").read())`` made a text file the logic (3.0.12)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "NOTICE.txt").write_text("def decide(a):\n    return a\n")
+            (root / "patch" / "CHANGES.md").write_text("# Changes\n\nfixed it\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"), ["NOTICE.txt"])
+            (root / "patch" / "load.py").write_text("exec(open('CHANGES.md').read())\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["CHANGES.md", "NOTICE.txt"])
+
     def test_foreign_only_patch_cannot_reach_merge(self):
         """The observable consequence: before the fix this returned exit 0."""
         with tempfile.TemporaryDirectory() as directory:
