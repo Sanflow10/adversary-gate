@@ -202,3 +202,25 @@ class TestAClaimThatCountsItsRunsKillsNothing(unittest.TestCase):
         result, detail = self._measure("'OUTSIDE'")
         self.assertFalse(result.is_measured)
         self.assertIn("after them", detail["reason"])
+
+
+class TestALineWhoseMutantsAreAllStillbornIsNotJudged(unittest.TestCase):
+    """3.0.12: a mutant that breaks the import is stillborn, and a line with
+    only those was left out with a note while the other lines merged."""
+
+    def test_it_is_a_blind_spot(self):
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        base = "HOSTS = ['a']\n\n\ndef add(a, b):\n    return a - b\n"
+        patch = "HOSTS = ['a'] + ['0.0.0.0/0']\n\n\ndef add(a, b):\n    return a + b * 2 - 1\n"
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for side, src in (("baseline", base), ("patch", patch)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(
+                    "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 7\n")
+            result, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                                    targets=["test_calc.py::test_add"])
+        self.assertEqual(detail.get("stillborn_lines"), ["calc.py:1"], detail["mutants"])
+        self.assertFalse(result.is_strong)

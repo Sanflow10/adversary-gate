@@ -1312,6 +1312,7 @@ def measure_mutation_score(
         "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
         "reference_run": None,
         "reference_after": None,
+        "stillborn_lines": [],
         "source_sensitive_claims": False,
         "canary": {"files": [], "exit_code": None},
         "added_files": {},
@@ -1815,6 +1816,25 @@ def measure_mutation_score(
              "a line the patch wrote is checked by no claim")
             + f": breaking it changed nothing ({shown}{more}). Line coverage counts that "
             "line as run, so no other mutant speaks for it",
+        )
+    # A line whose every mutant was stillborn was never judged: a mutant that
+    # breaks the import (``HOSTS = ["a"] + ["0.0.0.0/0"]``, ``+`` -> ``-``)
+    # stops collection, exit 2, and left the ratio with only a note -- the
+    # other lines' kills merged a change no claim had looked at (3.0.12).
+    by_row: Dict[str, List[object]] = {}
+    for m in entries:
+        if m.get("result") != "no-op":  # type: ignore[union-attr]
+            by_row.setdefault(f"{m['file']}:{m['line']}", []).append(m.get("result"))  # type: ignore[index,union-attr]
+    unborn = sorted(row for row, results in by_row.items()
+                    if results and all(r == "stillborn" for r in results))
+    if unborn:
+        detail["stillborn_lines"] = unborn
+        detail["blind_spots"] = [f"{row} -> every mutant stillborn" for row in unborn]
+        shown = ", ".join(unborn[:5]) + (f" (+{len(unborn) - 5} more)" if len(unborn) > 5 else "")
+        return finish(
+            replace(result, blind_spots=len(unborn)),
+            f"a line the patch wrote was never judged: every mutant of it stopped the "
+            f"tests from running at all ({shown}), so no claim was tried against it",
         )
     if result.is_measured:
         notes = []
