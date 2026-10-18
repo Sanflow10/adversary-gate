@@ -1303,6 +1303,8 @@ def measure_mutation_score(
     #: changing ``>=`` to ``>`` merged next to a tested file (3.0.3).
     undecodable: List[str] = []
     removal_only: List[str] = []
+    #: Sites on changed lines whose only mutant was the baseline again.
+    rebuilt: List[str] = []
     for rel in changed:
         try:
             source = (patch_dir / rel).read_text(encoding="utf-8")
@@ -1347,6 +1349,8 @@ def measure_mutation_score(
             # already did -- the test tells old from new -- and says nothing of
             # how strong the test is. Not counted (3.0.11).
             if "\n".join(_apply(source_lines, *site)) == before:
+                if site[0][0] in edited:
+                    rebuilt.append(f"{rel}:{site[0][0]}")
                 continue
             if site[0][0] in edited:
                 by_line.setdefault((rel, site[0][0]), []).append(site)
@@ -1731,6 +1735,19 @@ def measure_mutation_score(
     if not codes:
         # Nothing was stillborn: no mutant could be counted. Until 3.0.9 this
         # fell through to "every mutant was stillborn (exit codes [])".
+        if rebuilt:
+            # The changed lines had operators, but breaking them only turned
+            # the patch back into the baseline (``+`` back to ``-``), which the
+            # claim already tells apart. "No operator site" sent the reader
+            # looking for a missing operator (3.0.11).
+            detail["baseline_mutants_skipped"] = sorted(set(rebuilt))
+            return finish(
+                result,
+                "no mutant could be counted: the only operator mutants on the changed lines "
+                "(" + ", ".join(sorted(set(rebuilt))[:5]) + ") turn the patch back into the "
+                "baseline, which proves only what the claim already did; statement-level "
+                "mutants never count toward a sampled score",
+            )
         return finish(
             result,
             "no mutant could be counted: the changed lines hold no operator site, and "

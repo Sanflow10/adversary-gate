@@ -125,6 +125,22 @@ class TestAMutantThatRebuildsTheBaselineIsNotCounted(unittest.TestCase):
         operators = [m for m in detail["mutants"] if m["kind"] == "operator"]
         self.assertEqual([m["replaces"] for m in operators], ["-"], detail["mutants"])
 
+    def test_the_reason_says_the_only_mutant_was_the_baseline(self):
+        """It said "the changed lines hold no operator site" for ``a + b`` (3.0.11)."""
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for side, src in (("baseline", "a - b"), ("patch", "a + b")):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(f"def add(a, b):\n    return {src}\n")
+                (root / side / "test_calc.py").write_text(
+                    "from calc import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n")
+            _, detail = measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                               targets=["test_calc.py::test_add"])
+        self.assertIn("back into the baseline", detail.get("reason", ""), detail)
+        self.assertEqual(detail["baseline_mutants_skipped"], ["calc.py:2"])
+
     def test_with_constants_a_weak_test_scores_below_a_strong_one(self):
         _, weak = self._measure("assert add(1, 1) != 1", mutate_constants=True, confidence=0)
         _, strong = self._measure("assert add(1, 1) == 3", mutate_constants=True, confidence=0)
