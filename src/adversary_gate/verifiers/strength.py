@@ -1833,8 +1833,9 @@ def measure_mutation_score(
         shown = ", ".join(unborn[:5]) + (f" (+{len(unborn) - 5} more)" if len(unborn) > 5 else "")
         return finish(
             replace(result, blind_spots=len(unborn)),
-            f"a line the patch wrote was never judged: every mutant of it stopped the "
-            f"tests from running at all ({shown}), so no claim was tried against it",
+            f"a line the patch wrote was never judged: every mutant of it was stillborn -- "
+            f"it stopped the tests from running at all ({shown}) -- so no claim was tried "
+            "against it",
         )
     if result.is_measured:
         notes = []
