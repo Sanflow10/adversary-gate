@@ -239,6 +239,33 @@ def binary_python_diffs(diff_text: str) -> list[str]:
     return found
 
 
+def hidden_text_diffs(diff_text: str, patch_root: Path) -> list[str]:
+    """Files the diff calls binary whose patch-side content is text.
+
+    ``-diff`` or ``binary`` in .gitattributes -- which the patch may write --
+    turns any file's hunks into ``Binary files ... differ``. For a ``.py`` file
+    :func:`binary_python_diffs` refuses it; a ``settings.json`` hid its changed
+    lines from a ratio that counts config files (3.0.11). Git's own test is
+    used: binary means a NUL in the first 8000 bytes.
+    """
+    found: list[str] = []
+    for kind, line, _ in _walk_hunks(diff_text):
+        if kind != "header":
+            continue
+        match = _BINARY_DIFF.match(line)
+        if not match or match.group("new") == "/dev/null":
+            continue
+        path = _diff_target(match.group("new")) or ""
+        target = Path(patch_root) / path
+        try:
+            if path and target.is_file() and not target.is_symlink() \
+                    and b"\0" not in target.read_bytes()[:8000]:
+                found.append(path)
+        except OSError:
+            continue
+    return found
+
+
 def validate_diff(diff_text: str) -> dict[str, set[int]]:
     """Parse the diff, or refuse to.
 

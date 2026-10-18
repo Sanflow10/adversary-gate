@@ -39,7 +39,13 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
-from adversary_gate.verifiers.coverage import covered_diff_ratio, uncovered_lines, validate_diff
+from adversary_gate.verifiers.coverage import (
+    UnparseableDiff,
+    covered_diff_ratio,
+    hidden_text_diffs,
+    uncovered_lines,
+    validate_diff,
+)
 from adversary_gate.verifiers.discovery import discover_claims
 from adversary_gate.verifiers.strength import (
     DEFAULT_CONFIDENCE,
@@ -602,7 +608,16 @@ def _diff_paths(args: argparse.Namespace) -> Optional[List[str]]:
     if not args.diff:
         return None
     text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-    return sorted(validate_diff(text))
+    files = validate_diff(text)
+    hidden = hidden_text_diffs(text, Path(args.patch)) if args.patch else []
+    if hidden:
+        raise UnparseableDiff(
+            "the diff writes 'Binary files ... differ' for " + ", ".join(hidden) + ", which "
+            "hold text in the patch: their changed lines are not in the diff. .gitattributes "
+            "(-diff, binary) does this; re-generate the diff with "
+            "'git --attr-source=<empty tree> diff' or 'git diff --text'"
+        )
+    return sorted(files)
 
 
 def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:

@@ -397,6 +397,21 @@ class TestGitEvidence(unittest.TestCase):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
             self.assertIn("+    return (a + b)", evidence.diff.read_text())
 
+    def test_minus_diff_does_not_hide_a_config_file(self):
+        """.gitattributes ``-diff`` hid a settings.json's lines (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "settings.json").write_text('{"a": 1}\n')
+            for args in (["add", "-A"], ["commit", "-qm", "config"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})
+            (repo / "settings.json").write_text('{"a": 2}\n')
+            (repo / ".gitattributes").write_text("settings.json -diff\n")
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            diff = evidence.diff.read_text()
+            self.assertNotIn("Binary files", diff)
+            self.assertIn('+{"a": 2}', diff)
+
     def test_a_blob_that_does_not_match_its_id_is_refused(self):
         from adversary_gate.integrations import gitevidence
         with tempfile.TemporaryDirectory() as directory:

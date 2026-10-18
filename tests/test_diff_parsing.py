@@ -23,6 +23,7 @@ from adversary_gate.verifiers.coverage import (  # noqa: E402
     _non_code_added_lines,
     binary_python_diffs,
     changed_lines_from_unified_diff,
+    hidden_text_diffs,
     validate_diff,
 )
 
@@ -95,6 +96,26 @@ class TestAHunkMustHoldWhatItDeclares(unittest.TestCase):
     def test_an_empty_context_line_is_still_context(self):
         diff = HEAD + "@@ -1,2 +1,2 @@\n\n-x\n+y\n"
         self.assertEqual(validate_diff(diff), {"f.py": {2}})
+
+
+
+class TestABinaryLabelOnTextIsRefused(unittest.TestCase):
+    """A caller's diff with ``Binary files`` for a file that is text (3.0.11)."""
+
+    DIFF = ("diff --git a/settings.json b/settings.json\n"
+            "Binary files a/settings.json and b/settings.json differ\n")
+
+    def test_a_text_file_called_binary_is_found(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "settings.json").write_text('{"a": 2}\n')
+            self.assertEqual(hidden_text_diffs(self.DIFF, Path(d)), ["settings.json"])
+
+    def test_a_real_binary_file_is_left_alone(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "settings.json").write_bytes(b"\x89PNG\x00\x01")
+            self.assertEqual(hidden_text_diffs(self.DIFF, Path(d)), [])
 
 
 if __name__ == "__main__":

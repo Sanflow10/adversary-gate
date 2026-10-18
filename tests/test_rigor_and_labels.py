@@ -1234,6 +1234,24 @@ class TestAPythonFileGitHidesIsNotJudgedBlind(unittest.TestCase):
         self.assertIn("calc.py", str(caught.exception))
         self.assertIn("--text", str(caught.exception))
 
+    def test_the_gate_refuses_a_text_file_its_diff_calls_binary(self):
+        # 3.0.11: a caller's diff could hide a settings.json the same way.
+        import argparse
+
+        from adversary_gate.cli import _diff_paths
+        from adversary_gate.verifiers.coverage import UnparseableDiff
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "patch").mkdir()
+            (root / "patch" / "settings.json").write_text('{"a": 2}\n')
+            (root / "change.diff").write_text(
+                "diff --git a/settings.json b/settings.json\n"
+                "Binary files a/settings.json and b/settings.json differ\n")
+            args = argparse.Namespace(diff=str(root / "change.diff"), patch=str(root / "patch"))
+            with self.assertRaises(UnparseableDiff) as caught:
+                _diff_paths(args)
+        self.assertIn("settings.json", str(caught.exception))
+
     def test_a_binary_asset_that_is_not_python_is_not_refused(self):
         from adversary_gate.verifiers.coverage import validate_diff
         diff = ("diff --git a/logo.png b/logo.png\nindex 1..2 100644\n"
@@ -1266,6 +1284,35 @@ class TestAPythonFileGitHidesIsNotJudgedBlind(unittest.TestCase):
             diff = (out / "change.diff").read_text()
             self.assertNotIn("Binary files", diff)
             self.assertIn("+    return a + b", diff)
+
+    def test_the_evidence_script_keeps_the_lines_of_a_config_file_marked_minus_diff(self):
+        # 3.0.11: the split gave --text to Python files only, so ``-diff`` on a
+        # settings.json hid lines the ratio counts.
+        import subprocess
+        script = Path(__file__).resolve().parents[1] / "scripts" / "prepare_evidence.sh"
+        git = ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+            (repo / "settings.json").write_text('{"a": 1}\n')
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "base"], cwd=repo, check=True)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            (repo / "settings.json").write_text('{"a": 2}\n')
+            (repo / ".gitattributes").write_text("settings.json -diff\n")
+            subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "patch"], cwd=repo, check=True)
+            out = Path(directory) / "out"
+            result = subprocess.run(
+                ["bash", str(script), "--base-sha", base, "--baseline-dir", str(out / "baseline"),
+                 "--diff-file", str(out / "change.diff"), "--skip-coverage", "--workspace", str(repo)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            diff = (out / "change.diff").read_text()
+            self.assertNotIn("Binary files", diff)
+            self.assertIn('+{"a": 2}', diff)
 
     def test_the_evidence_script_leaves_a_binary_asset_binary(self):
         # ``--text`` on every file turned a changed image into lines of text that

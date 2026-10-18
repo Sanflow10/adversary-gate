@@ -121,6 +121,21 @@ def _git(repo: Path, *args: str, binary: bool = False, env: Optional[dict] = Non
     return proc.stdout
 
 
+def _empty_tree(object_format: str) -> str:
+    if object_format == "sha256":
+        return "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+    return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _attr_source_works(repo: Path) -> bool:
+    """``--attr-source`` exists from git 2.40; older git keeps the per-file split."""
+    try:
+        _git(repo, "--attr-source=" + _empty_tree("sha1"), "version")
+        return True
+    except EvidenceError:
+        return False
+
+
 def _new_file_hunk(rel: str, path: Path) -> str:
     """An untracked file as ``git diff`` would show it once added.
 
@@ -271,8 +286,12 @@ def prepare(
     # hide their lines (C), but on an image --text writes bytes that are not text,
     # and decoding them stopped the run (a UnicodeDecodeError in 3.0.0). Read as
     # bytes, so a source in another encoding does not stop it either.
+    # .gitattributes is the patch's to write, and ``-diff`` hides any file's
+    # lines, not only a Python file's (3.0.11). An empty tree as the attribute
+    # source leaves git's own content test: binary only with a NUL byte.
+    attrs = ("--attr-source=" + _empty_tree(object_format),) if _attr_source_works(repo) else ()
     diff_text = "".join(
-        _git(repo, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
+        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
              "--no-color", commit, "--", pathspec, binary=True).decode("utf-8", "replace")
         for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
     )
