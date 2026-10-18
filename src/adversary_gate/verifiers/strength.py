@@ -1311,6 +1311,7 @@ def measure_mutation_score(
         "stillborn": 0,
         "census": {"exact": False, "why_not": "off (--census-min-mutants 0)" if census_min <= 0 else "nothing measured"},
         "reference_run": None,
+        "reference_after": None,
         "source_sensitive_claims": False,
         "canary": {"files": [], "exit_code": None},
         "added_files": {},
