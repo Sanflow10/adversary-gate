@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import threading
@@ -252,6 +253,27 @@ def _write_tree(repo: Path, commit: str, dest: Path, object_format: str) -> None
             raise EvidenceError(f"unexpected mode {mode} for {rel!r} in the baseline tree")
 
 
+def _copy_files(repo: Path, dest: Path, rels: Sequence[str]) -> None:
+    """Copy ``rels`` from the working tree, symlinks as symlinks.
+
+    A path listed but gone (a deletion not yet staged) is left out, as a
+    commit would leave it; a directory (a submodule) is not the repository's
+    own file, as for the baseline.
+    """
+    for rel in rels:
+        parts = rel.split("/")
+        if rel.startswith("/") or ".." in parts or ".git" in (p.lower() for p in parts):
+            raise EvidenceError(f"refusing to copy {rel!r} into the patch tree")
+        source = repo / rel
+        target = dest / rel
+        if source.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(os.readlink(source), target)
+        elif source.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
 def prepare(
     repo: Path,
     base_ref: str,
@@ -303,6 +325,18 @@ def prepare(
     diff = workdir / "change.diff"
     diff.write_text(diff_text, encoding="utf-8")
 
+    # The patch side is what a commit would hold: the tracked files as they
+    # are now and the untracked ones git does not ignore. Until 3.0.11 it was
+    # the working tree itself, so a file kept out by .gitignore or
+    # .git/info/exclude ran in every test yet was in no diff, no coverage and
+    # no denylist -- and a MERGE judged code that would never be committed.
+    patch = workdir / "patch"
+    patch.mkdir()
+    tracked = [
+        rel for rel in _git(repo, "ls-files", "--cached", "-z").split("\0") if rel
+    ]
+    _copy_files(repo, patch, sorted(set(tracked) | set(untracked)))
+
     coverage_path: Optional[Path] = None
     if coverage:
         rc = workdir / "coveragerc"
@@ -324,7 +358,7 @@ def prepare(
         command = shlex.join([python, "-m", "coverage", "run", "--rcfile", str(rc), "-m", "pytest",
                               "-q", "-p", "no:cacheprovider", *pytest_args])
         try:
-            run = run_test(repo, "", command=command, sandbox=sandbox, python=python, env=env,
+            run = run_test(patch, "", command=command, sandbox=sandbox, python=python, env=env,
                            timeout_seconds=timeout, cpu_seconds=None, mem_bytes=None,
                            file_bytes=_COVERAGE_FILE_BYTES, open_files=4096,
                            require_network_isolation=require_network_isolation,
@@ -346,7 +380,7 @@ def prepare(
         }), encoding="utf-8")
         report = subprocess.run(
             [python, "-c", _EXTRACT, str(workdir / ".coverage"), str(wanted),
-             str(repo), str(coverage_path)],
+             str(patch), str(coverage_path)],
             # Not from the repository: ``-c`` puts the working directory first
             # on sys.path, and a ``json.py`` the patch added would run here, in
             # the gate's own process, outside any sandbox.
@@ -356,4 +390,4 @@ def prepare(
             raise EvidenceError(
                 "coverage produced no report: " + (report.stderr or run.stderr)[-500:].strip()
             )
-    return Evidence(baseline, repo, diff, coverage_path, sorted(untracked), commit)
+    return Evidence(baseline, patch, diff, coverage_path, sorted(untracked), commit)

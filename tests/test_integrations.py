@@ -397,6 +397,24 @@ class TestGitEvidence(unittest.TestCase):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
             self.assertIn("+    return (a + b)", evidence.diff.read_text())
 
+    def test_an_ignored_file_is_not_in_the_patch_tree(self):
+        """Kept out by .git/info/exclude, it ran in the tests and was in no diff;
+        the patch tree is now what a commit would hold (3.0.11)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "_impl.py").write_text("x = 1\n")
+            (repo / "conftest.py").write_text("x = 1\n")
+            (repo / ".git" / "info" / "exclude").write_text("_impl.py\nconftest.py\n")
+            (repo / "new.py").write_text("y = 2\n")
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertNotEqual(evidence.patch, repo)
+            self.assertFalse((evidence.patch / "_impl.py").exists())
+            self.assertFalse((evidence.patch / "conftest.py").exists())
+            self.assertTrue((evidence.patch / "new.py").is_file())
+            self.assertEqual((evidence.patch / "calc.py").read_text(), _clean_patch(CALC))
+
     def test_minus_diff_does_not_hide_a_config_file(self):
         """.gitattributes ``-diff`` hid a settings.json's lines (3.0.11)."""
         with tempfile.TemporaryDirectory() as directory:
@@ -471,7 +489,8 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, **kwargs)
         self.assertTrue(evidence.coverage.is_file())
-        return (repo / "seen.txt").read_text().split("|")
+        # The coverage pass runs in the patch tree, a copy (3.0.11).
+        return (evidence.patch / "seen.txt").read_text().split("|")
 
     def test_the_servers_environment_does_not_reach_the_tests(self):
         secret, _ = self._run()
