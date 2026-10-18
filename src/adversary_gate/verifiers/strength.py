@@ -1416,7 +1416,11 @@ def measure_mutation_score(
             # ``+``; the mutant turns it back) proves only what the claim
             # already did -- the test tells old from new -- and says nothing of
             # how strong the test is. Not counted (3.0.11).
-            if "\n".join(_apply(source_lines, *site)) == before:
+            # Only when this file is the whole patch: with another file
+            # changed too, the mutant is not the baseline -- a claim failing
+            # on the baseline because of b.py says nothing of a.py, and a
+            # flipped ``>`` there went unbroken (3.0.12).
+            if len(changed) == 1 and "\n".join(_apply(source_lines, *site)) == before:
                 if site[0][0] in edited:
                     rebuilt.append(f"{rel}:{site[0][0]}")
                 continue
