@@ -145,3 +145,42 @@ class TestAMutantThatRebuildsTheBaselineIsNotCounted(unittest.TestCase):
         _, weak = self._measure("assert add(1, 1) != 1", mutate_constants=True, confidence=0)
         _, strong = self._measure("assert add(1, 1) == 3", mutate_constants=True, confidence=0)
         self.assertLess(weak["mutants_killed"], strong["mutants_killed"], (weak, strong))
+
+
+class TestAClaimThatCountsItsRunsKillsNothing(unittest.TestCase):
+    """3.0.12: the mutants ran in one tree, and only the mutated file was put
+    back. A claim asserting ``is not None`` that counted its runs in a file
+    passed the reference and the canary and failed every mutant: 12/12."""
+
+    CODE = ("def calc(a, b, c):\n    x = a * 2 - b + c\n    y = x % 7 + a * b\n"
+            "    return y - c * 3 + x\n")
+
+    def _measure(self, where: str):
+        import tempfile
+        from adversary_gate.verifiers.strength import measure_mutation_score
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            counter = where.replace("OUTSIDE", str(root / "outside.n"))
+            test = ("import os, pathlib\n"
+                    f"p = pathlib.Path({counter})\n"
+                    "n = (int(p.read_text()) if p.exists() else 0) + 1\n"
+                    "p.write_text(str(n))\n"
+                    "from calc import calc\n\n\n"
+                    "def test_calc():\n    assert calc(1, 2, 3) is not None\n    assert n <= 2\n")
+            for side, src in (("baseline", "def calc(a, b, c):\n    raise NotImplementedError\n"),
+                              ("patch", self.CODE)):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(src)
+                (root / side / "test_calc.py").write_text(test)
+            return measure_mutation_score(root / "baseline", root / "patch", "test_calc.py",
+                                          targets=["test_calc.py::test_calc"])
+
+    def test_a_count_in_the_tree_starts_over_every_run(self):
+        result, detail = self._measure("os.getcwd(), '.n'")
+        self.assertTrue(result.is_measured, detail.get("reason"))
+        self.assertEqual(result.mutants_killed, 0, detail["mutants"])
+
+    def test_a_count_outside_the_tree_leaves_the_score_unmeasured(self):
+        result, detail = self._measure("'OUTSIDE'")
+        self.assertFalse(result.is_measured)
+        self.assertIn("after them", detail["reason"])

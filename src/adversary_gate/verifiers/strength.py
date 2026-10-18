@@ -1428,6 +1428,25 @@ def measure_mutation_score(
         if oracle_dir is not None and oracle_targets:
             twin = Path(tmp) / "oracle"
             shutil.copytree(oracle_dir, twin, ignore=_IGNORE)
+        # Every run starts from these. The tree is the one place a sandboxed
+        # run can write that the next run reads: a claim that counted its runs
+        # in a file there passed the reference and the canary and failed every
+        # mutant -- 0/12 became 12/12 and MERGE (3.0.12).
+        pristine = Path(tmp) / "pristine"
+        shutil.copytree(work, pristine)
+        pristine_twin: Optional[Path] = None
+        if twin is not None:
+            pristine_twin = Path(tmp) / "pristine-oracle"
+            shutil.copytree(twin, pristine_twin)
+
+        def _fresh(directory: Path) -> None:
+            """Put ``directory`` (and the oracle twin) back as the patch left it."""
+            pairs = [(directory, pristine)]
+            if twin is not None and pristine_twin is not None:
+                pairs.append((twin, pristine_twin))
+            for tree, source in pairs:
+                shutil.rmtree(tree)
+                shutil.copytree(source, tree)
 
         def _run(directory: Path = work):
             if twin is None:
@@ -1465,6 +1484,7 @@ def measure_mutation_score(
         # The reference runs with or without a time limit: it is what every
         # mutant is judged against, not only the yardstick for hangs (UX-4).
         started = time.monotonic()
+        _fresh(work)
         reference = _run()
         elapsed = time.monotonic() - started
         reference_passed = reference.exit_code == PYTEST_OK
@@ -1520,6 +1540,7 @@ def measure_mutation_score(
         # the neutral copy is reading the code, not running it.
         trees = [work] if twin is None else [work, twin]
         if canary_files:
+            _fresh(work)
             for rel, neutral in canary_files.items():
                 for tree in trees:
                     (tree / rel).write_text(neutral, encoding="utf-8")
@@ -1583,6 +1604,11 @@ def measure_mutation_score(
             # The oracle twin breaks with the tree it pairs with (one at a time).
             targets_ = [directory / rel] + ([twin / rel] if twin is not None else [])
             try:
+                if twin is None:
+                    shutil.rmtree(directory)
+                    shutil.copytree(pristine, directory)
+                else:
+                    _fresh(directory)
                 for target in targets_:
                     target.write_text(mutant_source, encoding="utf-8")
                 return _run(directory)
@@ -1655,6 +1681,20 @@ def measure_mutation_score(
                 entry["exit_code"] = code
 
         detail["survivors"] = survivors
+
+        # The unmutated claims once more, after every mutant. Outside a sandbox
+        # a run can leave state where the tree reset does not reach (/tmp, the
+        # home directory); claims that now fail were not judging the code.
+        _fresh(work)
+        after = _run()
+        detail["reference_after"] = {"exit_code": after.exit_code}
+        if after.exit_code != PYTEST_OK and not (after.timed_out or after.exit_code < 0):
+            return finish(
+                SuiteStrength(0, 0, 0.0, is_measured=False),
+                f"the claims passed on the unmutated patch before the mutants and fail on it "
+                f"after them (exit {after.exit_code}): they depend on what earlier runs left "
+                "behind, not on the code, so their kills prove nothing",
+            )
 
     entries = detail["mutants"]  # type: ignore[assignment]
     odd = [m for m in entries if m.get("result") not in ("killed", "survived")]  # type: ignore[union-attr]
