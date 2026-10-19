@@ -38,6 +38,37 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.14] — 2026-10-19
+
+Holes found by a read-only audit of 3.0.12 and confirmed with crafted
+repositories. Each change has a test that fails on 3.0.12. There is no 3.0.13.
+
+> **Stricter verdicts.** A claim whose run passed nothing (every test skipped
+> or xfailed), a changed native library or compiled module in any directory, a
+> changed document next to a module that starts a child process, and a changed
+> data file a test names are now `INCONCLUSIVE` where they could be `MERGE`.
+
+### Security
+
+- **A claim that skipped itself is not a pass.** pytest exits 0 when every
+  selected test is skipped or xfailed. A baseline test marked
+  `skipif(not hasattr(pay, "LEGACY"))` skipped once the patch dropped the
+  flag and counted as passing on both sides, so the guarantee it held
+  vanished. A pytest run with no count line that says `passed` is now
+  "nothing ran".
+- **Native code in a test or build directory is code.** A `.so` under
+  `tests/_bin/` behind `sys.path.insert` held the logic and, test-pathed, was
+  never judged. Compiled modules and native libraries (by name or by their
+  ELF, PE or Mach-O header) now count as unjudged source wherever they sit.
+- **A document a child process runs is code.** `subprocess.run([sys.executable,
+  "rules.conf"])` ran a file of plain assignments, which is not counted as
+  Python. A module that starts a process now makes changed documents count,
+  as one that calls `exec` already did.
+- **A data file a test names is judged.** The code and `golden/expected.json`
+  rewritten together kept the old test passing and merged. A changed data
+  file whose name, stem or folder a test mentions now counts as unjudged
+  source.
+
 ## [3.0.12] — 2026-10-18
 
 Holes found by a read-only audit of 3.0.11 and confirmed with crafted
