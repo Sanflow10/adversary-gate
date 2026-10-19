@@ -314,8 +314,18 @@ def _is_non_source(rel: str) -> bool:
     return False
 
 
+#: What a test compares output against. Documents are not: a project's tests
+#: often read its README, and an edited README is not a rewritten answer.
+_DATA_SUFFIXES = frozenset({".json", ".jsonc", ".jsonl", ".jsonlines", ".ndjson", ".yml",
+                            ".yaml", ".toml", ".ini", ".cfg", ".conf", ".csv", ".tsv",
+                            ".xml", ".properties", ".txt"})
+
 #: What zipimport loads from an archive on sys.path.
 _IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
+
+#: ELF, PE and Mach-O (both byte orders, 32 and 64 bit): what ctypes can load.
+_NATIVE_MAGIC = frozenset({b"\x7fELF", b"MZ\x90\x00", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
+                           b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce"})
 
 
 def _carries_code(path: Path) -> bool:
@@ -325,8 +335,21 @@ def _carries_code(path: Path) -> bool:
     called -- ``logo.png`` works as well. As a non-source suffix (or a test
     fixture) it was never judged, and a patch whose logic sat inside one with
     a covered import line in front reached MERGE (3.0.12). Decided by content.
+
+    A compiled module or native library is code too, wherever it sits:
+    ``tests/_bin/ratelib.<tag>.so`` behind ``sys.path.insert`` held the logic
+    and, test-pathed, was never judged (3.0.14). Its name or its magic says so.
     """
     import zipfile
+    if path.name.lower().endswith(_IMPORTABLE_SUFFIXES[1:]):
+        return True
+    try:
+        with open(path, "rb") as handle:
+            magic = handle.read(4)
+    except OSError:
+        return False
+    if magic in _NATIVE_MAGIC:
+        return True
     try:
         with zipfile.ZipFile(path) as archive:
             return any(name.lower().endswith(_IMPORTABLE_SUFFIXES) for name in archive.namelist())
@@ -473,12 +496,11 @@ def changed_foreign_source_files(
     base = snapshot(Path(baseline_dir))
     patch = snapshot(Path(patch_dir))
     candidates = {rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel)}
-    if changed_paths:
+    named_by_diff = {rel for rel in (changed_paths or ()) if rel and not rel.startswith(("/", "../"))}
+    if named_by_diff:
         # A path from the diff counts even if it no longer exists on either
         # side or the scan cannot see it: the diff says the patch touched it.
-        candidates.update(
-            rel for rel in changed_paths if rel and not rel.startswith(("/", "../"))
-        )
+        candidates.update(named_by_diff)
     # A document or data file is code once Python runs it: ``exec(open(
     # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
     # logic in the text file (3.0.12). Said by its content, or by a changed
@@ -488,6 +510,17 @@ def changed_foreign_source_files(
     for rel in candidates:
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
+            code.add(rel)
+    # A data file a test reads is what the test checks against: the patch that
+    # changed the code and rewrote ``golden/expected.json`` to match kept the
+    # old test passing and reached MERGE (3.0.14). Named by a test, it is
+    # judged like a rewritten test would be: not at all, so not silently.
+    # Only what the patch wrote: with a diff, what it names -- the checkout
+    # also holds what the run itself wrote (``coverage.json``, the evidence).
+    named = _named_by_tests(Path(baseline_dir), Path(patch_dir))
+    for rel in (named_by_diff if named_by_diff else candidates):
+        if Path(rel).suffix.lower() in _DATA_SUFFIXES and not _is_test_path(rel) \
+                and _mentions(named, rel):
             code.add(rel)
     return sorted(
         rel
@@ -499,10 +532,19 @@ def changed_foreign_source_files(
     )
 
 
-#: Calls that run source text a module read from somewhere.
+#: Calls that run source text a module read from somewhere. A child process
+#: runs it as well: ``subprocess.run([sys.executable, "rules.conf"])`` with the
+#: logic in plain assignments reached MERGE (3.0.14).
 _TEXT_RUNNERS = frozenset({"exec", "eval", "compile", "run_path", "run_module",
                            "SourceFileLoader", "spec_from_file_location",
-                           "spec_from_loader", "exec_module", "load_module"})
+                           "spec_from_loader", "exec_module", "load_module",
+                           "run", "Popen", "call", "check_call", "check_output",
+                           "getoutput", "getstatusoutput", "system", "popen",
+                           "execv", "execve", "execvp", "execvpe", "execl", "execle",
+                           "execlp", "execlpe", "spawnv", "spawnve", "spawnvp",
+                           "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe",
+                           "posix_spawn", "posix_spawnp", "startfile",
+                           "create_subprocess_exec", "create_subprocess_shell"})
 
 
 def _runs_text(source: bytes) -> bool:
@@ -521,6 +563,30 @@ def _runs_text(source: bytes) -> bool:
         elif isinstance(node, ast.Name) and node.id in _TEXT_RUNNERS:
             return True  # passed around, aliased: ``run = exec``
     return False
+
+
+def _named_by_tests(*roots: Path) -> bytes:
+    """Every test module's text on both sides, joined: what the tests may name."""
+    texts: List[bytes] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            if _is_scan_noise(rel) or not _is_test_path(rel) or not path.is_file():
+                continue
+            try:
+                texts.append(path.read_bytes())
+            except OSError:
+                continue
+    return b"\n".join(texts)
+
+
+def _mentions(text: bytes, rel: str) -> bool:
+    """True when ``text`` names the file ``rel``, or its stem, or a folder it sits in."""
+    parts = rel.split("/")
+    words = {parts[-1], parts[-1].rsplit(".", 1)[0], *parts[:-1]}
+    return any(len(word) > 2 and word.encode("utf-8", "replace") in text for word in words)
 
 
 def _is_python(data: bytes) -> bool:

@@ -1899,6 +1899,72 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 changed_foreign_source_files(root / "baseline", root / "patch"),
                 ["CHANGES.md", "NOTICE.txt"])
 
+    def test_a_compiled_module_in_a_test_folder_is_code(self):
+        """``tests/_bin/ratelib.<tag>.so`` behind ``sys.path.insert`` held the logic (3.0.14)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "tests" / "_bin").mkdir(parents=True)
+            (root / "patch" / "tests" / "_bin" / "ratelib.cpython-312-x86_64-linux-gnu.so").write_bytes(b"x")
+            (root / "patch" / "build").mkdir()
+            (root / "patch" / "build" / "blob.dat").write_bytes(b"\x7fELF\x02\x01")
+            (root / "patch" / "tests" / "table.csv").write_text("a,b\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["build/blob.dat", "tests/_bin/ratelib.cpython-312-x86_64-linux-gnu.so"],
+            )
+
+    def test_a_document_a_child_process_runs_is_code(self):
+        """``subprocess.run([sys.executable, "rules.conf"])`` on plain assignments (3.0.14)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "rules.conf").write_text("x = 2\nprint(x * 2)\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            (root / "patch" / "app.py").write_text(
+                "import subprocess, sys\n\n\ndef rate():\n"
+                "    return subprocess.run([sys.executable, 'rules.conf']).returncode\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"), ["rules.conf"])
+
+    def test_a_data_file_a_test_names_is_judged(self):
+        """The code and ``golden/expected.json`` rewritten together reached MERGE (3.0.14)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            for side in ("baseline", "patch"):
+                (root / side / "golden").mkdir()
+            (root / "baseline" / "golden" / "expected.json").write_text("[5]")
+            (root / "patch" / "golden" / "expected.json").write_text("[6]")
+            (root / "patch" / "NOTES.md").write_text("# notes\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            (root / "baseline" / "test_golden.py").write_text(
+                "import json\n\n\ndef test_golden():\n"
+                "    assert json.load(open('golden/expected.json'))\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["golden/expected.json"])
+            # What the run itself wrote is not the patch's: with a diff, only
+            # the paths it names; and a README a test reads is not an answer.
+            (root / "patch" / "coverage.json").write_text("{}")
+            (root / "baseline" / "README.md").write_text("old\n")
+            (root / "patch" / "README.md").write_text("new\n")
+            (root / "baseline" / "test_readme.py").write_text(
+                "def test_readme():\n    assert open('README.md').read() and 'coverage'\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch",
+                                             ["golden/expected.json", "README.md"]),
+                ["golden/expected.json"])
+
     def test_foreign_only_patch_cannot_reach_merge(self):
         """The observable consequence: before the fix this returned exit 0."""
         with tempfile.TemporaryDirectory() as directory:

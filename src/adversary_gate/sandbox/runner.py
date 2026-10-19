@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import shutil
 import signal
 import site
@@ -455,7 +456,7 @@ def run_test(
         code = (
             proc.returncode
             if command
-            else _detect_harness_error(proc.returncode, stdout, stderr)
+            else _nothing_passed(_detect_harness_error(proc.returncode, stdout, stderr), stdout)
         )
         return SandboxResult(_detect_resource_death(code, stdout, stderr), stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:
@@ -493,6 +494,27 @@ def _detect_resource_death(exit_code: int, stdout: str, stderr: str) -> int:
     if any(marker in combined for marker in RESOURCE_DEATH_MARKERS):
         return HARNESS_DIED
     return exit_code
+
+
+#: pytest's closing count line: ``1 passed, 2 skipped in 0.03s``.
+_SUMMARY = re.compile(r"^=* ?\d+ [a-z]+\b.* in \d+(?:\.\d+)?s\b")
+
+
+def _nothing_passed(exit_code: int, stdout: str) -> int:
+    """Exit 0 with no test that passed is no evidence: 5, *nothing ran*.
+
+    pytest exits 0 when every selected test was skipped or xfailed. A baseline
+    test marked ``skipif(not hasattr(pay, "LEGACY_ROUNDING"))`` skipped itself
+    once the patch dropped the flag, and counted as passing on both sides
+    (3.0.14). Every count line must say ``passed``: a test can print one of
+    its own, never remove pytest's. No count line at all is no evidence either.
+    """
+    if exit_code != 0:
+        return exit_code
+    lines = [line for line in stdout.splitlines() if _SUMMARY.match(line.strip())]
+    if lines and all("passed" in line for line in lines):
+        return exit_code
+    return 5
 
 
 def _detect_harness_error(exit_code: int, stdout: str, stderr: str) -> int:

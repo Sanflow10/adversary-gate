@@ -34,6 +34,7 @@ from adversary_gate.sandbox.runner import (  # noqa: E402
     OUTPUT_TAIL_BYTES,
     SandboxResult,
     _detect_harness_error,
+    _nothing_passed,
     _limit_resources,
     bwrap_available,
     bwrap_prefix,
@@ -228,6 +229,37 @@ class TestHarnessErrorDetection(unittest.TestCase):
         """3.0.12: a surviving mutant that printed one left the score as stillborn."""
         for text in ("pytest: error: x", "No module named pytest"):
             self.assertEqual(_detect_harness_error(0, text, ""), 0)
+
+
+class TestARunWhereNothingPassed(unittest.TestCase):
+    """3.0.14: a claim that skipped itself counted as passing on both sides."""
+
+    def test_skipped_or_xfailed_alone_is_not_a_pass(self):
+        for line in ("1 skipped in 0.01s", "1 xfailed in 0.02s", "1 deselected in 0.01s",
+                     "======= 2 skipped in 0.10s ======="):
+            with self.subTest(line=line):
+                self.assertEqual(_nothing_passed(0, f".\n{line}\n"), 5)
+
+    def test_a_printed_count_line_does_not_hide_the_real_one(self):
+        self.assertEqual(_nothing_passed(0, "1 passed in 0.01s\n1 skipped in 0.01s\n"), 5)
+
+    def test_no_count_line_is_not_a_pass(self):
+        self.assertEqual(_nothing_passed(0, ""), 5)
+
+    def test_a_real_pass_is_left_alone(self):
+        for line in ("1 passed in 0.03s", "2 passed, 1 skipped in 0.40s", "3 passed, 2 subtests passed in 1.00s"):
+            with self.subTest(line=line):
+                self.assertEqual(_nothing_passed(0, f"..\n{line}\n"), 0)
+        self.assertEqual(_nothing_passed(1, "1 skipped in 0.01s"), 1)
+
+    def test_a_run_whose_only_test_skips_does_not_pass(self):
+        root = _repo({"test_s.py": "import pytest\n\n\n@pytest.mark.skip\ndef test_s():\n    pass\n"})
+        try:
+            self.assertEqual(run_test(root, "test_s.py", "test_s").exit_code, 5)
+        finally:
+            import shutil
+
+            shutil.rmtree(root, ignore_errors=True)
 
 
 class TestRunValidation(unittest.TestCase):
