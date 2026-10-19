@@ -66,8 +66,9 @@ repositories. Each change has a test that fails on 3.0.12. There is no 3.0.13.
   as one that calls `exec` already did.
 - **A data file a test names is judged.** The code and `golden/expected.json`
   rewritten together kept the old test passing and merged. A changed data
-  file whose name, stem or folder a test mentions now counts as unjudged
-  source.
+  file (JSON, YAML, CSV, text and the like; not a document such as a README)
+  that the diff names and whose name, stem or folder a test mentions now
+  counts as unjudged source.
 
 ## [3.0.12] — 2026-10-18
 
