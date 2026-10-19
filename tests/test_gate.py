@@ -1953,6 +1953,17 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             self.assertEqual(
                 changed_foreign_source_files(root / "baseline", root / "patch"),
                 ["golden/expected.json"])
+            # What the run itself wrote is not the patch's: with a diff, only
+            # the paths it names; and a README a test reads is not an answer.
+            (root / "patch" / "coverage.json").write_text("{}")
+            (root / "baseline" / "README.md").write_text("old\n")
+            (root / "patch" / "README.md").write_text("new\n")
+            (root / "baseline" / "test_readme.py").write_text(
+                "def test_readme():\n    assert open('README.md').read() and 'coverage'\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch",
+                                             ["golden/expected.json", "README.md"]),
+                ["golden/expected.json"])
 
     def test_foreign_only_patch_cannot_reach_merge(self):
         """The observable consequence: before the fix this returned exit 0."""

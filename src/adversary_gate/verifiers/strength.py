@@ -314,6 +314,12 @@ def _is_non_source(rel: str) -> bool:
     return False
 
 
+#: What a test compares output against. Documents are not: a project's tests
+#: often read its README, and an edited README is not a rewritten answer.
+_DATA_SUFFIXES = frozenset({".json", ".jsonc", ".jsonl", ".jsonlines", ".ndjson", ".yml",
+                            ".yaml", ".toml", ".ini", ".cfg", ".conf", ".csv", ".tsv",
+                            ".xml", ".properties", ".txt"})
+
 #: What zipimport loads from an archive on sys.path.
 _IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
 
@@ -490,12 +496,11 @@ def changed_foreign_source_files(
     base = snapshot(Path(baseline_dir))
     patch = snapshot(Path(patch_dir))
     candidates = {rel for rel in set(base) | set(patch) if base.get(rel) != patch.get(rel)}
-    if changed_paths:
+    named_by_diff = {rel for rel in (changed_paths or ()) if rel and not rel.startswith(("/", "../"))}
+    if named_by_diff:
         # A path from the diff counts even if it no longer exists on either
         # side or the scan cannot see it: the diff says the patch touched it.
-        candidates.update(
-            rel for rel in changed_paths if rel and not rel.startswith(("/", "../"))
-        )
+        candidates.update(named_by_diff)
     # A document or data file is code once Python runs it: ``exec(open(
     # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
     # logic in the text file (3.0.12). Said by its content, or by a changed
@@ -510,9 +515,11 @@ def changed_foreign_source_files(
     # changed the code and rewrote ``golden/expected.json`` to match kept the
     # old test passing and reached MERGE (3.0.14). Named by a test, it is
     # judged like a rewritten test would be: not at all, so not silently.
+    # Only what the patch wrote: with a diff, what it names -- the checkout
+    # also holds what the run itself wrote (``coverage.json``, the evidence).
     named = _named_by_tests(Path(baseline_dir), Path(patch_dir))
-    for rel in candidates:
-        if not rel.endswith(".py") and _is_non_source(rel) and not _is_test_path(rel) \
+    for rel in (named_by_diff if named_by_diff else candidates):
+        if Path(rel).suffix.lower() in _DATA_SUFFIXES and not _is_test_path(rel) \
                 and _mentions(named, rel):
             code.add(rel)
     return sorted(
