@@ -31,6 +31,7 @@ from adversary_gate.core.types import ExecState
 
 PYTEST_OK = 0
 PYTEST_TESTS_FAILED = 1
+PYTEST_NO_TESTS = 5
 SANDBOX_TIMEOUT = -1
 
 #: Exit codes that mean "the execution did not happen".

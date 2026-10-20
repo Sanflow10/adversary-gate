@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from adversary_gate import __version__
-from adversary_gate.core.exitmap import PYTEST_OK
+from adversary_gate.core.exitmap import PYTEST_NO_TESTS, PYTEST_OK, PYTEST_TESTS_FAILED
 from adversary_gate.core.gate import Gate, GateConfig, rewritten_test_files, transplant_tree
 from adversary_gate.core.metrics import compute_metrics, format_report
 from adversary_gate.core.types import (
@@ -38,7 +38,7 @@ from adversary_gate.core.types import (
     GateVerdict,
     Outcome,
 )
-from adversary_gate.sandbox.runner import SandboxResult, bwrap_available, run_test
+from adversary_gate.sandbox.runner import SandboxResult, build_target, bwrap_available, run_test
 from adversary_gate.verifiers.coverage import (
     UnparseableDiff,
     covered_diff_ratio,
@@ -1446,6 +1446,56 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             decision = Decision.INCONCLUSIVE
             unjudged_reason = suite_unsettled
             unjudged_flags = ["--serial-sides", "--full-suite-timeout"]
+        # 3.0.15: the patch deleted or changed a baseline test file and the
+        # full suite is off. The claims run the baseline's version of their
+        # own test only; every other test in those files was judged by
+        # nothing, so a patch could break code and delete the test that said
+        # so. They run here, the baseline's version on the patch's code.
+        unjudged_action = "raise_limit"
+        rewritten_runnable = [
+            rel for rel in rewritten_tests
+            if Path(rel).name.startswith("test_") or Path(rel).name.endswith("_test.py")
+        ]
+        if decision is Decision.MERGE and rewritten_runnable and not full_suite_ran:
+            targets = [*rewritten_runnable]
+            for claim in claims:
+                targets += ["--deselect", build_target(claim.test_path, claim.test_id)]
+            with tempfile.TemporaryDirectory(prefix="adversary-rewritten-") as scratch:
+                tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                on_patch = run_test(
+                    tree, "", targets=targets,
+                    require_network_isolation=args.require_network_isolation,
+                    **run_options, **full_limits,
+                ).exit_code
+            on_baseline = None
+            if on_patch not in (PYTEST_OK, PYTEST_NO_TESTS):
+                on_baseline = run_test(
+                    Path(args.baseline), "", targets=targets,
+                    require_network_isolation=args.require_network_isolation,
+                    **run_options, **full_limits,
+                ).exit_code
+            execution["rewritten_tests_run"] = {
+                "files": rewritten_runnable, "patch": on_patch, "baseline": on_baseline,
+            }
+            files = ", ".join(rewritten_runnable)
+            if on_baseline == PYTEST_OK and on_patch == PYTEST_TESTS_FAILED:
+                decision = Decision.BLOCK
+                unjudged_action = "see_reason"
+                unjudged_flags = ["--full-suite-path"]
+                unjudged_reason = (
+                    f"the patch deleted or changed {files} and the full suite is off; the "
+                    "baseline's version of those tests passes on the baseline and fails on "
+                    "the patch's code: a test outside the claims regressed"
+                )
+            elif on_baseline is not None:
+                decision = Decision.INCONCLUSIVE
+                unjudged_reason = (
+                    f"the patch deleted or changed {files} and the full suite is off; the "
+                    f"baseline's version of those tests did not pass on the patch's code "
+                    f"(exit {on_patch}; baseline exit {on_baseline}), so nothing shows the "
+                    "patch kept what they checked; run the full suite"
+                )
+                unjudged_flags = ["--full-suite-path"]
 
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
@@ -1492,7 +1542,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "next_steps": _next_steps(
                 decision, verdicts, full_codes, args,
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
-            ) + ([{"action": "raise_limit", "flags": unjudged_flags,
+            ) + ([{"action": unjudged_action, "flags": unjudged_flags,
                    "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": summary["claims_total"],

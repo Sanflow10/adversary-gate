@@ -36,6 +36,17 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Security
+
+- **A deleted baseline test is run even with the full suite off.** The
+  claims run the baseline's version of their own test only, so with
+  `--full-suite-path ''` every other test in a baseline test file the patch
+  deleted or changed was judged by nothing. A patch could break code and
+  delete the one test that said so, and merge. Those files now run, the
+  baseline's version on the patch's code with the claims deselected: failing
+  there and passing on the baseline is `BLOCK`, any other failure is
+  `INCONCLUSIVE`. The run is recorded as `execution.rewritten_tests_run`.
+
 ---
 
 ## [3.0.14] — 2026-10-19

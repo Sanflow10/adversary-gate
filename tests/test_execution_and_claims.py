@@ -442,6 +442,32 @@ class TestSeveralClaims(unittest.TestCase):
         self.assertIn("--max-claims", payload["reason"])
         self.assertIn("--max-claims", json.dumps(payload["next_steps"]))
 
+    def test_a_deleted_baseline_test_that_fails_on_the_patch_blocks(self):
+        """3.0.15: with the full suite off, the patch broke ``sub`` below zero and deleted
+        the one test outside the claims that said so; the claim on ``sub``
+        held and the patch merged."""
+        (self.root / "baseline" / "test_extra.py").write_text(
+            "from calc import sub\n\n\ndef test_sub_below_zero():\n    assert sub(1, 3) == -2\n")
+        (self.root / "patch" / "calc.py").write_text(CALC_PATCHED.replace("(a - b)", "abs(a - b)"))
+        (self.root / "change.diff").write_text(DIFF.replace("(a - b)", "abs(a - b)"))
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_BLOCK, payload)
+        self.assertIn("test_extra.py", payload["reason"])
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["test_extra.py"])
+
+    def test_tests_added_to_baseline_files_still_merge(self):
+        """The same check does not turn a patch that only adds tests into a refusal."""
+        (self.root / "baseline" / "test_extra.py").write_text(
+            "from calc import add\n\n\ndef test_add_five():\n    assert add(2, 3) == 5\n")
+        (self.root / "patch" / "test_extra.py").write_text(
+            "from calc import add\n\n\ndef test_add_five():\n    assert add(2, 3) == 5\n\n\n"
+            "def test_add_zero():\n    assert add(0, 0) == 0\n")
+        (self.root / "patch" / "test_calc.py").write_text(
+            TESTS + "\n\ndef test_sub_zero():\n    assert sub(0, 0) == 0\n")
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_MERGE, payload)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["patch"], 0)
+
     def test_discovering_nothing_is_inconclusive_not_merge(self):
         self.coverage.write_text(json.dumps(_contexts_report({"6": ["test_calc.test_add"]})))
         code, payload = _run_cli(self.root, "--discover-claims", *self._measured())
