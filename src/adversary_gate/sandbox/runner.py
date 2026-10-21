@@ -263,8 +263,10 @@ def _limit_resources(
         # preexec_fn before the test started (3.0.15) -- the coverage pass asks
         # for 4096 files and a run nested in the gate's own runner had 256.
         # The lower value is the stricter one, so capping loosens nothing.
-        hard = resource.getrlimit(kind)[1]
-        if hard != resource.RLIM_INFINITY:
+        # A ``resource`` without ``getrlimit`` is set as asked, as before.
+        getrlimit = getattr(resource, "getrlimit", None)
+        hard = getrlimit(kind)[1] if getrlimit else None
+        if hard is not None and hard != getattr(resource, "RLIM_INFINITY", None):
             value = min(value, hard)
         resource.setrlimit(kind, (value, value))
 

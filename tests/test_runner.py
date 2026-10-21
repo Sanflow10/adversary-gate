@@ -625,8 +625,6 @@ class TestResourceLimits(unittest.TestCase):
         calls: list = []
         attrs = {
             "setrlimit": lambda name, limits: calls.append((name, limits)),
-            "getrlimit": lambda name: (-1, (hard or {}).get(name, -1)),
-            "RLIM_INFINITY": -1,
             "RLIMIT_CPU": "CPU",
             "RLIMIT_AS": "AS",
             "RLIMIT_CORE": "CORE",
@@ -635,6 +633,9 @@ class TestResourceLimits(unittest.TestCase):
         }
         if include_nproc:
             attrs["RLIMIT_NPROC"] = "NPROC"
+        if hard is not None:
+            attrs["getrlimit"] = lambda name: (-1, hard.get(name, -1))
+            attrs["RLIM_INFINITY"] = -1
         return types.SimpleNamespace(**attrs), calls
 
     def test_a_limit_above_the_inherited_hard_one_is_capped_not_refused(self):

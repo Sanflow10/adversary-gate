@@ -144,7 +144,6 @@ class TestLimits(unittest.TestCase):
             RLIMIT_CPU="cpu", RLIMIT_AS="as", RLIMIT_CORE="core", RLIMIT_FSIZE="fsize",
             RLIMIT_NOFILE="nofile", RLIMIT_NPROC="nproc",
             setrlimit=lambda which, value: calls.append(which),
-            getrlimit=lambda which: (-1, -1), RLIM_INFINITY=-1,
         )
         with mock.patch.object(runner, "resource", fake):
             _limit_resources(None, None, 1024, 64, 64)()
