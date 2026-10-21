@@ -111,6 +111,33 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
             )
             self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
 
+    def test_a_helper_kept_in_a_tool_named_directory_comes_back_too(self):
+        """3.0.15: ``.tox`` and ``.nox`` were skipped by name, so a helper the
+        baseline kept in ``tests/.nox/`` stayed the patch's and the bug merged.
+        A real environment there (``pyvenv.cfg``) is still left alone."""
+        for tool in (".nox", ".tox"):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                for side, calc, expected in (("baseline", "return a - b", 2), ("patch", "return a + b", 8)):
+                    (root / side / "tests" / tool).mkdir(parents=True)
+                    (root / side / "tests" / tool / "py312").mkdir()
+                    (root / side / "tests" / tool / "py312" / "pyvenv.cfg").write_text("home = /usr\n")
+                    (root / side / "tests" / tool / "py312" / f"test_{side}.py").write_text("")
+                    (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+                    (root / side / "tests" / tool / "expected.py").write_text(f"EXPECTED = {expected}\n")
+                    (root / side / "tests" / "test_calc.py").write_text(
+                        "import os\nimport sys\n\n"
+                        f"sys.path.insert(0, os.path.join(os.path.dirname(__file__), {tool!r}))\n"
+                        "from calc import sub  # noqa: E402\nfrom expected import EXPECTED  # noqa: E402\n\n\n"
+                        "def test_sub():\n    assert sub(5, 3) == EXPECTED\n    assert sub(1, 1) is not None\n"
+                    )
+                verdict = Gate([]).verify_claim(
+                    CriticClaim("tests/test_calc.py", "test_sub"), root / "baseline", root / "patch"
+                )
+                self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
+                self.assertIn(f"tests/{tool}/expected.py", verdict.reason)
+                self.assertNotIn("py312", verdict.reason)
+
 
 class TestNewTestInAnExistingFile(unittest.TestCase):
     NEW = TESTS + "\n\ndef test_sub_negative():\n    assert sub(-1, -2) == 1\n"

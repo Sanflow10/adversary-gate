@@ -53,6 +53,12 @@ quando esta seção vira uma com versão e data.
   A data file a module reads, changed and marked so, ran in every test yet was
   in no diff, and the patch merged. The diff now reads a private copy of the
   index without either mark; the repository's own index is left as it was.
+- **A test helper in `.tox` or `.nox` comes back from the baseline.** The
+  baseline oracle puts every baseline test file back over the patch, but it
+  skipped those two directories by name, so a helper a repository kept in
+  `tests/.nox/` stayed the patch's, and a patch that loosened it merged with
+  the bug in place. The environments tox and nox build there are still
+  skipped, by their `pyvenv.cfg`.
 
 ---
 

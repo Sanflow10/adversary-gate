@@ -76,7 +76,11 @@ def _bytes_differ(before: Path, after: Path) -> bool:
 _COPY_IGNORE = shutil.ignore_patterns(
     ".git", "__pycache__", "*.pyc", ".pytest_cache", "node_modules"
 )
-_TREE_SKIP = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules", ".tox", ".nox"})
+#: Not ``.tox`` or ``.nox`` by name (3.0.15): a test helper the baseline keeps
+#: in ``tests/.nox/`` was never put back, and a patch that loosened it merged.
+#: The environments those tools build are skipped below by their
+#: ``pyvenv.cfg``, as any virtualenv is.
+_TREE_SKIP = frozenset({".git", "__pycache__", ".pytest_cache", "node_modules"})
 
 #: ``test_add[1-2]`` -> ``test_add``: a parametrised id names one function.
 _PARAMS = re.compile(r"\[.*\]$")
