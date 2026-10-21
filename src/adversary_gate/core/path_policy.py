@@ -20,11 +20,13 @@ Two fixes over the original:
 from __future__ import annotations
 
 import fnmatch
+import functools
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 DEFAULT_DENYLIST = [
     "conftest.py",
@@ -199,7 +201,7 @@ def _harness_files(root: Path) -> dict:
     return found
 
 
-def harness_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
+def harness_drift(baseline_dir: Path, patch_dir: Path, python: Optional[str] = None) -> List[PathViolation]:
     """Test-harness files the patch added, removed or changed.
 
     The denylist above only sees the paths somebody *reports* (``--diff``,
@@ -229,7 +231,7 @@ def harness_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
                 same = False  # unreadable is not "unchanged"
             if not same:
                 found.append(PathViolation(rel, "test-harness file changed by the patch"))
-    found.extend(_shadowing_drift(Path(baseline_dir), Path(patch_dir)))
+    found.extend(_shadowing_drift(Path(baseline_dir), Path(patch_dir), python))
     return found
 
 
@@ -239,6 +241,37 @@ _RUNNER_MODULES = frozenset({
     "exceptiongroup", "tomli", "pygments", "colorama",
 })
 _SHADOW_SUFFIXES = (".py", ".pyc", ".so", ".pyd")
+
+#: The top-level module of every ``pytest11`` entry point, which pytest imports
+#: by name at start-up. Asked from ``/``, so the repository under judgement is
+#: not on the path; not ``-I``, which drops the user site where ``pip install
+#: --user`` puts the plugins, and not ``-P``, which 3.10 does not have.
+_PLUGIN_QUERY = (
+    "from importlib.metadata import entry_points\n"
+    "print('\\n'.join(sorted({e.value.split(':')[0].split('.')[0] "
+    "for e in entry_points(group='pytest11')})))\n"
+)
+
+
+@functools.lru_cache(maxsize=8)
+def plugin_modules(python: Optional[str] = None) -> frozenset:
+    """Modules of the pytest plugins installed for ``python`` (3.0.15).
+
+    pytest loads each of them by name, and ``python -m pytest`` puts the tree
+    first on ``sys.path``: a ``pytest_ordering.py`` the patch added at the root
+    ran in place of the installed plugin, cleared the one failure that showed
+    the bug, and the patch merged. Asked of the interpreter that runs the
+    tests, not of the gate's; an interpreter that cannot answer adds nothing,
+    and its tests do not run either.
+    """
+    try:
+        proc = subprocess.run([python or sys.executable, "-c", _PLUGIN_QUERY],
+                              capture_output=True, text=True, timeout=60, cwd=os.sep)
+    except (OSError, subprocess.SubprocessError):
+        return frozenset()
+    if proc.returncode != 0:
+        return frozenset()
+    return frozenset(line for line in proc.stdout.split() if line.isidentifier())
 
 
 def _is_collected(name: str) -> bool:
@@ -287,13 +320,13 @@ def _plain_directories(root: Path) -> set:
     return dirs
 
 
-def _shadowing(root: Path, dirs: set) -> dict:
+def _shadowing(root: Path, dirs: set, extra: frozenset = frozenset()) -> dict:
     """Entries in ``dirs`` an import of a standard or runner module would find first.
 
     A module file, or a *package* directory: one without ``__init__.py`` is a
     namespace portion, and a namespace never wins over a real module.
     """
-    names = set(getattr(sys, "stdlib_module_names", ())) | _RUNNER_MODULES
+    names = set(getattr(sys, "stdlib_module_names", ())) | _RUNNER_MODULES | extra
     found = {}
     for rel_dir in dirs:
         try:
@@ -313,7 +346,7 @@ def _shadowing(root: Path, dirs: set) -> dict:
     return found
 
 
-def _shadowing_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]:
+def _shadowing_drift(baseline_dir: Path, patch_dir: Path, python: Optional[str] = None) -> List[PathViolation]:
     """AG-048: a module on pytest's path that would be imported in place of a real one.
 
     ``python -m pytest`` puts the working directory -- the tree under test --
@@ -327,8 +360,9 @@ def _shadowing_drift(baseline_dir: Path, patch_dir: Path) -> List[PathViolation]
     standard-library name and a common test directory); a file is compared.
     """
     dirs = _plain_directories(baseline_dir) | _plain_directories(patch_dir)
-    before = _shadowing(baseline_dir, dirs)
-    after = _shadowing(patch_dir, dirs)
+    plugins = plugin_modules(python)
+    before = _shadowing(baseline_dir, dirs, plugins)
+    after = _shadowing(patch_dir, dirs, plugins)
     found: List[PathViolation] = []
     for name in sorted(after):
         why = "would be imported in place of the module of that name"

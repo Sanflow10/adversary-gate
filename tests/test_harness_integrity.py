@@ -343,6 +343,25 @@ class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
     def test_changing_one_the_baseline_had_is_caught(self):
         self.assertIn("json.py", self._found({"json.py": "a = 1\n"}, {"json.py": "a = 2\n"}))
 
+    def test_an_installed_pytest_plugins_name_is_caught(self):
+        """3.0.15: pytest imports every ``pytest11`` plugin by name, so a
+        ``pytest_ordering.py`` the patch added at the root ran in place of the
+        installed plugin and cleared the failure that showed the bug. Asked of
+        the interpreter that runs the tests: here one whose path holds a
+        plugin the gate's own interpreter does not have."""
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory) / "site"
+            info = site / "agfakeplug-1.0.dist-info"
+            info.mkdir(parents=True)
+            (info / "METADATA").write_text("Metadata-Version: 2.1\nName: agfakeplug\nVersion: 1.0\n")
+            (info / "entry_points.txt").write_text("[pytest11]\nagfake = agfakeplug.plugin\n")
+            python = Path(directory) / "project-python"
+            python.write_text(f'#!/bin/sh\nPYTHONPATH="{site}" exec "{sys.executable}" "$@"\n')
+            python.chmod(0o755)
+            trees = self._trees(Path(directory) / "t", {"calc.py": "x = 1\n"}, {"agfakeplug.py": "x = 1\n"})
+            self.assertIn("agfakeplug.py", {v.path for v in harness_drift(*trees, str(python))})
+            self.assertNotIn("agfakeplug.py", {v.path for v in harness_drift(*trees)})
+
     def test_an_ordinary_module_is_not(self):
         self.assertEqual(self._found({"calc.py": "x = 1\n"}, {"money.py": "y = 1\n"}), set())
 

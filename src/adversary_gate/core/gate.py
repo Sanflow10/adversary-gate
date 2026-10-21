@@ -542,7 +542,7 @@ class Gate:
         # compares the trees, so a harness file the diff left out -- or one
         # whose name the denylist never listed -- still cannot configure the
         # runner that judges the patch.
-        drift = harness_drift(baseline_dir, patch_dir)
+        drift = harness_drift(baseline_dir, patch_dir, (run_kwargs or {}).get("python"))
         if drift:
             return finish(
                 GateVerdict(

@@ -59,6 +59,13 @@ quando esta seção vira uma com versão e data.
   `tests/.nox/` stayed the patch's, and a patch that loosened it merged with
   the bug in place. The environments tox and nox build there are still
   skipped, by their `pyvenv.cfg`.
+- **A module named like an installed pytest plugin is the harness.** pytest
+  imports every `pytest11` plugin by name, and `python -m pytest` puts the
+  tree first on `sys.path`, so a `pytest_ordering.py` the patch added at the
+  root ran in place of the installed plugin: three lines cleared the one
+  failure that showed the bug, and the patch merged. The plugins installed for
+  the interpreter that runs the tests (`--python`) now join the standard
+  library and the runner's modules in the shadowing check.
 
 ---
 
