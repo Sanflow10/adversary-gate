@@ -67,6 +67,15 @@ quando esta seção vira uma com versão e data.
   the interpreter that runs the tests (`--python`) now join the standard
   library and the runner's modules in the shadowing check.
 
+### Fixed
+
+- **A run nested in a tighter limit starts.** Each limit the runner sets was
+  asked for as is, and an unprivileged process cannot raise its hard limit:
+  `verify_repo`'s coverage pass asks for 4096 open files, and run inside a
+  test the gate was judging (256) it died in `preexec_fn` before pytest
+  started. Each limit is now capped at the inherited hard one, which is the
+  stricter value. Found by running the gate on its own 3.0.15 branch.
+
 ---
 
 ## [3.0.14] — 2026-10-19

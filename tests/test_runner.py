@@ -621,10 +621,12 @@ class TestResourceLimits(unittest.TestCase):
     """
 
     @staticmethod
-    def _fake_resource(include_nproc: bool = True):
+    def _fake_resource(include_nproc: bool = True, hard: dict = None):
         calls: list = []
         attrs = {
             "setrlimit": lambda name, limits: calls.append((name, limits)),
+            "getrlimit": lambda name: (-1, (hard or {}).get(name, -1)),
+            "RLIM_INFINITY": -1,
             "RLIMIT_CPU": "CPU",
             "RLIMIT_AS": "AS",
             "RLIMIT_CORE": "CORE",
@@ -634,6 +636,16 @@ class TestResourceLimits(unittest.TestCase):
         if include_nproc:
             attrs["RLIMIT_NPROC"] = "NPROC"
         return types.SimpleNamespace(**attrs), calls
+
+    def test_a_limit_above_the_inherited_hard_one_is_capped_not_refused(self):
+        """3.0.15: the coverage pass asks for 4096 files; nested in the gate's
+        own runner (256) the child died in preexec_fn before the test began."""
+        fake, calls = self._fake_resource(hard={"NOFILE": 256, "FSIZE": 1024})
+        with mock.patch.object(runner, "resource", fake):
+            runner._limit_resources(None, None, 4096, 4096, 64)()
+        self.assertIn(("NOFILE", (256, 256)), calls)
+        self.assertIn(("FSIZE", (1024, 1024)), calls)
+        self.assertIn(("NPROC", (64, 64)), calls)
 
     def test_every_documented_limit_is_applied_with_hard_bounds(self):
         fake, calls = self._fake_resource()

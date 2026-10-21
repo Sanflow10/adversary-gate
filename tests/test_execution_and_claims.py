@@ -144,6 +144,7 @@ class TestLimits(unittest.TestCase):
             RLIMIT_CPU="cpu", RLIMIT_AS="as", RLIMIT_CORE="core", RLIMIT_FSIZE="fsize",
             RLIMIT_NOFILE="nofile", RLIMIT_NPROC="nproc",
             setrlimit=lambda which, value: calls.append(which),
+            getrlimit=lambda which: (-1, -1), RLIM_INFINITY=-1,
         )
         with mock.patch.object(runner, "resource", fake):
             _limit_resources(None, None, 1024, 64, 64)()
@@ -479,6 +480,16 @@ class TestSeveralClaims(unittest.TestCase):
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_BLOCK, payload)
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["tests/check_sub.py"])
+
+    def test_a_deleted_test_that_failed_on_the_baseline_too_is_not_a_merge(self):
+        """Failing on both sides shows nothing either way: not a regression,
+        and not evidence that the patch kept what the test checked."""
+        (self.root / "baseline" / "test_extra.py").write_text(
+            "from calc import sub\n\n\ndef test_sub_wrong():\n    assert sub(1, 3) == 99\n")
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 1)
+        self.assertIn("--full-suite-path", json.dumps(payload["next_steps"]))
 
     def test_tests_added_to_baseline_files_still_merge(self):
         """The same check does not turn a patch that only adds tests into a refusal."""

@@ -257,18 +257,29 @@ def _limit_resources(
     ``--memory none``) and records in the artefact; the JVM and Node cannot
     start under an address-space limit at all.
     """
+    def _set(kind: int, value: int) -> None:
+        # Never above the hard limit the gate itself runs under: an
+        # unprivileged process cannot raise it, and asking failed the child in
+        # preexec_fn before the test started (3.0.15) -- the coverage pass asks
+        # for 4096 files and a run nested in the gate's own runner had 256.
+        # The lower value is the stricter one, so capping loosens nothing.
+        hard = resource.getrlimit(kind)[1]
+        if hard != resource.RLIM_INFINITY:
+            value = min(value, hard)
+        resource.setrlimit(kind, (value, value))
+
     def _apply() -> None:
         if resource is None:
             return
         if cpu_seconds is not None:
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+            _set(resource.RLIMIT_CPU, cpu_seconds)
         if mem_bytes is not None:
-            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (open_files, open_files))
+            _set(resource.RLIMIT_AS, mem_bytes)
+        _set(resource.RLIMIT_CORE, 0)
+        _set(resource.RLIMIT_FSIZE, file_bytes)
+        _set(resource.RLIMIT_NOFILE, open_files)
         if hasattr(resource, "RLIMIT_NPROC"):
-            resource.setrlimit(resource.RLIMIT_NPROC, (processes, processes))
+            _set(resource.RLIMIT_NPROC, processes)
 
     return _apply
 

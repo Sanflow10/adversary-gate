@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from adversary_gate.cli import EXIT_INCONCLUSIVE, main
 from adversary_gate.core.gate import Gate
-from adversary_gate.core.path_policy import PathPolicy, harness_drift
+from adversary_gate.core.path_policy import PathPolicy, harness_drift, plugin_modules
 from adversary_gate.core.types import CriticClaim, Decision, Outcome
 
 BASE_CALC = "def add(a, b):\n    return a + b\n"
@@ -361,6 +361,16 @@ class TestAModuleTheRunnerWouldImportIsTheHarness(unittest.TestCase):
             trees = self._trees(Path(directory) / "t", {"calc.py": "x = 1\n"}, {"agfakeplug.py": "x = 1\n"})
             self.assertIn("agfakeplug.py", {v.path for v in harness_drift(*trees, str(python))})
             self.assertNotIn("agfakeplug.py", {v.path for v in harness_drift(*trees)})
+
+    def test_an_interpreter_that_cannot_answer_adds_no_names(self):
+        """Missing, or failing: its tests do not run either, so there is no
+        plugin of its to shadow."""
+        with tempfile.TemporaryDirectory() as directory:
+            failing = Path(directory) / "failing-python"
+            failing.write_text("#!/bin/sh\nexit 1\n")
+            failing.chmod(0o755)
+            self.assertEqual(plugin_modules(str(failing)), frozenset())
+            self.assertEqual(plugin_modules(str(Path(directory) / "missing-python")), frozenset())
 
     def test_an_ordinary_module_is_not(self):
         self.assertEqual(self._found({"calc.py": "x = 1\n"}, {"money.py": "y = 1\n"}), set())
