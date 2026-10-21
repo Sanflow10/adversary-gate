@@ -1452,25 +1452,32 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # nothing, so a patch could break code and delete the test that said
         # so. They run here, the baseline's version on the patch's code.
         unjudged_action = "raise_limit"
+        # Every Python file, whatever its name: pytest collects a file named on
+        # the command line even when ``python_files`` would not match it, and a
+        # helper with no tests in it collects nothing (exit 5).
         rewritten_runnable = [
             rel for rel in rewritten_tests
-            if Path(rel).name.startswith("test_") or Path(rel).name.endswith("_test.py")
+            if rel.endswith(".py") and Path(rel).name not in ("conftest.py", "__init__.py")
         ]
         if decision is Decision.MERGE and rewritten_runnable and not full_suite_ran:
-            targets = [*rewritten_runnable]
+            # The claims passed on the patch's code (MERGE), so they stay in on
+            # that side: ``--deselect`` matches node ids by prefix, and
+            # deselecting ``test_sub`` dropped ``test_sub_below_zero`` with it.
+            # On the baseline a claim that proves a fix fails, so there it goes.
+            deselected = [*rewritten_runnable]
             for claim in claims:
-                targets += ["--deselect", build_target(claim.test_path, claim.test_id)]
+                deselected += ["--deselect", build_target(claim.test_path, claim.test_id)]
             with tempfile.TemporaryDirectory(prefix="adversary-rewritten-") as scratch:
                 tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
                 on_patch = run_test(
-                    tree, "", targets=targets,
+                    tree, "", targets=rewritten_runnable,
                     require_network_isolation=args.require_network_isolation,
                     **run_options, **full_limits,
                 ).exit_code
             on_baseline = None
             if on_patch not in (PYTEST_OK, PYTEST_NO_TESTS):
                 on_baseline = run_test(
-                    Path(args.baseline), "", targets=targets,
+                    Path(args.baseline), "", targets=deselected,
                     require_network_isolation=args.require_network_isolation,
                     **run_options, **full_limits,
                 ).exit_code

@@ -42,10 +42,17 @@ quando esta seção vira uma com versão e data.
   claims run the baseline's version of their own test only, so with
   `--full-suite-path ''` every other test in a baseline test file the patch
   deleted or changed was judged by nothing. A patch could break code and
-  delete the one test that said so, and merge. Those files now run, the
-  baseline's version on the patch's code with the claims deselected: failing
-  there and passing on the baseline is `BLOCK`, any other failure is
+  delete the one test that said so, and merge. Those files now run, any
+  Python file but `conftest.py` and `__init__.py` whatever its name, the
+  baseline's version on the patch's code: failing there while passing on the
+  baseline (claims deselected) is `BLOCK`, any other failure is
   `INCONCLUSIVE`. The run is recorded as `execution.rewritten_tests_run`.
+- **A file hidden from git is in the diff.** `verify_repo` read the change
+  with `git diff`, which obeys `git update-index --assume-unchanged` and
+  `--skip-worktree`, while the patch tree copied the working tree as it was.
+  A data file a module reads, changed and marked so, ran in every test yet was
+  in no diff, and the patch merged. The diff now reads a private copy of the
+  index without either mark; the repository's own index is left as it was.
 
 ---
 

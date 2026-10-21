@@ -274,6 +274,32 @@ def _copy_files(repo: Path, dest: Path, rels: Sequence[str]) -> None:
             shutil.copy2(source, target)
 
 
+def _private_index(repo: Path, workdir: Path) -> dict:
+    """``GIT_INDEX_FILE`` for a copy of the index with no file hidden from git.
+
+    ``git update-index --assume-unchanged`` and ``--skip-worktree`` are the
+    working tree's owner's to set, and ``git diff`` obeys them: a changed file
+    marked so is in no diff, yet the patch tree below copies it as it is. A
+    data file a module reads changed that way, and the gate merged code that
+    ran with it (3.0.15). The copy drops both marks; a skip-worktree file that
+    is not on disk (a sparse checkout) keeps its mark, or it would read as
+    deleted.
+    """
+    index = workdir / "index"
+    shutil.copyfile(Path(_git(repo, "rev-parse", "--absolute-git-dir").strip()) / "index", index)
+    env = {"GIT_INDEX_FILE": str(index)}
+    hidden = []
+    for record in _git(repo, "ls-files", "-v", "-z", env=env).split("\0"):
+        tag, _, rel = record.partition(" ")
+        if rel and (tag.islower() or (tag == "S" and (repo / rel).exists())):
+            hidden.append(rel)
+    if hidden:
+        # One mark per call: given both, ``update-index`` applies only one.
+        for flag in ("--no-assume-unchanged", "--no-skip-worktree"):
+            _git(repo, "update-index", flag, "--", *hidden, env=env)
+    return env
+
+
 def prepare(
     repo: Path,
     base_ref: str,
@@ -312,13 +338,14 @@ def prepare(
     # lines, not only a Python file's (3.0.11). An empty tree as the attribute
     # source leaves git's own content test: binary only with a NUL byte.
     attrs = ("--attr-source=" + _empty_tree(object_format),) if _attr_source_works(repo) else ()
+    index = _private_index(repo, workdir)
     diff_text = "".join(
         _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
-             "--no-color", commit, "--", pathspec, binary=True).decode("utf-8", "replace")
+             "--no-color", commit, "--", pathspec, binary=True, env=index).decode("utf-8", "replace")
         for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
     )
     untracked = [
-        line for line in _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
+        line for line in _git(repo, "ls-files", "--others", "--exclude-standard", "-z", env=index).split("\0")
         if line and "__pycache__" not in line.split("/")
     ]
     diff_text += "".join(_new_file_hunk(rel, repo / rel) for rel in sorted(untracked))
@@ -333,7 +360,7 @@ def prepare(
     patch = workdir / "patch"
     patch.mkdir()
     tracked = [
-        rel for rel in _git(repo, "ls-files", "--cached", "-z").split("\0") if rel
+        rel for rel in _git(repo, "ls-files", "--cached", "-z", env=index).split("\0") if rel
     ]
     _copy_files(repo, patch, sorted(set(tracked) | set(untracked)))
 

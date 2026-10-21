@@ -455,6 +455,31 @@ class TestSeveralClaims(unittest.TestCase):
         self.assertIn("test_extra.py", payload["reason"])
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["test_extra.py"])
 
+    def test_a_sibling_deleted_from_the_claims_own_file_blocks(self):
+        """The likeliest shape: the deleted test sat next to the claim, in the
+        claim's own file, which the claim's run never looks past."""
+        (self.root / "baseline" / "test_calc.py").write_text(
+            TESTS + "\n\ndef test_sub_below_zero():\n    assert sub(1, 3) == -2\n")
+        (self.root / "patch" / "calc.py").write_text(CALC_PATCHED.replace("(a - b)", "abs(a - b)"))
+        (self.root / "change.diff").write_text(DIFF.replace("(a - b)", "abs(a - b)"))
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_BLOCK, payload)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["test_calc.py"])
+
+    def test_a_test_file_outside_the_name_pattern_is_run_too(self):
+        """``python_files = check_*.py``: the file is a test file to the
+        repository, and named on the command line pytest collects it."""
+        (self.root / "baseline" / "pytest.ini").write_text("[pytest]\npython_files = check_*.py test_*.py\n")
+        (self.root / "patch" / "pytest.ini").write_text("[pytest]\npython_files = check_*.py test_*.py\n")
+        (self.root / "baseline" / "tests").mkdir()
+        (self.root / "baseline" / "tests" / "check_sub.py").write_text(
+            "from calc import sub\n\n\ndef test_sub_below_zero():\n    assert sub(1, 3) == -2\n")
+        (self.root / "patch" / "calc.py").write_text(CALC_PATCHED.replace("(a - b)", "abs(a - b)"))
+        (self.root / "change.diff").write_text(DIFF.replace("(a - b)", "abs(a - b)"))
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_BLOCK, payload)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["tests/check_sub.py"])
+
     def test_tests_added_to_baseline_files_still_merge(self):
         """The same check does not turn a patch that only adds tests into a refusal."""
         (self.root / "baseline" / "test_extra.py").write_text(

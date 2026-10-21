@@ -369,6 +369,27 @@ class TestGitEvidence(unittest.TestCase):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
             self.assertIn("+    return (a + b)", evidence.diff.read_text())
 
+    def test_a_file_hidden_from_git_is_still_in_the_diff(self):
+        """3.0.15: ``assume-unchanged`` and ``skip-worktree`` kept a changed data
+        file out of ``git diff`` while the patch tree copied it as it was, and
+        the gate merged code that read it. The owner's index keeps its marks."""
+        for mark in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(mark=mark), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                repo = _git_repo(root)
+                (repo / "admins.json").write_text('["admin"]\n')
+                for args in (["add", "-A"], ["commit", "-qm", "data"]):
+                    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                                   env={**os.environ, **GIT_ENV})
+                (repo / "admins.json").write_text('["admin", "eve"]\n')
+                subprocess.run(["git", "-C", str(repo), "update-index", mark, "admins.json"], check=True)
+                evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+                self.assertIn("+++ b/admins.json", evidence.diff.read_text())
+                self.assertIn("eve", (evidence.patch / "admins.json").read_text())
+                listed = subprocess.run(["git", "-C", str(repo), "ls-files", "-v", "admins.json"],
+                                        capture_output=True, text=True).stdout
+                self.assertTrue(listed[0].islower() or listed[0] == "S", listed)
+
     def test_a_changed_image_does_not_stop_the_evidence(self):
         """With --text on every file, a changed image went through git as bytes
         that are not UTF-8, and preparing the evidence failed with a
