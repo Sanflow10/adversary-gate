@@ -320,7 +320,7 @@ def _plain_directories(root: Path) -> set:
     return dirs
 
 
-def _shadowing(root: Path, dirs: set, extra: frozenset = frozenset()) -> dict:
+def _shadowing(root: Path, dirs: set, extra: frozenset) -> dict:
     """Entries in ``dirs`` an import of a standard or runner module would find first.
 
     A module file, or a *package* directory: one without ``__init__.py`` is a

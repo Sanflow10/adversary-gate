@@ -1454,11 +1454,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         unjudged_action = "raise_limit"
         # Every Python file, whatever its name: pytest collects a file named on
         # the command line even when ``python_files`` would not match it, and a
-        # helper with no tests in it collects nothing (exit 5).
-        rewritten_runnable = [
-            rel for rel in rewritten_tests
-            if rel.endswith(".py") and Path(rel).name not in ("conftest.py", "__init__.py")
-        ]
+        # helper with no tests in it, ``conftest.py`` and ``__init__.py``
+        # included, collects nothing (exit 5).
+        rewritten_runnable = [rel for rel in rewritten_tests if rel.endswith(".py")]
         if decision is Decision.MERGE and rewritten_runnable and not full_suite_ran:
             # The claims passed on the patch's code (MERGE), so they stay in on
             # that side: ``--deselect`` matches node ids by prefix, and

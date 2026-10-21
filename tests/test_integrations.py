@@ -389,6 +389,22 @@ class TestGitEvidence(unittest.TestCase):
                 listed = subprocess.run(["git", "-C", str(repo), "ls-files", "-v", "admins.json"],
                                         capture_output=True, text=True).stdout
                 self.assertTrue(listed[0].islower() or listed[0] == "S", listed)
+        with self.subTest("a sparse checkout's file stays out"), tempfile.TemporaryDirectory() as directory:
+            # skip-worktree with the file not on disk is how a sparse checkout
+            # leaves it out; dropping that mark reads it as deleted by the patch.
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "big.json").write_text("[]\n")
+            for args in (["add", "-A"], ["commit", "-qm", "data"]):
+                subprocess.run(["git", "-C", str(repo), *args], check=True,
+                               env={**os.environ, **GIT_ENV})
+            subprocess.run(["git", "-C", str(repo), "update-index", "--skip-worktree", "big.json"], check=True)
+            (repo / "big.json").unlink()
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            diff = evidence.diff.read_text()
+            self.assertIn("+    return (a + b)", diff)
+            self.assertNotIn("big.json", diff)
 
     def test_a_changed_image_does_not_stop_the_evidence(self):
         """With --text on every file, a changed image went through git as bytes

@@ -647,6 +647,11 @@ class TestResourceLimits(unittest.TestCase):
         self.assertIn(("NOFILE", (256, 256)), calls)
         self.assertIn(("FSIZE", (1024, 1024)), calls)
         self.assertIn(("NPROC", (64, 64)), calls)
+        # A ``resource`` that cannot tell the hard limit is set as asked.
+        fake, calls = self._fake_resource()
+        with mock.patch.object(runner, "resource", fake):
+            runner._limit_resources(None, None, 4096, 4096, 64)()
+        self.assertIn(("NOFILE", (4096, 4096)), calls)
 
     def test_every_documented_limit_is_applied_with_hard_bounds(self):
         fake, calls = self._fake_resource()

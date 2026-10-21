@@ -446,13 +446,25 @@ class TestSeveralClaims(unittest.TestCase):
         """3.0.15: with the full suite off, the patch broke ``sub`` below zero and deleted
         the one test outside the claims that said so; the claim on ``sub``
         held and the patch merged."""
+        with self.subTest("no baseline test rewritten: nothing extra runs"):
+            code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+            self.assertEqual(code, EXIT_MERGE, payload)
+            self.assertNotIn("rewritten_tests_run", payload["execution"])
         (self.root / "baseline" / "test_extra.py").write_text(
             "from calc import sub\n\n\ndef test_sub_below_zero():\n    assert sub(1, 3) == -2\n")
+        # A test file the patch left alone, failing on both sides: only the
+        # rewritten files run on the baseline, so it does not make this unclear.
+        for side in ("baseline", "patch"):
+            (self.root / side / "test_broken_elsewhere.py").write_text(
+                "def test_broken():\n    assert False\n")
         (self.root / "patch" / "calc.py").write_text(CALC_PATCHED.replace("(a - b)", "abs(a - b)"))
         (self.root / "change.diff").write_text(DIFF.replace("(a - b)", "abs(a - b)"))
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_BLOCK, payload)
         self.assertIn("test_extra.py", payload["reason"])
+        self.assertIn("a test outside the claims regressed", payload["reason"])
+        self.assertIn({"action": "see_reason", "flags": ["--full-suite-path"], "why": payload["reason"]},
+                      payload["next_steps"])
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["test_extra.py"])
 
     def test_a_sibling_deleted_from_the_claims_own_file_blocks(self):
@@ -488,7 +500,19 @@ class TestSeveralClaims(unittest.TestCase):
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 1)
-        self.assertIn("--full-suite-path", json.dumps(payload["next_steps"]))
+        self.assertIn({"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]},
+                      payload["next_steps"])
+
+    def test_a_kept_test_that_cannot_import_the_patch_is_not_a_block(self):
+        """Exit 2, not 1: the baseline's test could not even be collected on the
+        patch's code. Nothing ran, so nothing regressed either way."""
+        (self.root / "baseline" / "test_extra.py").write_text(
+            "from calc import gone\n\n\ndef test_gone():\n    assert gone() == 1\n")
+        (self.root / "baseline" / "calc.py").write_text(CALC + "\n\ndef gone():\n    return 1\n")
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["patch"], 2)
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 0)
 
     def test_tests_added_to_baseline_files_still_merge(self):
         """The same check does not turn a patch that only adds tests into a refusal."""
@@ -499,9 +523,20 @@ class TestSeveralClaims(unittest.TestCase):
             "def test_add_zero():\n    assert add(0, 0) == 0\n")
         (self.root / "patch" / "test_calc.py").write_text(
             TESTS + "\n\ndef test_sub_zero():\n    assert sub(0, 0) == 0\n")
+        # A rewritten file that is not Python is no pytest target.
+        (self.root / "baseline" / "expected.txt").write_text("2\n")
+        (self.root / "patch" / "expected.txt").write_text("2\n\n")
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_MERGE, payload)
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["patch"], 0)
+        self.assertNotIn("expected.txt", payload["execution"]["rewritten_tests_run"]["files"])
+        self.assertTrue(all(step.get("why") for step in payload["next_steps"]), payload["next_steps"])
+        with self.subTest("the full suite on judges them itself"):
+            code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured(),
+                                     "--full-suite-path", ".")
+            self.assertEqual(code, EXIT_MERGE, payload)
+            self.assertTrue(payload["full_suite_ran"], payload)
+            self.assertNotIn("rewritten_tests_run", payload["execution"])
 
     def test_discovering_nothing_is_inconclusive_not_merge(self):
         self.coverage.write_text(json.dumps(_contexts_report({"6": ["test_calc.test_add"]})))
