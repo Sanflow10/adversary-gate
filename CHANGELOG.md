@@ -36,6 +36,20 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.15] — 2026-10-22
+
+Holes found by an audit of 3.0.14 and confirmed with crafted repositories,
+plus one found by running the gate on this release's own branch. Each change
+has a test that fails on 3.0.14.
+
+> **Stricter verdicts.** With the full suite off, a patch that deletes or
+> changes a baseline test file now has that file's baseline tests run on its
+> code; a file hidden from git by an index flag, a test helper kept in `.tox`
+> or `.nox`, and a module named like an installed pytest plugin are now
+> judged where they could reach `MERGE`.
+
 ### Security
 
 - **A deleted baseline test is run even with the full suite off.** The
