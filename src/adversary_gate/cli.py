@@ -39,6 +39,7 @@ from adversary_gate.core.types import (
     Outcome,
 )
 from adversary_gate.sandbox.runner import SandboxResult, build_target, bwrap_available, run_test
+from adversary_gate.sandbox.runner import _SUMMARY as _PYTEST_SUMMARY
 from adversary_gate.verifiers.coverage import (
     UnparseableDiff,
     covered_diff_ratio,
@@ -990,6 +991,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         set_test_support(())
 
 
+def _skipped(stdout: str) -> int:
+    """Tests pytest's count lines say were skipped or xfailed.
+
+    Summed over every count line: a test can print one of its own, which only
+    adds, and never removes pytest's.
+    """
+    return sum(
+        int(count)
+        for line in stdout.splitlines() if _PYTEST_SUMMARY.match(line.strip())
+        for count in re.findall(r"(\d+) (?:skipped|xfailed)\b", line)
+    )
+
+
 def _main(argv: Optional[Sequence[str]] = None) -> int:
     # What runs in the background (the full suite) and where: always waited
     # for and removed before returning, an exception halfway included.
@@ -1467,21 +1481,32 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 deselected += ["--deselect", build_target(claim.test_path, claim.test_id)]
             with tempfile.TemporaryDirectory(prefix="adversary-rewritten-") as scratch:
                 tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
-                on_patch = run_test(
+                ran = run_test(
                     tree, "", targets=rewritten_runnable,
                     require_network_isolation=args.require_network_isolation,
                     **run_options, **full_limits,
-                ).exit_code
-            on_baseline = None
-            if on_patch not in (PYTEST_OK, PYTEST_NO_TESTS):
-                on_baseline = run_test(
+                )
+            on_patch, skipped_on_patch = ran.exit_code, _skipped(ran.stdout)
+            on_baseline = skipped_on_baseline = None
+            # A skip passes nothing (3.0.14): exit 5, or a run that skipped
+            # some, is weighed against the baseline. A test that skips itself
+            # once the patch drops what it looks for is a test the patch removed.
+            if on_patch != PYTEST_OK or skipped_on_patch:
+                ran = run_test(
                     Path(args.baseline), "", targets=deselected,
                     require_network_isolation=args.require_network_isolation,
                     **run_options, **full_limits,
-                ).exit_code
+                )
+                on_baseline, skipped_on_baseline = ran.exit_code, _skipped(ran.stdout)
             execution["rewritten_tests_run"] = {
                 "files": rewritten_runnable, "patch": on_patch, "baseline": on_baseline,
+                "skipped_on_patch": skipped_on_patch, "skipped_on_baseline": skipped_on_baseline,
             }
+            settled = (
+                on_baseline is None
+                or (on_patch == on_baseline == PYTEST_NO_TESTS)
+                or (on_patch == PYTEST_OK and skipped_on_patch <= skipped_on_baseline)
+            )
             files = ", ".join(rewritten_runnable)
             if on_baseline == PYTEST_OK and on_patch == PYTEST_TESTS_FAILED:
                 decision = Decision.BLOCK
@@ -1492,12 +1517,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "baseline's version of those tests passes on the baseline and fails on "
                     "the patch's code: a test outside the claims regressed"
                 )
-            elif on_baseline is not None:
+            elif not settled:
                 decision = Decision.INCONCLUSIVE
                 unjudged_reason = (
                     f"the patch deleted or changed {files} and the full suite is off; the "
                     f"baseline's version of those tests did not pass on the patch's code "
-                    f"(exit {on_patch}; baseline exit {on_baseline}), so nothing shows the "
+                    f"(exit {on_patch}, {skipped_on_patch} skipped; baseline exit "
+                    f"{on_baseline}, {skipped_on_baseline} skipped), so nothing shows the "
                     "patch kept what they checked; run the full suite"
                 )
                 unjudged_flags = ["--full-suite-path"]

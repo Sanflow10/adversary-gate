@@ -477,6 +477,15 @@ class TestSeveralClaims(unittest.TestCase):
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_BLOCK, payload)
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["files"], ["test_calc.py"])
+        with self.subTest("the claim fails on the baseline, as a fix's claim does"):
+            # It sits in the rewritten file, so the baseline run must leave it
+            # out, or its failure there hides the sibling that passes.
+            (self.root / "baseline" / "calc.py").write_text(
+                CALC.replace("return a - b", "return 0 if a == 5 else a - b"))
+            code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+            self.assertEqual(payload["claims"][0]["outcome"], "verified", payload)
+            self.assertEqual(code, EXIT_BLOCK, payload)
+            self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 0)
 
     def test_a_test_file_outside_the_name_pattern_is_run_too(self):
         """``python_files = check_*.py``: the file is a test file to the
@@ -502,6 +511,45 @@ class TestSeveralClaims(unittest.TestCase):
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 1)
         self.assertIn({"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]},
                       payload["next_steps"])
+
+    def test_a_kept_test_that_skips_itself_on_the_patch_is_not_a_merge(self):
+        """A skip passes nothing (3.0.14): the baseline's test skips once the patch
+        drops the flag it looks for, and the patch broke what it checked."""
+        skipping = (
+            "import pytest\n\nimport calc\n\n\n"
+            "@pytest.mark.skipif(not hasattr(calc, 'CHECKED'), reason='old')\n"
+            "def test_sub_below_zero():\n    assert calc.sub(1, 3) == -2\n")
+        kept = "\n\ndef test_add_zero():\n    assert calc.add(0, 0) == 0\n"
+        (self.root / "baseline" / "calc.py").write_text(CALC + "\nCHECKED = True\n")
+        (self.root / "patch" / "calc.py").write_text(CALC_PATCHED.replace("(a - b)", "abs(a - b)"))
+        (self.root / "change.diff").write_text(DIFF.replace("(a - b)", "abs(a - b)"))
+        for label, text, exit_on_patch in (("every test skips", skipping, 5),
+                                           ("one test of two skips", skipping + kept, 0)):
+            with self.subTest(label):
+                (self.root / "baseline" / "test_extra.py").write_text(text)
+                code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+                self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+                run = payload["execution"]["rewritten_tests_run"]
+                self.assertEqual((run["patch"], run["skipped_on_patch"]), (exit_on_patch, 1), run)
+                self.assertEqual((run["baseline"], run["skipped_on_baseline"]), (0, 0), run)
+                self.assertIn("1 skipped", payload["reason"])
+
+    def test_a_test_skipped_on_both_sides_still_merges(self):
+        (self.root / "baseline" / "test_extra.py").write_text(
+            "import pytest\n\nfrom calc import add\n\n\n"
+            "@pytest.mark.skip(reason='slow')\ndef test_slow():\n    assert add(1, 1) == 2\n\n\n"
+            "def test_add_zero():\n    assert add(0, 0) == 0\n")
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_MERGE, payload)
+        run = payload["execution"]["rewritten_tests_run"]
+        self.assertEqual((run["skipped_on_patch"], run["skipped_on_baseline"]), (1, 1), run)
+        with self.subTest("a rewritten file with no tests on either side"):
+            (self.root / "baseline" / "test_extra.py").write_text("ONE = 1\n")
+            (self.root / "patch" / "test_extra.py").write_text("ONE = 1\nTWO = 2\n")
+            code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+            self.assertEqual(code, EXIT_MERGE, payload)
+            run = payload["execution"]["rewritten_tests_run"]
+            self.assertEqual((run["patch"], run["baseline"]), (5, 5), run)
 
     def test_a_kept_test_that_cannot_import_the_patch_is_not_a_block(self):
         """Exit 2, not 1: the baseline's test could not even be collected on the
