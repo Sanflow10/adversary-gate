@@ -109,6 +109,22 @@ It is a **mutation score** — `mutants killed / mutants executable` — produce
 
 Several things must hold before a score exists, and each one that fails leaves the strength **not measured**. The claims must pass on the unmutated patch, the reference: if they do not, a mutant that fails the same way is not a kill (D). A Python file the patch adds that cannot be paired with a baseline file, because the baseline is over 400 files or 5000 lines, is never mutated (B). Every changed Python file must be UTF-8: one that is not cannot be mutated, and it used to be skipped in silence while the other files' score stood for the patch. And every claim runs on a neutral copy of the patch: one comment per changed line, a space after each token a mutant would swap, and one no-op assignment — deleted on the same line, so it never shows in `locals()` or a class's `vars()` — in the block of each changed statement (in front of it, or after a docstring or the `from __future__` imports, which must stay first). A claim that fails on that copy reads the code's text or structure instead of what it does (A). The copy catches a claim that reads the file, a piece of a changed line, its whole tree or the bytecode of the changed function; one that reads a smaller piece of the tree, such as a single expression, or that normalizes the text before comparing, can still pass. If that copy cannot be built for a changed file, nothing is measured either.
 
+#### Small changes: why a correct one-line fix is INCONCLUSIVE
+
+The strength floor reads the lower bound of a confidence interval, and a small
+change has few mutation sites: 1 killed out of 1 bounds the strength at 0.38,
+and the default floor (0.75 at 0.80 confidence) takes **at least 5** killed
+mutants. When every mutant was killed and there were simply too few, the
+`reason` says *"the change is too small to measure at this floor"* and gives
+the count — weak tests look different: a survivor, named in `next_steps`.
+More tests cannot add mutants; only a bigger change can. What remains is the
+operator's choice, never the patch's — which is why `next_steps`, which an
+agent reads, names no flag:
+
+- accept the answer: the fix is proven (`fix_proven: true`), only the strength is unmeasured, and a human reviews it;
+- `--census-min-mutants N`, below: judge a complete census of the change by its exact ratio;
+- `--mutate-constants`: also break integer literals, which adds sites on some lines.
+
 **`--census-min-mutants N` (experimental, off by default).** Below the mutant budget the gate breaks *every* mutable site of the change — a census, not a sample. With this flag, when the census covers the whole change (every changed executable line has a site; statement-level sites are added for lines with no operator), nothing was stillborn, **every mutant died**, and there are at least N, the exact ratio is judged instead of the Wilson lower bound. Off by default: "1 killed out of 1 is not strong" stays the rule unless you opt in. A first version let a real bug through (one surviving operator mutant diluted by easy statement-level kills); the ledger has the case.
 
 **`next_steps`.** Every answer that is not `MERGE` lists what would make it one, as actions a coding agent can take: `cover` (file, lines), `kill_mutant` (file, line, mutation), `add_test`, `fix_code`, `human_review_test_edit`, `raise_limit`, `see_reason`. It never suggests editing a baseline test, a harness file, a floor or the policy — those are the oracle.
@@ -418,6 +434,39 @@ no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
 ---
 
 ## 🚀 Quick Start (CLI & GitHub Action)
+
+### First run, in one minute
+
+From the root of a git repository whose agent's change sits on top of `main`
+(new files tracked: `git add -N` them), with `pip install adversary-gate coverage`:
+
+```bash
+BASE=main                                         # the commit before the agent's change
+W=$(mktemp -d)
+git worktree add -q "$W/before" "$BASE"           # the baseline, exactly as committed
+git diff --no-ext-diff "$BASE" > "$W/changes.diff"  # baseline -> your working tree
+coverage run -m pytest -q && coverage json -q -o "$W/coverage.json"
+adversary-gate --baseline "$W/before" --patch . \
+  --claim tests/test_shop.py::test_discount_never_negative \
+  --diff "$W/changes.diff" --coverage-json "$W/coverage.json" > "$W/answer.json"
+echo "exit $?"                                    # 0 MERGE, 1 BLOCK, 2 INCONCLUSIVE
+python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'], '-', a['reason'])" "$W/answer.json"
+git worktree remove --force "$W/before"
+```
+
+Replace the `--claim` with the test that proves your fix (`path::test`). On a
+correct **one-line** fix, expect this first answer:
+
+```text
+exit 2
+inconclusive - every claim held and the fix is proven, but suite strength's lower bound is 0.38,
+below the 0.75 floor (1/1 mutants killed): the change is too small to measure at this floor,
+which takes at least 5 killed mutants; see next_steps
+```
+
+That is not a failure: the fix *is* proven, and the gate says plainly that it
+could not measure how strong the tests are on a change this small. See
+[Small changes](#small-changes-why-a-correct-one-line-fix-is-inconclusive).
 
 ### Command-Line Usage
 

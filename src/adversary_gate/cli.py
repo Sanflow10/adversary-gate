@@ -52,6 +52,7 @@ from adversary_gate.verifiers.strength import (
     DEFAULT_CONFIDENCE,
     DEFAULT_MAX_MUTANTS,
     classify_changes,
+    kills_to_clear,
     measure_mutation_score,
 )
 from adversary_gate.verifiers.testpaths import is_test_path, set_test_support
@@ -248,6 +249,26 @@ def _decisive(verdicts: Sequence[GateVerdict]) -> Optional[GateVerdict]:
     return verdicts[0] if verdicts else None
 
 
+def _too_few_mutants(mutation, args) -> Optional[int]:
+    """How many kills the floor needs, when the only shortfall is the sample's size.
+
+    Every mutant measured and killed, none stillborn, no line left without a
+    site, and still under the floor: the change is too small for n out of n
+    to clear it, which is not the same answer as weak tests. None otherwise.
+    The decision does not change; only what it says.
+    """
+    m = mutation or {}
+    counted, killed = m.get("mutants_counted") or 0, m.get("mutants_killed") or 0
+    interval = m.get("interval") or [1.0]
+    if (not m.get("measured") or m.get("survivors") or m.get("stillborn")
+            or m.get("unmutated_lines") or m.get("blind_spots")
+            or not counted or killed != counted
+            or interval[0] >= args.suite_strength_floor):
+        return None
+    needed = kills_to_clear(args.suite_strength_floor, args.strength_confidence)
+    return needed if needed is not None and needed > counted else None
+
+
 def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=None,
             strength_judged=None, strength_unverified=False, mutation=None) -> str:
     """One sentence that agrees with the decision (AG-034).
@@ -340,9 +361,12 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
             killed = (mutation or {}).get("mutants_killed")
             counted = (mutation or {}).get("mutants_counted")
             tally = f" ({killed}/{counted} mutants killed)" if counted else ""
+            needed = _too_few_mutants(mutation, args)
+            small = (f": the change is too small to measure at this floor, which takes "
+                     f"at least {needed} killed mutants; see next_steps") if needed else ""
             return (
                 f"{proven}, but suite strength's lower bound is {strength_judged:.2f}, "
-                f"below the {args.suite_strength_floor:.2f} floor{tally}"
+                f"below the {args.suite_strength_floor:.2f} floor{tally}{small}"
             )
     if decisive is not None:
         return decisive.reason
@@ -453,6 +477,17 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
     census = (mutation or {}).get("census") or {}
     if not steps and (mutation or {}).get("measured") is False and (mutation or {}).get("reason"):
         steps.append({"action": "see_reason", "why": (mutation or {}).get("reason")})
+    needed = _too_few_mutants(mutation, args) if decision is Decision.INCONCLUSIVE else None
+    if not steps and needed:
+        # No flag named: whether a complete census of a small change is
+        # enough is the operator's call, and an agent reads this list.
+        counted = (mutation or {}).get("mutants_counted")
+        steps.append({"action": "see_reason",
+                      "why": f"every one of the {counted} mutant(s) of this change was killed, but "
+                             f"the floor takes at least {needed}: the change is small, not the "
+                             "tests weak. A bigger test suite cannot add mutants; whether a "
+                             "complete census of a small change is enough is the operator's "
+                             "decision (README, 'Small changes'), never the patch's"})
     if not steps and census.get("why_not") and decision is Decision.INCONCLUSIVE:
         steps.append({"action": "see_reason", "why": census["why_not"]})
     return [s for s in steps if s["action"] in NEXT_STEP_ACTIONS]

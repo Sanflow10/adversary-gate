@@ -167,6 +167,20 @@ def wilson_interval(killed: int, total: int, confidence: float = DEFAULT_CONFIDE
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
+def kills_to_clear(floor: float, confidence: float = DEFAULT_CONFIDENCE, cap: int = 1000) -> Optional[int]:
+    """The fewest mutants, every one killed, whose lower bound reaches ``floor``.
+
+    A small change has few mutation sites, and n out of n killed bounds the
+    strength at no more than this allows: 1/1 is 0.38 at 0.80 confidence.
+    Saying how many it takes tells a too-small sample apart from weak tests.
+    None when no count up to ``cap`` reaches the floor.
+    """
+    for n in range(1, cap + 1):
+        if wilson_interval(n, n, confidence)[0] >= floor:
+            return n
+    return None
+
+
 @dataclass(frozen=True)
 class SuiteStrength:
     mutants_total: int

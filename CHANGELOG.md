@@ -36,6 +36,21 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Clearer answers (no verdict changes)
+
+Found by running 3.0.15 as a first-time user would, on a correct one-line fix.
+
+- **A change too small to measure now says so.** Every mutant killed, too few
+  of them to clear the strength floor (1/1 bounds it at 0.38; 0.75 takes 5):
+  the decision stays `INCONCLUSIVE`, but the `reason` now says *"the change is
+  too small to measure at this floor, which takes at least N killed mutants"*,
+  and `next_steps` explains it instead of `off (--census-min-mutants 0)`. The
+  step names no flag: how the floor is judged is the operator's decision, and
+  an agent reads that list. A survivor still reads as weak tests.
+- **README: "First run, in one minute"**, a copy-paste script from a git
+  repository, showing the answer a one-line fix gets and why, and a "Small
+  changes" section with the operator's options.
+
 ---
 
 ## [3.0.15] — 2026-10-22

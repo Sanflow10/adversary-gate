@@ -46,6 +46,7 @@ from adversary_gate.verifiers.strength import (
     DEFAULT_MAX_MUTANTS,
     _spread,
     calculate_mutation_score,
+    kills_to_clear,
     measure_mutation_score,
     wilson_interval,
 )
@@ -575,7 +576,8 @@ class TestNextSteps(unittest.TestCase):
                 self.assertFalse(target.startswith("test_") or "/test" in target, step)
         text = json.dumps(steps).lower()
         for forbidden in ("conftest", "pytest.ini", "pyproject", "--coverage-floor",
-                          "--suite-strength-floor", "adversary_gate_policy"):
+                          "--suite-strength-floor", "adversary_gate_policy",
+                          "--census-min-mutants", "--strength-confidence", "--mutate-constants"):
             self.assertNotIn(forbidden, text)
 
     def test_merge_has_nothing_to_do(self):
@@ -610,6 +612,59 @@ class TestNextSteps(unittest.TestCase):
             self.assertEqual(cover, [{"action": "cover", "file": "calc.py", "lines": [14, 18],
                                       "why": cover[0]["why"]}])
             self._assert_safe(payload["next_steps"], root)
+
+    def test_a_change_too_small_to_measure_says_so(self):
+        """Every mutant killed, too few of them: the size of the change, not weak tests.
+
+        A one-line fix has one or two mutation sites, and 1/1 bounds the
+        strength at 0.38. The answer used to be ``off (--census-min-mutants
+        0)``, which reads like a fault. It now says how many kills the floor
+        takes -- and names no flag, because loosening how the floor is judged
+        is the operator's decision, and an agent reads this list.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            code, payload = _cli(root)
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            steps = payload["next_steps"]
+            self.assertEqual([s["action"] for s in steps], ["see_reason"], steps)
+            self.assertNotIn("flags", steps[0])
+            self.assertIn("at least 5", steps[0]["why"])
+            self.assertIn("operator", steps[0]["why"])
+            self.assertIn("too small to measure", payload["reason"])
+            self._assert_safe(steps, root)
+
+            with self.subTest("a survivor is weak tests, not a small change"):
+                body = (root / "patch" / "calc.py").read_text().replace(
+                    "def sub(a, b):\n    return a - b\n",
+                    "def sub(a, b):\n    if a > 0 and b > 0:\n        return a - b\n    return a - b\n",
+                )
+                (root / "patch" / "calc.py").write_text(body)
+                _, payload = _cli(root)
+                self.assertTrue(payload["mutation"]["survivors"], payload["mutation"])
+                self.assertNotIn("too small", payload["reason"])
+                self.assertNotIn("too small", json.dumps(payload["next_steps"]))
+                self.assertNotIn("is small", json.dumps(payload["next_steps"]))
+
+    def test_the_count_follows_the_operators_floor(self):
+        """5/5 clears 0.75 and is too small for 0.99: the count is the floor's, not fixed."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            _, payload = _cli(root)
+            self.assertEqual(payload["decision"], "merge")
+            _, payload = _cli(root, "--suite-strength-floor", "0.99")
+            self.assertEqual(payload["decision"], "inconclusive")
+            self.assertIn(f"at least {kills_to_clear(0.99, 0.80)}", payload["reason"])
+            self._assert_safe(payload["next_steps"], root)
+
+    def test_kills_to_clear(self):
+        self.assertEqual(kills_to_clear(0.75, 0.80), 5)
+        self.assertEqual(kills_to_clear(0.75, 0.0), 1)
+        self.assertIsNone(kills_to_clear(1.01, 0.80))
+        self.assertGreaterEqual(wilson_interval(5, 5, 0.80)[0], 0.75)
+        self.assertLess(wilson_interval(4, 4, 0.80)[0], 0.75)
 
     def test_a_regression_says_fix_the_code(self):
         with tempfile.TemporaryDirectory() as directory:
