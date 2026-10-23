@@ -46,7 +46,9 @@ Found by running 3.0.15 as a first-time user would, on a correct one-line fix.
   too small to measure at this floor, which takes at least N killed mutants"*,
   and `next_steps` explains it instead of `off (--census-min-mutants 0)`. The
   step names no flag: how the floor is judged is the operator's decision, and
-  an agent reads that list. A survivor still reads as weak tests.
+  an agent reads that list. A survivor still reads as weak tests. When the
+  operator turned the census on, its own reason (for example *"1 mutant(s),
+  below the minimum of 3 for a census"*) is kept in that step.
 - **README: "First run, in one minute"**, a copy-paste script from a git
   repository, showing the answer a one-line fix gets and why, and a "Small
   changes" section with the operator's options.

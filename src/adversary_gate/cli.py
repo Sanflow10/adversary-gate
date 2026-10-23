@@ -250,15 +250,14 @@ def _decisive(verdicts: Sequence[GateVerdict]) -> Optional[GateVerdict]:
 
 
 def _too_few_mutants(mutation, args) -> Optional[int]:
-    """How many kills the floor needs, when the only shortfall is the sample's size.
-
-    Every mutant measured and killed, none stillborn, no line left without a
-    site, and still under the floor: the change is too small for n out of n
-    to clear it, which is not the same answer as weak tests. None otherwise.
-    The decision does not change; only what it says.
-    """
+    """How many kills the floor needs, when the only shortfall is the sample's size."""
+    # Every mutant measured and killed, none stillborn, no line left without a
+    # site, and still under the floor: the change is too small for n out of n
+    # to clear it, which is not the same answer as weak tests. None otherwise.
+    # The decision does not change; only what it says. (Comments, not a long
+    # docstring: a docstring line counts as changed code no test can cover.)
     m = mutation or {}
-    counted, killed = m.get("mutants_counted") or 0, m.get("mutants_killed") or 0
+    counted, killed = m.get("mutants_counted"), m.get("mutants_killed")
     interval = m.get("interval") or [1.0]
     if (not m.get("measured") or m.get("survivors") or m.get("stillborn")
             or m.get("unmutated_lines") or m.get("blind_spots")
@@ -477,17 +476,19 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
     census = (mutation or {}).get("census") or {}
     if not steps and (mutation or {}).get("measured") is False and (mutation or {}).get("reason"):
         steps.append({"action": "see_reason", "why": (mutation or {}).get("reason")})
-    needed = _too_few_mutants(mutation, args) if decision is Decision.INCONCLUSIVE else None
+    needed = _too_few_mutants(mutation, args)
     if not steps and needed:
         # No flag named: whether a complete census of a small change is
         # enough is the operator's call, and an agent reads this list.
-        counted = (mutation or {}).get("mutants_counted")
+        # The census's own why_not is kept when the operator turned it on; when
+        # it is off, that text names the flag, so it stays in payload.mutation.
+        why_census = f" (census: {census['why_not']})" if census.get("minimum") and census.get("why_not") else ""
         steps.append({"action": "see_reason",
-                      "why": f"every one of the {counted} mutant(s) of this change was killed, but "
-                             f"the floor takes at least {needed}: the change is small, not the "
-                             "tests weak. A bigger test suite cannot add mutants; whether a "
-                             "complete census of a small change is enough is the operator's "
-                             "decision (README, 'Small changes'), never the patch's"})
+                      "why": f"every one of the {mutation['mutants_counted']} mutant(s) of this change "
+                             f"was killed, but the floor takes at least {needed}: the change is "
+                             "small, not the tests weak. A bigger test suite cannot add mutants; "
+                             "whether a complete census of a small change is enough is the "
+                             f"operator's decision (README, 'Small changes'), never the patch's{why_census}"})
     if not steps and census.get("why_not") and decision is Decision.INCONCLUSIVE:
         steps.append({"action": "see_reason", "why": census["why_not"]})
     return [s for s in steps if s["action"] in NEXT_STEP_ACTIONS]

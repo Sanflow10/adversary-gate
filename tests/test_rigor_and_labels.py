@@ -31,7 +31,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, main
+import argparse
+
+from adversary_gate.cli import EXIT_INCONCLUSIVE, EXIT_MERGE, EXIT_USAGE, _next_steps, _too_few_mutants, main
 from adversary_gate.core.gate import Gate
 from adversary_gate.core.metrics import compute_metrics
 from adversary_gate.core.types import (
@@ -661,10 +663,71 @@ class TestNextSteps(unittest.TestCase):
 
     def test_kills_to_clear(self):
         self.assertEqual(kills_to_clear(0.75, 0.80), 5)
+        self.assertEqual(kills_to_clear(0.75), 5)
         self.assertEqual(kills_to_clear(0.75, 0.0), 1)
         self.assertIsNone(kills_to_clear(1.01, 0.80))
         self.assertGreaterEqual(wilson_interval(5, 5, 0.80)[0], 0.75)
         self.assertLess(wilson_interval(4, 4, 0.80)[0], 0.75)
+        # A lower bound exactly on the floor clears it.
+        self.assertEqual(kills_to_clear(wilson_interval(5, 5, 0.80)[0], 0.80), 5)
+        # The cap is the last count tried, not one short of it.
+        self.assertEqual(kills_to_clear(0.75, 0.80, cap=5), 5)
+        self.assertIsNone(kills_to_clear(0.75, 0.80, cap=4))
+
+    def test_only_a_clean_full_kill_is_called_small(self):
+        """Any other shortfall -- a survivor, a stillborn, an unmeasured line -- is not size."""
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80)
+        small = {"measured": True, "mutants_counted": 2, "mutants_killed": 2,
+                 "interval": [wilson_interval(2, 2, 0.80)[0], 1.0]}
+        self.assertEqual(_too_few_mutants(small, args), 5)
+        for key, value in (("measured", False), ("survivors", ["calc.py:3"]), ("stillborn", 1),
+                           ("unmutated_lines", ["calc.py:4"]), ("blind_spots", ["calc.py:3 -> x"]),
+                           ("mutants_counted", 0), ("mutants_killed", 1)):
+            with self.subTest(key):
+                self.assertIsNone(_too_few_mutants({**small, key: value}, args))
+        self.assertIsNone(_too_few_mutants(None, args))
+        self.assertIsNone(_too_few_mutants({k: v for k, v in small.items() if k != "interval"}, args))
+        self.assertIsNone(_too_few_mutants({**small, "interval": [0.75, 1.0]}, args))
+        self.assertIsNone(_too_few_mutants({**small, "mutants_counted": 5, "mutants_killed": 5}, args))
+        unreachable = argparse.Namespace(suite_strength_floor=1.01, strength_confidence=0.80)
+        self.assertIsNone(_too_few_mutants(small, unreachable))
+
+    def test_small_is_said_only_when_nothing_else_is_missing(self):
+        """An uncovered line is named first; a BLOCK is never called small."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            cov = json.loads((root / "cov.json").read_text())
+            cov["files"]["calc.py"]["executed_lines"] = [1, 5, 6, 9, 10, 13, 14, 17, 18]
+            (root / "cov.json").write_text(json.dumps(cov))
+            _, payload = _cli(root)
+            self.assertEqual(payload["mutation"]["mutants_killed"], payload["mutation"]["mutants_counted"])
+            self.assertEqual([s["action"] for s in payload["next_steps"]], ["cover"], payload["next_steps"])
+        from adversary_gate.core.gate import Decision
+
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.75, diff=None, coverage_json=None)
+        small = {"measured": True, "mutants_counted": 1, "mutants_killed": 1,
+                 "interval": [wilson_interval(1, 1, 0.80)[0], 1.0]}
+        held = [mock.Mock(outcome=Outcome.VERIFIED)]
+        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=1.0, mutation=small)
+        self.assertEqual([s["action"] for s in steps], ["see_reason"], steps)
+        self.assertEqual(_next_steps(Decision.BLOCK, held, None, args, coverage_ratio=1.0, mutation=small), [])
+
+    def test_a_census_the_operator_turned_on_keeps_its_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 1)
+            code, payload = _cli(root, "--census-min-mutants", "3")
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            steps = payload["next_steps"]
+            self.assertEqual([s["action"] for s in steps], ["see_reason"], steps)
+            self.assertIn("at least 5", steps[0]["why"])
+            self.assertIn("census: " + payload["mutation"]["census"]["why_not"], steps[0]["why"])
+            self._assert_safe(steps, root)
+            # Off, the census's text names its flag; it stays out of next_steps.
+            _, payload = _cli(root)
+            self.assertNotIn("census:", json.dumps(payload["next_steps"]))
 
     def test_a_regression_says_fix_the_code(self):
         with tempfile.TemporaryDirectory() as directory:
