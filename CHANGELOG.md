@@ -50,6 +50,10 @@ Found by running 3.0.15 as a first-time user would, on a correct one-line fix.
 - **README: "First run, in one minute"**, a copy-paste script from a git
   repository, showing the answer a one-line fix gets and why, and a "Small
   changes" section with the operator's options.
+- **Ledger: external findings that do not hold.** A new section 23 in
+  `ERRORS_AND_INCONSISTENCIES.md` records F-003 ("a race between mutation
+  lanes"), checked against the code: one lane by default, and each opt-in
+  lane on its own copy. The real risk of that family stays AG-043.
 
 ---
 

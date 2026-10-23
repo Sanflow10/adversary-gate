@@ -518,3 +518,17 @@ CHANGELOG.
 | ID | Severidade | Reprodução | Estado |
 |---|---|---|---|
 | **AG-047** | Alta — fail-open | O gate decidia que um arquivo era teste só pelo caminho (`test_*`, `*_test.py` ou pasta `tests`). Um módulo de produção com um desses nomes, importado pelo código sob teste, ficava fora da cobertura e da mutação e era revertido ao baseline pelo oráculo: uma mudança nele nunca era julgada, o que abria caminho para MERGE com uma asserção torta. **Não reproduzido de ponta a ponta**; o conserto foi verificado no mecanismo. | **Corrigido na `3.0.6`** — um módulo Python com caminho de teste que um módulo que não é teste importa passa a ser tratado como código: medido, mutado e julgado, não revertido. Um auxiliar importado só por testes continua teste; `conftest.py` e `--test-support` nunca são reclassificados. **Aberto (documentado no SECURITY.md):** a detecção lê os imports pela AST, então um módulo alcançado só por import dinâmico (`importlib`, `__import__`) ou por um caminho que o resolvedor não casa não é pego. Testes: `test_testpaths_content.py`. |
+
+---
+
+## 23. Achados externos que não procedem
+
+Os achados de fora entram aqui quando a reprodução não confirma o que eles
+descrevem. Assim o próximo revisor não precisa refazer a verificação. Quando a
+reprodução confirma, o achado vira um item corrigido nas seções acima, como o
+F-002 da mesma auditoria, corrigido na `3.0.14` (arquivo citado pelo código
+tratado como código).
+
+| ID | Afirmação | Verificação | Estado |
+|---|---|---|---|
+| **F-003** (auditoria externa de 2026-10-18, sobre a `3.0.12`) | "Corrida entre lanes, severidade alta." O conserto de 3.0.12 reseta a árvore inteira a cada mutante (`rmtree` + `copytree`). Segundo a auditoria, no caminho sem gêmeo do oráculo (o padrão da CLI) a linha `workers = 1 if twin is not None else min(2, ...)` deixava duas lanes concorrentes apagando e recriando a mesma pasta. | Essa linha não existe no código. O número de workers é `max(1, min(parallel, len(jobs)))`, e `parallel` vale `1` por padrão (`--mutation-workers`, padrão 1): uma lane só, na pasta `work`. Com `--mutation-workers N`, cada lane recebe a sua cópia (`work`, `repo1`, …, criadas com `copytree` antes do pool), e uma lane nunca apaga a pasta de outra. Reconferido na `3.0.15`. Testes: `TestMutantsInParallel`, `TestMutantWorkersAreOptIn`. | **Não procede.** O risco real dessa família é o **AG-043** (seção 18): com `--mutation-workers N`, testes que dividem algo **fora** do repositório (um caminho fixo em `/tmp`, uma porta, um banco) podem fazer uma execução falhar por causa da outra, e essa falha conta como mutante morto. Por isso o paralelo é escolha do operador, desligado por padrão, e é recusado junto com `--census-min-mutants`. |
