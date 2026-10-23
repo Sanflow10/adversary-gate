@@ -56,6 +56,11 @@ Found by running 3.0.15 as a first-time user would, on a correct one-line fix.
   `ERRORS_AND_INCONSISTENCIES.md` records F-003 ("a race between mutation
   lanes"), checked against the code: one lane by default, and each opt-in
   lane on its own copy. The real risk of that family stays AG-043.
+- **Ledger: external findings that hold in part.** A new section 24 records
+  F-004 (the rewritten-test scan repeats for every claim, uncached). Measured
+  at about 0.3 s per call on this repository: a slowdown on very large trees
+  that ends at most in a timeout `INCONCLUSIVE`, never a wrong `MERGE`. The
+  fix is planned for the release after this one.
 
 ---
 
