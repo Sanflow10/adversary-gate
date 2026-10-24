@@ -1917,6 +1917,23 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["build/blob.dat", "tests/_bin/ratelib.cpython-312-x86_64-linux-gnu.so"],
             )
 
+    def test_a_universal_macos_library_in_a_test_folder_is_code(self):
+        """A fat Mach-O ``.dylib`` that ctypes loads from ``tests/`` was skipped unjudged (3.0.15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "tests" / "_bin").mkdir(parents=True)
+            (root / "patch" / "tests" / "_bin" / "librate.dylib").write_bytes(b"\xca\xfe\xba\xbe\x00\x00\x00\x02")
+            (root / "patch" / "tests" / "_bin" / "librate64.dylib").write_bytes(b"\xca\xfe\xba\xbf\x00\x00\x00\x02")
+            (root / "patch" / "tests" / "_bin" / "notes.dat").write_bytes(b"\xca\xfe\xba\x00")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["tests/_bin/librate.dylib", "tests/_bin/librate64.dylib"],
+            )
+
     def test_a_document_a_child_process_runs_is_code(self):
         """``subprocess.run([sys.executable, "rules.conf"])`` on plain assignments (3.0.14)."""
         with tempfile.TemporaryDirectory() as directory:

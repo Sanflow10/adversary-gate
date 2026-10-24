@@ -36,6 +36,14 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Fixed
+
+- **A universal macOS library is code.** A fat Mach-O (`cafebabe` or
+  `cafebabf`, the usual shape of a `.dylib` built for Intel and Apple Silicon)
+  was not among the native magics, so one in a test folder, loaded by `ctypes`,
+  was skipped unjudged; single-architecture Mach-O, ELF and PE already counted.
+  Reported by an external audit of 3.0.15.
+
 ### Clearer answers (no verdict changes)
 
 Found by running 3.0.15 as a first-time user would, on a correct one-line fix.

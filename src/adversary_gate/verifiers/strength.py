@@ -336,8 +336,12 @@ _DATA_SUFFIXES = frozenset({".json", ".jsonc", ".jsonl", ".jsonlines", ".ndjson"
 _IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
 
 #: ELF, PE and Mach-O (both byte orders, 32 and 64 bit): what ctypes can load.
+#: A universal (fat) Mach-O, the usual shape of a macOS ``.dylib``, opens with
+#: its own big-endian magic, 32 or 64 bit; it was missed until 3.0.16. Java's
+#: ``.class`` shares ``cafebabe``, and is code as well.
 _NATIVE_MAGIC = frozenset({b"\x7fELF", b"MZ\x90\x00", b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe",
-                           b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce"})
+                           b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
+                           b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"})
 
 
 def _carries_code(path: Path) -> bool:
