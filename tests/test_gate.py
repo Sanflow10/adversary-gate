@@ -1991,6 +1991,8 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             (data / "rules.txt").write_text("def scale(a):\n    return 0 if a > 100 else a * 2\n")
             (data / "notes.txt").write_text("expected: 4, then 6\n")
             (data / "table.csv").write_text("a,b\n1,2\n")
+            # A folder sorted right after the Python text is not that text.
+            (data / "rules_old").mkdir()
             # Python text in a fixture, with no changed module that runs text: a fixture.
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
             (root / "patch" / "calc.py").write_text(
