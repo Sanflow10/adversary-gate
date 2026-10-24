@@ -362,6 +362,14 @@ def _carries_code(path: Path) -> bool:
     try:
         with open(path, "rb") as handle:
             magic = handle.read(4)
+            if magic[:2] == b"MZ":
+                # Windows checks ``MZ`` and the ``PE\0\0`` that offset 0x3C
+                # points to, not the two bytes after ``MZ``: a DLL opening
+                # ``MZP`` (Delphi writes it) was not code until 3.0.16.
+                handle.seek(0x3C)
+                handle.seek(int.from_bytes(handle.read(4), "little"))
+                if handle.read(4) == b"PE\x00\x00":
+                    return True
     except OSError:
         return False
     if magic in _NATIVE_MAGIC:

@@ -1934,6 +1934,34 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["tests/_bin/librate.dylib", "tests/_bin/librate64.dylib"],
             )
 
+    def test_a_windows_library_is_known_by_its_pe_header(self):
+        """The loader reads ``MZ`` and the ``PE`` header at 0x3C, not the bytes after ``MZ`` (3.0.15)."""
+        def pe(head: bytes) -> bytes:
+            body = bytearray(head.ljust(0x80, b"\x00"))
+            body[0x3C:0x40] = (0x80).to_bytes(4, "little")
+            return bytes(body) + b"PE\x00\x00" + b"\x00" * 20
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            folder = root / "patch" / "tests" / "_bin"
+            folder.mkdir(parents=True)
+            (folder / "rate.dll").write_bytes(pe(b"MZP\x00"))
+            (folder / "plain.dll").write_bytes(pe(b"MZ\x90\x00"))
+            # Text that opens with "MZ", one too short for a header, one whose
+            # offset points past the end, a PE header without "MZ": none is a library.
+            (folder / "zip_codes.txt").write_bytes(b"MZ is a postal code\n" * 5)
+            (folder / "short.dat").write_bytes(b"MZ")
+            (folder / "far.dat").write_bytes(b"MZ" + b"\x00" * 58 + b"\xff\xff\xff\xff")
+            (folder / "no_mz.dat").write_bytes(pe(b"ZM\x90\x00"))
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["tests/_bin/plain.dll", "tests/_bin/rate.dll"],
+            )
+
     def test_a_document_a_child_process_runs_is_code(self):
         """``subprocess.run([sys.executable, "rules.conf"])`` on plain assignments (3.0.14)."""
         with tempfile.TemporaryDirectory() as directory:

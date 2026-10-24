@@ -43,6 +43,10 @@ quando esta seção vira uma com versão e data.
   was not among the native magics, so one in a test folder, loaded by `ctypes`,
   was skipped unjudged; single-architecture Mach-O, ELF and PE already counted.
   Reported by an external audit of 3.0.15.
+- **A Windows library is known by its PE header.** The check took only `MZ`
+  followed by `90 00`, the bytes most linkers write; the loader reads `MZ` and
+  the `PE` header that offset `0x3C` points to, so a DLL opening `MZP` (as
+  Delphi writes it) in a test folder was skipped unjudged.
 
 ### Clearer answers (no verdict changes)
 
