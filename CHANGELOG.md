@@ -47,6 +47,10 @@ quando esta seção vira uma com versão e data.
   followed by `90 00`, the bytes most linkers write; the loader reads `MZ` and
   the `PE` header that offset `0x3C` points to, so a DLL opening `MZP` (as
   Delphi writes it) in a test folder was skipped unjudged.
+- **A `.py` name no longer vouches for its content.** A file in a test folder
+  named like a Python module was taken as a test and never checked for native
+  code, which `ctypes` loads by any name; it is now judged by its content, as
+  every other file there is.
 
 ### Clearer answers (no verdict changes)
 

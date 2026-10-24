@@ -1934,6 +1934,21 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["tests/_bin/librate.dylib", "tests/_bin/librate64.dylib"],
             )
 
+    def test_a_native_library_named_like_python_is_code(self):
+        """``ctypes.CDLL("tests/_bin/rate.py")`` loads by content: skipped as a test, it reached MERGE (3.0.15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "tests" / "_bin").mkdir(parents=True)
+            (root / "patch" / "tests" / "_bin" / "rate.py").write_bytes(b"\x7fELF\x02\x01\x01" + b"\x00" * 40)
+            (root / "patch" / "tests" / "_bin" / "helpers.py").write_text("def double(a):\n    return a * 2\n")
+            (root / "patch" / "tests" / "test_more.py").write_text("def test_x():\n    assert True\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"), ["tests/_bin/rate.py"])
+
     def test_a_windows_library_is_known_by_its_pe_header(self):
         """The loader reads ``MZ`` and the ``PE`` header at 0x3C, not the bytes after ``MZ`` (3.0.15)."""
         def pe(head: bytes) -> bytes:

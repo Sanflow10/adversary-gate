@@ -507,7 +507,10 @@ def changed_foreign_source_files(
             if not path.is_file() or "__pycache__" in path.parts:
                 continue
             rel = path.relative_to(root).as_posix()
-            if not rel.endswith(".py") and _carries_code(path):
+            # A ``.py`` name is no proof of source: ``ctypes`` loads a native
+            # library by any name, and ``tests/_bin/rate.py`` holding one was
+            # skipped as a test and reached MERGE (3.0.15). Decided by content.
+            if _carries_code(path):
                 code.add(rel)
             elif _is_test_path(rel) or _is_scan_noise(rel):
                 continue
