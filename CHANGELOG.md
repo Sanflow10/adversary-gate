@@ -55,6 +55,12 @@ quando esta seção vira uma com versão e data.
   by a `.pyc`/`.pyo` suffix; `SourcelessFileLoader` loads one by any name, so
   bytecode renamed in a test folder was skipped unjudged. It is now known by its
   header.
+- **Python text a changed module runs is code in a test folder too.** Since
+  3.0.12 a document a module runs (`exec`, `subprocess`, a loader) counts as
+  code; a test folder was not looked at, so the same text kept there was skipped.
+  There, a changed file counts when it parses as Python and defines something,
+  and only when a changed module runs text: a formatter's Python samples changed
+  together with a module that calls `subprocess.run` now read `INCONCLUSIVE`.
 
 ### Clearer answers (no verdict changes)
 

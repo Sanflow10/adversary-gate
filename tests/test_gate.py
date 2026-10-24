@@ -1978,6 +1978,33 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
                 ["tests/_bin/hashed.bin", "tests/_bin/noref.dat", "tests/_bin/rate.dat"],
             )
 
+    def test_python_text_a_module_runs_from_a_test_folder_is_code(self):
+        """``exec(open("tests/data/rules.txt").read())``: skipped as a fixture, it reached MERGE (3.0.15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            data = root / "patch" / "tests" / "data"
+            data.mkdir(parents=True)
+            (data / "rules.txt").write_text("def scale(a):\n    return 0 if a > 100 else a * 2\n")
+            (data / "notes.txt").write_text("expected: 4, then 6\n")
+            (data / "table.csv").write_text("a,b\n1,2\n")
+            # Python text in a fixture, with no changed module that runs text: a fixture.
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            (root / "patch" / "calc.py").write_text(
+                "_ns = {}\nexec(open('tests/data/rules.txt').read(), _ns)\n\n\n"
+                "def add(a, b):\n    return a + b\n")
+            # A test module the patch added is a test, not text it runs.
+            (root / "patch" / "tests" / "test_rules.py").write_text("def test_x():\n    assert True\n")
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"), ["tests/data/rules.txt"])
+            # Unchanged, it is the baseline's text, judged as it was.
+            (root / "baseline" / "tests" / "data").mkdir(parents=True)
+            (root / "baseline" / "tests" / "data" / "rules.txt").write_bytes((data / "rules.txt").read_bytes())
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+
     def test_a_windows_library_is_known_by_its_pe_header(self):
         """The loader reads ``MZ`` and the ``PE`` header at 0x3C, not the bytes after ``MZ`` (3.0.15)."""
         def pe(head: bytes) -> bytes:

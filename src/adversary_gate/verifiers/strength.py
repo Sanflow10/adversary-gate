@@ -547,6 +547,28 @@ def changed_foreign_source_files(
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
             code.add(rel)
+    if loads_text:
+        # A test folder is no hiding place for text a changed module runs:
+        # ``exec(open("tests/data/rules.txt").read())`` reached MERGE (3.0.15).
+        # Only text that parses as Python and defines something counts there,
+        # so a fixture of prose or numbers stays a fixture.
+        # Outside test folders this repeats what the scan judged; one file at
+        # a time, so a large tree is never held in memory twice.
+        for path in sorted(Path(patch_dir).rglob("*")):
+            rel = path.relative_to(patch_dir).as_posix()
+            if rel.endswith(".py"):
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue  # a directory, or gone
+            try:
+                same = (Path(baseline_dir) / rel).read_bytes() == data
+            except OSError:
+                same = False  # new in the patch
+            if not same and _is_python(data):
+                code.add(rel)
+                candidates.add(rel)
     # A data file a test reads is what the test checks against: the patch that
     # changed the code and rewrote ``golden/expected.json`` to match kept the
     # old test passing and reached MERGE (3.0.14). Named by a test, it is
