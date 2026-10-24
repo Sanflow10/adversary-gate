@@ -343,6 +343,9 @@ _NATIVE_MAGIC = frozenset({b"\x7fELF", b"MZ\x90\x00", b"\xcf\xfa\xed\xfe", b"\xc
                            b"\xfe\xed\xfa\xcf", b"\xfe\xed\xfa\xce",
                            b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"})
 
+#: The flags word of a ``.pyc`` header: by timestamp (0), by hash (1, 3).
+_PYC_FLAGS = frozenset({b"\x00\x00\x00\x00", b"\x01\x00\x00\x00", b"\x03\x00\x00\x00"})
+
 
 def _carries_code(path: Path) -> bool:
     """True for a zip archive that holds a module Python can import.
@@ -361,7 +364,8 @@ def _carries_code(path: Path) -> bool:
         return True
     try:
         with open(path, "rb") as handle:
-            magic = handle.read(4)
+            head = handle.read(17)
+            magic = head[:4]
             if magic[:2] == b"MZ":
                 # Windows checks ``MZ`` and the ``PE\0\0`` that offset 0x3C
                 # points to, not the two bytes after ``MZ``: a DLL opening
@@ -373,6 +377,11 @@ def _carries_code(path: Path) -> bool:
     except OSError:
         return False
     if magic in _NATIVE_MAGIC:
+        return True
+    # Bytecode, by content: ``SourcelessFileLoader`` loads a ``.pyc`` under any
+    # name, and ``tests/_bin/rate.dat`` holding one reached MERGE (3.0.15).
+    # Every CPython magic ends ``\r\n``, then the flags, then a code object.
+    if head[2:4] == b"\r\n" and head[4:8] in _PYC_FLAGS and head[16:17] in (b"c", b"\xe3"):
         return True
     try:
         with zipfile.ZipFile(path) as archive:

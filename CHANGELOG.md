@@ -51,6 +51,10 @@ quando esta seção vira uma com versão e data.
   named like a Python module was taken as a test and never checked for native
   code, which `ctypes` loads by any name; it is now judged by its content, as
   every other file there is.
+- **Python bytecode is code under any name.** A compiled module was known only
+  by a `.pyc`/`.pyo` suffix; `SourcelessFileLoader` loads one by any name, so
+  bytecode renamed in a test folder was skipped unjudged. It is now known by its
+  header.
 
 ### Clearer answers (no verdict changes)
 

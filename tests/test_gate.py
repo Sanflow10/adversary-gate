@@ -1949,6 +1949,35 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             self.assertEqual(
                 changed_foreign_source_files(root / "baseline", root / "patch"), ["tests/_bin/rate.py"])
 
+    def test_bytecode_under_another_name_is_code(self):
+        """``SourcelessFileLoader`` loads a ``.pyc`` by any name: ``tests/_bin/rate.dat`` reached MERGE (3.0.15)."""
+        import py_compile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            folder = root / "patch" / "tests" / "_bin"
+            folder.mkdir(parents=True)
+            (root / "rate.py").write_text("def scale(a):\n    return a * 2\n")
+            py_compile.compile(str(root / "rate.py"), cfile=str(folder / "rate.dat"), doraise=True)
+            py_compile.compile(str(root / "rate.py"), cfile=str(folder / "hashed.bin"), doraise=True,
+                               invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)
+            real = (folder / "rate.dat").read_bytes()
+            # Near misses: a CRLF text line, flags that no .pyc has, no code object.
+            (folder / "ok.txt").write_bytes(b"OK\r\nall good, carry on\r\n")
+            (folder / "flags.dat").write_bytes(real[:4] + b"\x02\x00\x00\x00" + real[8:])
+            (folder / "nocode.dat").write_bytes(real[:16] + b"text after a pyc header")
+            (folder / "nocrlf.dat").write_bytes(real[:2] + b"xx" + real[4:])
+            # marshal also reads a code object without its reference flag.
+            (folder / "noref.dat").write_bytes(real[:16] + b"c" + real[17:])
+            self.assertEqual(
+                changed_foreign_source_files(root / "baseline", root / "patch"),
+                ["tests/_bin/hashed.bin", "tests/_bin/noref.dat", "tests/_bin/rate.dat"],
+            )
+
     def test_a_windows_library_is_known_by_its_pe_header(self):
         """The loader reads ``MZ`` and the ``PE`` header at 0x3C, not the bytes after ``MZ`` (3.0.15)."""
         def pe(head: bytes) -> bytes:
