@@ -729,6 +729,41 @@ class TestNextSteps(unittest.TestCase):
             _, payload = _cli(root)
             self.assertNotIn("census:", json.dumps(payload["next_steps"]))
 
+    def test_weak_tests_below_the_floor_are_never_called_small(self):
+        """A survivor under the floor gets the count, not the small-change sentence."""
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.gate import Decision
+
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.80, diff=None, coverage_json=None)
+        held = [mock.Mock(outcome=Outcome.VERIFIED)]
+        weak = {"measured": True, "mutants_counted": 5, "mutants_killed": 4,
+                "survivors": ["calc.py:2"], "interval": [0.5, 0.95]}
+        reason = _reason(Decision.INCONCLUSIVE, held, None, None, args, coverage_ratio=1.0,
+                         strength_judged=0.5, mutation=weak)
+        self.assertIn("below the 0.75 floor (4/5 mutants killed)", reason)
+        self.assertNotIn("small", reason)
+        self.assertNotIn("small", json.dumps(
+            _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=1.0, mutation=weak)))
+        # A sample that clears the floor is not small either, with nothing else to name.
+        clear = {"measured": True, "mutants_counted": 5, "mutants_killed": 5, "interval": [0.87, 1.0]}
+        self.assertNotIn("small", json.dumps(
+            _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=1.0, mutation=clear)))
+
+    def test_a_census_without_its_reason_adds_none(self):
+        """Only an exact census lacks ``why_not``, and it is never small; if one did, no crash."""
+        from adversary_gate.core.gate import Decision
+
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.80, diff=None, coverage_json=None)
+        small = {"measured": True, "mutants_counted": 1, "mutants_killed": 1,
+                 "interval": [wilson_interval(1, 1, 0.80)[0], 1.0], "census": {"minimum": 3}}
+        steps = _next_steps(Decision.INCONCLUSIVE, [mock.Mock(outcome=Outcome.VERIFIED)], None, args,
+                            coverage_ratio=1.0, mutation=small)
+        self.assertEqual([s["action"] for s in steps], ["see_reason"], steps)
+        self.assertIn("at least 5", steps[0]["why"])
+        self.assertNotIn("census:", steps[0]["why"])
+
     def test_a_regression_says_fix_the_code(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
