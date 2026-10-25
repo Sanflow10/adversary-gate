@@ -509,8 +509,9 @@ class TestSeveralClaims(unittest.TestCase):
         code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
         self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
         self.assertEqual(payload["execution"]["rewritten_tests_run"]["baseline"], 1)
-        self.assertIn({"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]},
-                      payload["next_steps"])
+        # Said once: the reason is this step, not also a see_reason after it.
+        self.assertEqual(payload["next_steps"],
+                         [{"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]}])
 
     def test_a_kept_test_that_skips_itself_on_the_patch_is_not_a_merge(self):
         """A skip passes nothing (3.0.14): the baseline's test skips once the patch

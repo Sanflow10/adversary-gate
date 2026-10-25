@@ -399,7 +399,7 @@ def _uncovered(args) -> Dict[str, List[int]]:
         return {}
 
 
-def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation) -> List[Dict[str, Any]]:
+def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation, reason="") -> List[Dict[str, Any]]:
     """What would turn this answer into a MERGE, in a form a coding agent can act on.
 
     Empty on MERGE. Built only from :data:`NEXT_STEP_ACTIONS`: fix the code,
@@ -489,8 +489,17 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
                              "small, not the tests weak. A bigger test suite cannot add mutants; "
                              "whether a complete census of a small change is enough is the "
                              f"operator's decision (README, 'Small changes'), never the patch's{why_census}"})
-    if not steps and census.get("why_not") and decision is Decision.INCONCLUSIVE:
-        steps.append({"action": "see_reason", "why": census["why_not"]})
+    if not steps:
+        # The census's why_not names its flag when it is off, so it is said
+        # only when the operator turned it on; otherwise the step repeats why
+        # strength or the answer fell short (3.0.16 said "off (...)" here when
+        # the cause was a file the gate cannot judge).
+        if (mutation or {}).get("reason"):
+            steps.append({"action": "see_reason", "why": (mutation or {}).get("reason")})
+        elif census.get("minimum") and census.get("why_not"):
+            steps.append({"action": "see_reason", "why": census["why_not"]})
+        elif reason:
+            steps.append({"action": "see_reason", "why": reason})
     return [s for s in steps if s["action"] in NEXT_STEP_ACTIONS]
 
 
@@ -1597,18 +1606,20 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # (the first REFUTED, else the first UNVERIFIED), so a reader of one
         # claim's output sees the same keys as before; ``claims`` has them all.
         decisive = _decisive(verdicts)
+        reason = unjudged_reason or _reason(
+            decision, verdicts, decisive, full_codes, args,
+            coverage_ratio=coverage_ratio, strength_judged=strength_judged,
+            strength_unverified=strength_unverified, mutation=mutation_detail,
+        )
         payload: Dict[str, Any] = {
             "classification": decisive.classification.value if decisive else None,
             "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
-            "reason": unjudged_reason or _reason(
-                decision, verdicts, decisive, full_codes, args,
-                coverage_ratio=coverage_ratio, strength_judged=strength_judged,
-                strength_unverified=strength_unverified, mutation=mutation_detail,
-            ),
+            "reason": reason,
             "next_steps": _next_steps(
                 decision, verdicts, full_codes, args,
                 coverage_ratio=coverage_ratio, mutation=mutation_detail,
+                reason="" if unjudged_reason else reason,
             ) + ([{"action": unjudged_action, "flags": unjudged_flags,
                    "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),

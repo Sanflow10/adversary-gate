@@ -36,6 +36,17 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+### Clearer answers (no verdict changes)
+
+- **`next_steps` names the real cause, and no loosening flag.** When strength
+  was measured but could not count (a changed file the gate cannot judge),
+  or nothing else was missing but coverage evidence, the last step repeated
+  the census's own status, `off (--census-min-mutants 0)`: not the cause, and
+  a flag that loosens how the floor is judged, in a list an agent reads. It
+  happened on 3.0.16's run of the gate on itself. The step now says why
+  strength fell short, or else the answer's reason, once; the census's status
+  appears there only when the operator turned the census on.
+
 ---
 
 ## [3.0.16] — 2026-10-25

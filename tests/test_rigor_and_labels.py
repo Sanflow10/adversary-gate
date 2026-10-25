@@ -764,6 +764,68 @@ class TestNextSteps(unittest.TestCase):
         self.assertIn("at least 5", steps[0]["why"])
         self.assertNotIn("census:", steps[0]["why"])
 
+    def test_a_file_the_gate_cannot_judge_is_the_step_not_the_census(self):
+        """Strength unverified by a foreign file: the step says so, and names no flag.
+
+        3.0.16 answered ``off (--census-min-mutants 0)`` here, on its own
+        release: the census was not why, and the text named a flag.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            (root / "baseline" / "vec.cpp").write_text("int add(int a, int b) { return a + b; }\n")
+            (root / "patch" / "vec.cpp").write_text("int add(int a, int b) { return a * b; }\n")
+            code, payload = _cli(root)
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertTrue(payload["mutation"]["measured"], payload["mutation"])
+            steps = payload["next_steps"]
+            self.assertEqual([s["action"] for s in steps], ["see_reason"], steps)
+            self.assertEqual(steps[0]["why"], payload["mutation"]["reason"])
+            self.assertIn("never judged", steps[0]["why"])
+            self.assertIn("vec.cpp", json.dumps(payload["mutation"]["foreign_changed_files"]))
+            self._assert_safe(steps, root)
+
+    def test_no_coverage_evidence_is_the_step(self):
+        """Nothing else to name: the step is the answer's reason, said once, with no flag."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, 5)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = main(["--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                             "--test-path", "test_calc.py", "--test-id", "test_ops",
+                             "--full-suite-path", ""])
+            payload = json.loads(out.getvalue())
+            self.assertEqual(code, EXIT_INCONCLUSIVE)
+            self.assertIn("no diff coverage was measured", payload["reason"])
+            self.assertEqual(payload["next_steps"], [{"action": "see_reason", "why": payload["reason"]}])
+            self._assert_safe(payload["next_steps"], root)
+
+    def test_with_nothing_else_to_name_the_step_is_the_reason(self):
+        """No mutation reason: the census only when it is on, else the answer's reason."""
+        from adversary_gate.core.gate import Decision
+
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.80, diff=None, coverage_json=None)
+        held = [mock.Mock(outcome=Outcome.VERIFIED)]
+        off = {"measured": True, "mutants_counted": 5, "mutants_killed": 5, "interval": [0.87, 1.0],
+               "census": {"minimum": 0, "why_not": "off (--census-min-mutants 0)"}}
+        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                            mutation=off, reason="coverage was never measured")
+        self.assertEqual(steps, [{"action": "see_reason", "why": "coverage was never measured"}])
+        self.assertEqual(_next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                                     mutation=off), [])
+        on = {**off, "census": {"minimum": 3, "why_not": "budget cut the sample: 9 sites, 5 executed"}}
+        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                            mutation=on, reason="coverage was never measured")
+        self.assertEqual(steps, [{"action": "see_reason", "why": on["census"]["why_not"]}])
+        said = {**off, "reason": "score covers the 1 Python file(s) mutated only"}
+        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                            mutation=said, reason="coverage was never measured")
+        self.assertEqual(steps, [{"action": "see_reason", "why": said["reason"]}])
+        self.assertEqual(_next_steps(Decision.BLOCK, held, None, args, coverage_ratio=None,
+                                     mutation=said, reason="x"), [])
+
     def test_a_regression_says_fix_the_code(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
