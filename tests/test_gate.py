@@ -2079,6 +2079,54 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
                              ["tests/data/rules.py", "tests/data/rules.txt"])
 
+    def test_a_test_helper_the_code_imports_runs_text_as_code(self):
+        """``calc`` imports ``tests/helpers.py``, which runs ``tests/data/rules.txt``: MERGE (3.0.15)."""
+        helper = "_ns = {}\nexec(open('tests/data/rules.txt').read(), _ns)\nscale = _ns['scale']\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            for side, factor in (("baseline", 2), ("patch", 3)):
+                (root / side / "tests" / "data").mkdir(parents=True)
+                (root / side / "tests" / "helpers.py").write_text(helper)
+                (root / side / "tests" / "data" / "rules.txt").write_text(f"def scale(a):\n    return a * {factor}\n")
+            # Imported only by tests, the helper is a test.
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            for side in ("baseline", "patch"):
+                (root / side / "calc.py").write_text(
+                    "from tests.helpers import scale\n\n\ndef add(a, b):\n    return scale(a) + b\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/data/rules.txt"])
+
+    def test_a_formula_a_module_evaluates_is_code(self):
+        """``eval(open("tests/data/formula.txt").read())`` on ``a * 3`` defines nothing: MERGE (3.0.15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            files = {
+                "tests/data/formula.txt": ("a * 2\n", "0 if a > 100 else a * 3\n"),
+                "rates.txt": ("a\n", "max(a, 0)\n"),
+                "tests/data/table.json": ('{"a": 1}\n', '{"a": -2}\n'),
+                "tests/data/broken.txt": ("a *\n", "a * (\n"),
+                "tests/data/other.txt": ("a * 2\n", "a * 4\n"),
+            }
+            runner = ("def scaled(a):\n    return eval(open('tests/data/formula.txt').read(), {'a': a})\n\n\n"
+                      "_FILES = ('rates.txt', 'tests/data/table.json', 'tests/data/broken.txt')\n")
+            for side, index in (("baseline", 0), ("patch", 1)):
+                (root / side / "calc.py").write_text(runner)
+                for rel, texts in files.items():
+                    (root / side / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (root / side / rel).write_text(texts[index])
+            # Named, computing, a module that runs text: code. A table, text
+            # that will not parse and a formula no one names stay as they were.
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["rates.txt", "tests/data/formula.txt"])
+
     def test_environment_trees_are_not_text_a_patch_wrote(self):
         """A checkout's ``.venv/bin/pip`` is Python text; it is not the patch's."""
         with tempfile.TemporaryDirectory() as directory:

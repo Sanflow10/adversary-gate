@@ -578,7 +578,10 @@ def changed_foreign_source_files(
                 same = (Path(baseline_dir) / rel).read_bytes() == data
             except OSError:
                 same = False  # new in the patch
-            if not same and _is_python(data):
+            # A formula defines nothing: ``eval(open("formula.txt").read())``
+            # on ``a * 3`` reached MERGE (3.0.15). Named by such a module, an
+            # expression that computes is code; a named table or JSON is data.
+            if not same and (_is_python(data) or (_names_file(named, rel) and _is_formula(data))):
                 code.add(rel)
                 candidates.add(rel)
     # A data file a test reads is what the test checks against: the patch that
@@ -636,11 +639,17 @@ def _runs_text(source: bytes) -> bool:
 
 
 def _resident_runners(root: Path) -> List[bytes]:
-    """Every non-test module on ``root`` that runs text: see :func:`_runs_text`."""
+    """Every non-test module on ``root`` that runs text: see :func:`_runs_text`.
+
+    A test-folder module the code under test imports is not a test: through
+    one, ``tests/helpers.py`` running ``tests/data/rules.txt``, a patch that
+    changed only the text reached MERGE (3.0.15).
+    """
     out: List[bytes] = []
+    disguised = _production_imported_tests(root)
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root).as_posix()
-        if _is_test_path(rel) or _is_scan_noise(rel) or not path.is_file():
+        if _is_test_rel(rel, disguised) or _is_scan_noise(rel) or not path.is_file():
             continue
         source = path.read_bytes()
         if _runs_text(source):
@@ -691,6 +700,17 @@ def _mentions(text: bytes, rel: str) -> bool:
     parts = rel.split("/")
     words = {parts[-1], parts[-1].rsplit(".", 1)[0], *parts[:-1]}
     return any(len(word) > 2 and word.encode("utf-8", "replace") in text for word in words)
+
+
+def _is_formula(data: bytes) -> bool:
+    """True for text that parses as Python and computes: an operator, a test, a call."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError):
+        return False
+    return any(isinstance(node, (ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp, ast.Call,
+                                 ast.NamedExpr))
+               for node in ast.walk(tree))
 
 
 def _is_python(data: bytes) -> bool:

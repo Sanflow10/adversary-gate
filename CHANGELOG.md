@@ -67,7 +67,10 @@ quando esta seção vira uma com versão e data.
   alone or ending a path; a test it never names stays a test. In the test
   folders of one environment's libraries (numpy, pandas and others), 23 of
   1,375 test modules are named so (pandas' `common.py`); a change to one now
-  reads `INCONCLUSIVE`.
+  reads `INCONCLUSIVE`. A test-folder helper the code imports is no test
+  here, so text it runs counts too. A formula defines nothing (`a * 3`, read
+  by `eval`), so it counts when such a module names its file and it computes
+  (an operator, a comparison, a call); a named table or JSON stays data.
   Environment and VCS trees (`.venv`, `node_modules`, `.git`) are not looked
   at, as the scan never did.
 
