@@ -55,16 +55,21 @@ quando esta seção vira uma com versão e data.
   by a `.pyc`/`.pyo` suffix; `SourcelessFileLoader` loads one by any name, so
   bytecode renamed in a test folder was skipped unjudged. It is now known by its
   header.
-- **Python text a changed module runs is code in a test folder too.** Since
-  3.0.12 a document a module runs (`exec`, `subprocess`, a loader) counts as
-  code; a test folder was not looked at, so the same text kept there was skipped.
-  There, a changed file counts when it parses as Python and defines something,
-  and only when a changed module runs text: a formatter's Python samples changed
-  together with a module that calls `subprocess.run` now read `INCONCLUSIVE`.
-  A `.py` file there counts the same way when the module that runs text names
-  it in a string (`exec(open("tests/data/rules.py").read())`); a test it never
-  names stays a test. Environment and VCS trees (`.venv`, `node_modules`,
-  `.git`) are not looked at, as the scan never did.
+- **Python text a module runs is code in a test folder too.** Since 3.0.12 a
+  document a module runs (`exec`, `subprocess`, a loader) counts as code; a test
+  folder was not looked at, so the same text kept there was skipped, and a patch
+  that changed only that text, its module already in place, read as a test
+  change. There, a changed file counts when it parses as Python and defines
+  something and some non-test module runs text, changed or not: a formatter's
+  Python samples changed in a project with a module that calls `subprocess.run`
+  now read `INCONCLUSIVE`. A `.py` file there counts the same way when such a
+  module names it in a string, whole (`"tests/data/rules.py"`) or by its stem
+  alone or ending a path; a test it never names stays a test. In the test
+  folders of one environment's libraries (numpy, pandas and others), 23 of
+  1,375 test modules are named so (pandas' `common.py`); a change to one now
+  reads `INCONCLUSIVE`.
+  Environment and VCS trees (`.venv`, `node_modules`, `.git`) are not looked
+  at, as the scan never did.
 
 ### Clearer answers (no verdict changes)
 

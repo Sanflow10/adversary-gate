@@ -2018,7 +2018,7 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             data = root / "patch" / "tests" / "data"
             data.mkdir(parents=True)
             rules = "def scale(a):\n    return 0 if a > 100 else a * 2\n"
-            for name in ("rules.py", "abc.py", "ab.py", "helpers.py"):
+            for name in ("rules.py", "abc.py", "kit.py", "helpers.py"):
                 (data / name).write_text(rules)
             (root / "patch" / "tests" / "test_rules.py").write_text("def test_x():\n    assert True\n")
             (root / "patch" / "util.py").write_text(rules)
@@ -2029,21 +2029,55 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             (root / "patch" / "calc.py").write_text(
                 "_PATH = 'tests/data/rules.py'\n\n\ndef add(a, b):\n    return a + b\n")
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
-            # Named whole or by its stem; a stem of two letters names nothing,
-            # and a module outside a test folder is measured, not listed. The
-            # document is code now too: a changed module runs text (3.0.12).
+            # Named whole, by its stem alone or ending a path; a stem inside
+            # other words names nothing, and a module outside a test folder is
+            # measured, not listed. The document is code now too: a changed
+            # module runs text (3.0.12).
             (root / "patch" / "calc.py").write_text(
                 "_ns = {}\nexec(open('tests/data/rules.py').read(), _ns)\n"
                 "exec(open('tests/data/' + 'abc' + '.py').read(), _ns)\n"
-                "_LIMIT = 10\n_SHORT = 'ab'\n_SEE = 'util.py'\n\n\n"
+                "_LIMIT = 10\n_KIT = 'tests/data/kit'\n_HELP = 'see myhelpers'\n_SEE = 'util.py'\n\n\n"
                 "def add(a, b):\n    return a + b\n")
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
-                             ["docs/usage.txt", "tests/data/abc.py", "tests/data/rules.py"])
+                             ["docs/usage.txt", "tests/data/abc.py", "tests/data/kit.py", "tests/data/rules.py"])
             # Unchanged, it is the baseline's module, judged as it was.
             (root / "baseline" / "tests" / "data").mkdir(parents=True)
             (root / "baseline" / "tests" / "data" / "rules.py").write_text(rules)
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
-                             ["docs/usage.txt", "tests/data/abc.py"])
+                             ["docs/usage.txt", "tests/data/abc.py", "tests/data/kit.py"])
+
+    def test_text_whose_module_did_not_change_is_code(self):
+        """The module already ran ``tests/data/rules.*``; a patch changing only that reached MERGE (3.0.15)."""
+        runner = ("import os\n\n_ns = {}\nexec(open(os.path.join('tests', 'data', 'rules.py')).read(), _ns)\n"
+                  "exec(open(os.path.join('tests', 'data', 'rules.txt')).read(), _ns)\n\n\n"
+                  "def add(a, b):\n    return a + b\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            for side, factor in (("baseline", 2), ("patch", 3)):
+                (root / side / "calc.py").write_text(runner)
+                (root / side / "tests" / "data").mkdir(parents=True)
+                (root / side / "tests" / "data" / "rules.py").write_text(f"def scale(a):\n    return a * {factor}\n")
+            # Named only by a test that runs text, or by an environment's module: still a test.
+            (root / "patch" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (root / "baseline" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+            (root / "patch" / "tests" / "test_run.py").write_text(runner)
+            (root / "patch" / ".venv" / "lib").mkdir(parents=True)
+            (root / "patch" / ".venv" / "lib" / "tool.py").write_text(runner)
+            # A folder named like a module is not one.
+            (root / "patch" / "pkg.py").mkdir()
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            for side in ("baseline", "patch"):
+                (root / side / "calc.py").write_text(runner)
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/data/rules.py"])
+            (root / "baseline" / "tests" / "data" / "rules.txt").write_text("def scale(a):\n    return a\n")
+            (root / "patch" / "tests" / "data" / "rules.txt").write_text("def scale(a):\n    return -a\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/data/rules.py", "tests/data/rules.txt"])
 
     def test_environment_trees_are_not_text_a_patch_wrote(self):
         """A checkout's ``.venv/bin/pip`` is Python text; it is not the patch's."""

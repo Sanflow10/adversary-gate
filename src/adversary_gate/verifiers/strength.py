@@ -541,22 +541,23 @@ def changed_foreign_source_files(
     # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
     # logic in the text file (3.0.12). Said by its content, or by a changed
     # module that runs text it reads.
-    runners = [patch[rel] for rel in sorted(candidates)
-               if rel.endswith(".py") and rel in patch and _runs_text(patch[rel])]
-    loads_text = bool(runners)
+    loads_text = any(_runs_text(patch[rel]) for rel in candidates
+                     if rel.endswith(".py") and rel in patch)
     for rel in candidates:
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
             code.add(rel)
-    if loads_text:
-        # A test folder is no hiding place for text a changed module runs:
-        # ``exec(open("tests/data/rules.txt").read())`` reached MERGE (3.0.15).
+    # A test folder is no hiding place for text a module runs, changed or not:
+    # ``exec(open("tests/data/rules.txt").read())`` reached MERGE (3.0.15), and
+    # so did a patch that changed only that text, its module already there.
+    runners = _resident_runners(Path(patch_dir))
+    if runners:
         # Only text that parses as Python and defines something counts there,
         # so a fixture of prose or numbers stays a fixture.
         # Outside test folders this repeats what the scan judged; one file at
         # a time, so a large tree is never held in memory twice.
-        # A test-folder module is no hiding place either when a changed module
-        # runs it by name: ``exec(open("tests/data/rules.py").read())`` reached
+        # A test-folder module is no hiding place either when a module runs it
+        # by name: ``exec(open("tests/data/rules.py").read())`` reached
         # MERGE (3.0.15). Named in a string, so a changed test it never names
         # stays a test; a name built at run time is the open case.
         named = _string_constants(runners)
@@ -634,6 +635,19 @@ def _runs_text(source: bytes) -> bool:
     return False
 
 
+def _resident_runners(root: Path) -> List[bytes]:
+    """Every non-test module on ``root`` that runs text: see :func:`_runs_text`."""
+    out: List[bytes] = []
+    for path in sorted(root.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if _is_test_path(rel) or _is_scan_noise(rel) or not path.is_file():
+            continue
+        source = path.read_bytes()
+        if _runs_text(source):
+            out.append(source)
+    return out
+
+
 def _string_constants(sources: Iterable[bytes]) -> List[str]:
     """Every string literal in ``sources``, f-string pieces included.
 
@@ -644,10 +658,15 @@ def _string_constants(sources: Iterable[bytes]) -> List[str]:
 
 
 def _names_file(strings: Iterable[str], rel: str) -> bool:
-    """True when a string holds the file name of ``rel``, or its stem."""
+    """True when a string holds the file name of ``rel``, or is its stem.
+
+    The stem alone, or ending a path (``"tests/data/" + "rules" + ".py"``):
+    inside any string it named ``common`` or ``util`` in one library string in
+    ten.
+    """
     name = rel.rsplit("/", 1)[-1]
-    words = [word for word in (name, name.rsplit(".", 1)[0]) if len(word) > 2]
-    return any(word in text for text in strings for word in words)
+    stem = name.rsplit(".", 1)[0]
+    return any(name in text or text == stem or text.endswith("/" + stem) for text in strings)
 
 
 def _named_by_tests(*roots: Path) -> bytes:
