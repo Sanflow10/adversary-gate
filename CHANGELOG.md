@@ -36,6 +36,19 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.16] — 2026-10-25
+
+Holes found by an external audit of 3.0.15 and by a final search on this
+release's own changes, each confirmed with a crafted repository; each change
+has a test that fails on 3.0.15. Plus clearer answers for a change too small
+to measure.
+
+> **Stricter verdicts.** Native libraries in more formats, bytecode under any
+> name, and Python text or a formula a module runs from a test folder are now
+> judged where they could reach `MERGE`.
+
 ### Fixed
 
 - **A universal macOS library is code.** A fat Mach-O (`cafebabe` or
