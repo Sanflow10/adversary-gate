@@ -34,7 +34,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from adversary_gate.core.circuit_breaker import CircuitBreaker
 from adversary_gate.core.contestation import Contestation, ContestationResult, adjudicate
@@ -141,7 +141,8 @@ def _rewritten_test_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
     )
 
 
-def _transplant(baseline_dir: Path, patch_dir: Path, test_path: Optional[str], into: Path) -> Path:
+def _transplant(baseline_dir: Path, patch_dir: Path, test_path: Optional[str], into: Path,
+                tests: Optional[Dict[str, Path]] = None) -> Path:
     """The patch's code with the baseline's tests put back.
 
     Not only ``test_path``: every file the baseline had that counts as a test
@@ -153,7 +154,7 @@ def _transplant(baseline_dir: Path, patch_dir: Path, test_path: Optional[str], i
     """
     tree = into / "tree"
     shutil.copytree(patch_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
-    restore = dict(_baseline_test_files(baseline_dir))
+    restore = dict(_baseline_test_files(baseline_dir) if tests is None else tests)
     if test_path:
         restore.setdefault(test_path, Path(baseline_dir) / test_path)
     for rel, source in restore.items():
@@ -579,9 +580,11 @@ class Gate:
         # A helper is part of the answer too: a patch that leaves the claim's
         # file alone and bends ``tests/helpers.py`` rewrote the test all the
         # same, so any baseline test file the patch changed engages the oracle.
+        # Read before this claim's runs, which may write into the trees.
+        rewritten_files = self._rewritten(baseline_dir, patch_dir) if baseline_applicable else []
         rewritten = baseline_applicable and (
             _bytes_differ(baseline_dir / claim.test_path, patch_dir / claim.test_path)
-            or bool(_rewritten_test_files(baseline_dir, patch_dir))
+            or bool(rewritten_files)
         )
         if not rewritten:
             verdict, details = self._judge(claim, baseline_dir, patch_dir, baseline_applicable, policy, limits)
@@ -601,11 +604,12 @@ class Gate:
             return finish(self._rewritten_unjudgeable(claim, baseline_dir, patch_dir, policy, limits))
 
         with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
-            tree = _transplant(baseline_dir, patch_dir, claim.test_path, Path(scratch))
+            tree = _transplant(baseline_dir, patch_dir, claim.test_path, Path(scratch),
+                               tests=self._baseline_tests(baseline_dir))
             if present:
                 verdict, details = self._judge(claim, baseline_dir, tree, True, policy, limits)
                 verdict.oracle = "baseline"
-                changed = _rewritten_test_files(baseline_dir, patch_dir) or [claim.test_path]
+                changed = rewritten_files or [claim.test_path]
                 verdict.reason = (
                     f"judged by the baseline's version of {claim.test_path} and its test "
                     f"files (the patch rewrote {', '.join(changed)}): {verdict.reason}"
@@ -811,6 +815,28 @@ class Gate:
             # log, which is how self-deception survives an audit trail.
             verdict.reason = f"{verdict.reason} [{details[0]}; {details[1]}]"
         return verdict
+
+    def _baseline_tests(self, baseline_dir: Path) -> Dict[str, Path]:
+        """The baseline's test files, scanned once per run (F-004).
+
+        The scan parses every module the baseline has, and it ran for every
+        claim. Taken at the first claim, before any test has run, it is the
+        tree as the run received it.
+        """
+        cache = self.__dict__.setdefault("_baseline_tests_cache", {})
+        key = str(Path(baseline_dir).resolve())
+        if key not in cache:
+            cache[key] = dict(_baseline_test_files(baseline_dir))
+        return cache[key]
+
+    def _rewritten(self, baseline_dir: Path, patch_dir: Path) -> List[str]:
+        """Baseline test files the patch changed or deleted.
+
+        Compared again for every claim: runs happen in the trees, and a file
+        an earlier claim's run rewrote is a file the next claim must not trust.
+        """
+        return sorted(rel for rel, source in self._baseline_tests(baseline_dir).items()
+                      if _bytes_differ(source, Path(patch_dir) / rel))
 
     def _baseline_file_holds(
         self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None

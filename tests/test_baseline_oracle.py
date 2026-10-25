@@ -111,6 +111,38 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
             )
             self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
 
+    def test_the_baseline_is_scanned_once_for_every_claim(self):
+        """F-004: which baseline files are tests was worked out again for every claim.
+
+        The scan parses every module of the baseline; with many claims on a
+        large tree that repeated work could reach the time limit.
+        """
+        from unittest import mock
+        from adversary_gate.core import gate as gate_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc, expected in (("baseline", "return a - b", 2), ("patch", "return a + b", 8)):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+                (root / side / "tests" / "__init__.py").write_text("")
+                (root / side / "tests" / "helpers.py").write_text(f"EXPECTED = {expected}\n")
+                (root / side / "tests" / "test_calc.py").write_text(
+                    "from calc import sub\nfrom tests.helpers import EXPECTED\n\n\n"
+                    "def test_sub():\n    assert sub(5, 3) == EXPECTED\n\n\n"
+                    "def test_sub_again():\n    assert sub(7, 5) == EXPECTED\n"
+                )
+            scans = mock.Mock(side_effect=gate_module.production_imported_tests)
+            gate = Gate([])
+            with mock.patch.object(gate_module, "production_imported_tests", scans):
+                verdicts = [gate.verify_claim(CriticClaim("tests/test_calc.py", test_id),
+                                              root / "baseline", root / "patch")
+                            for test_id in ("test_sub", "test_sub_again")]
+            self.assertEqual([v.outcome for v in verdicts], [Outcome.REFUTED, Outcome.REFUTED],
+                             [v.reason for v in verdicts])
+            self.assertTrue(all("tests/helpers.py" in v.reason for v in verdicts))
+            self.assertEqual(scans.call_count, 1)
+
     def test_a_helper_kept_in_a_tool_named_directory_comes_back_too(self):
         """3.0.15: ``.tox`` and ``.nox`` were skipped by name, so a helper the
         baseline kept in ``tests/.nox/`` stayed the patch's and the bug merged.
