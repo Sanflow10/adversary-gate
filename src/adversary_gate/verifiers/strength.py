@@ -541,8 +541,9 @@ def changed_foreign_source_files(
     # "NOTICE.txt").read())`` behind one covered line reached MERGE with the
     # logic in the text file (3.0.12). Said by its content, or by a changed
     # module that runs text it reads.
-    loads_text = any(_runs_text(patch[rel]) for rel in candidates
-                     if rel.endswith(".py") and rel in patch)
+    runners = [patch[rel] for rel in sorted(candidates)
+               if rel.endswith(".py") and rel in patch and _runs_text(patch[rel])]
+    loads_text = bool(runners)
     for rel in candidates:
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
@@ -554,14 +555,24 @@ def changed_foreign_source_files(
         # so a fixture of prose or numbers stays a fixture.
         # Outside test folders this repeats what the scan judged; one file at
         # a time, so a large tree is never held in memory twice.
+        # A test-folder module is no hiding place either when a changed module
+        # runs it by name: ``exec(open("tests/data/rules.py").read())`` reached
+        # MERGE (3.0.15). Named in a string, so a changed test it never names
+        # stays a test; a name built at run time is the open case.
+        named = _string_constants(runners)
         for path in sorted(Path(patch_dir).rglob("*")):
             rel = path.relative_to(patch_dir).as_posix()
-            if rel.endswith(".py"):
+            # Not the environment or VCS trees: a checkout's ``.venv/bin/pip``
+            # is Python text no patch wrote (the scan skips them as well).
+            if _is_scan_noise(rel):
                 continue
-            try:
-                data = path.read_bytes()
-            except OSError:
-                continue  # a directory, or gone
+            if rel.endswith(".py") and not (_is_test_path(rel) and _names_file(named, rel)):
+                continue
+            # A regular file only: git keeps a link to ``/dev/zero``, and reading
+            # one never ends.
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
             try:
                 same = (Path(baseline_dir) / rel).read_bytes() == data
             except OSError:
@@ -621,6 +632,22 @@ def _runs_text(source: bytes) -> bool:
         elif isinstance(node, ast.Name) and node.id in _TEXT_RUNNERS:
             return True  # passed around, aliased: ``run = exec``
     return False
+
+
+def _string_constants(sources: Iterable[bytes]) -> List[str]:
+    """Every string literal in ``sources``, f-string pieces included.
+
+    Only for sources :func:`_runs_text` already parsed.
+    """
+    return [node.value for source in sources for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+
+
+def _names_file(strings: Iterable[str], rel: str) -> bool:
+    """True when a string holds the file name of ``rel``, or its stem."""
+    name = rel.rsplit("/", 1)[-1]
+    words = [word for word in (name, name.rsplit(".", 1)[0]) if len(word) > 2]
+    return any(word in text for text in strings for word in words)
 
 
 def _named_by_tests(*roots: Path) -> bytes:

@@ -61,6 +61,10 @@ quando esta seção vira uma com versão e data.
   There, a changed file counts when it parses as Python and defines something,
   and only when a changed module runs text: a formatter's Python samples changed
   together with a module that calls `subprocess.run` now read `INCONCLUSIVE`.
+  A `.py` file there counts the same way when the module that runs text names
+  it in a string (`exec(open("tests/data/rules.py").read())`); a test it never
+  names stays a test. Environment and VCS trees (`.venv`, `node_modules`,
+  `.git`) are not looked at, as the scan never did.
 
 ### Clearer answers (no verdict changes)
 

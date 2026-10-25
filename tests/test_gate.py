@@ -2007,6 +2007,61 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             (root / "baseline" / "tests" / "data" / "rules.txt").write_bytes((data / "rules.txt").read_bytes())
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
 
+    def test_a_test_folder_module_a_changed_module_runs_is_code(self):
+        """``exec(open("tests/data/rules.py").read())``: a test by its path, it reached MERGE (3.0.15)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            data = root / "patch" / "tests" / "data"
+            data.mkdir(parents=True)
+            rules = "def scale(a):\n    return 0 if a > 100 else a * 2\n"
+            for name in ("rules.py", "abc.py", "ab.py", "helpers.py"):
+                (data / name).write_text(rules)
+            (root / "patch" / "tests" / "test_rules.py").write_text("def test_x():\n    assert True\n")
+            (root / "patch" / "util.py").write_text(rules)
+            # A document showing the call runs nothing.
+            (root / "patch" / "docs").mkdir()
+            (root / "patch" / "docs" / "usage.txt").write_text("exec(open('tests/data/rules.py').read())\n")
+            # Named, by a module that runs no text: a test.
+            (root / "patch" / "calc.py").write_text(
+                "_PATH = 'tests/data/rules.py'\n\n\ndef add(a, b):\n    return a + b\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            # Named whole or by its stem; a stem of two letters names nothing,
+            # and a module outside a test folder is measured, not listed. The
+            # document is code now too: a changed module runs text (3.0.12).
+            (root / "patch" / "calc.py").write_text(
+                "_ns = {}\nexec(open('tests/data/rules.py').read(), _ns)\n"
+                "exec(open('tests/data/' + 'abc' + '.py').read(), _ns)\n"
+                "_LIMIT = 10\n_SHORT = 'ab'\n_SEE = 'util.py'\n\n\n"
+                "def add(a, b):\n    return a + b\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["docs/usage.txt", "tests/data/abc.py", "tests/data/rules.py"])
+            # Unchanged, it is the baseline's module, judged as it was.
+            (root / "baseline" / "tests" / "data").mkdir(parents=True)
+            (root / "baseline" / "tests" / "data" / "rules.py").write_text(rules)
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["docs/usage.txt", "tests/data/abc.py"])
+
+    def test_environment_trees_are_not_text_a_patch_wrote(self):
+        """A checkout's ``.venv/bin/pip`` is Python text; it is not the patch's."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            (root / "patch" / "calc.py").write_text(
+                "import subprocess\n\n\ndef add(a, b):\n    subprocess.run(['true'])\n    return a + b\n")
+            script = "#!/usr/bin/python3\nimport sys\nfrom pip._internal.cli.main import main\nsys.exit(main())\n"
+            for rel in (".venv/bin/pip", "node_modules/.bin/tool", ".git/hooks/pre-push", "tests/data/rules.txt"):
+                (root / "patch" / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / "patch" / rel).write_text(script)
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/data/rules.txt"])
+
     def test_a_windows_library_is_known_by_its_pe_header(self):
         """The loader reads ``MZ`` and the ``PE`` header at 0x3C, not the bytes after ``MZ`` (3.0.15)."""
         def pe(head: bytes) -> bytes:
