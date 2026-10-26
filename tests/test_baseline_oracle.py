@@ -20,6 +20,7 @@ baseline shipped in that file has passed on the patch's code.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -132,16 +133,46 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
                     "def test_sub():\n    assert sub(5, 3) == EXPECTED\n\n\n"
                     "def test_sub_again():\n    assert sub(7, 5) == EXPECTED\n"
                 )
-            scans = mock.Mock(side_effect=gate_module.production_imported_tests)
-            gate = Gate([])
-            with mock.patch.object(gate_module, "production_imported_tests", scans):
+            parse = mock.Mock(side_effect=gate_module.production_imported_tests)
+            gate, scans = Gate([]), {}
+            with mock.patch.object(gate_module, "production_imported_tests", parse):
                 verdicts = [gate.verify_claim(CriticClaim("tests/test_calc.py", test_id),
-                                              root / "baseline", root / "patch")
+                                              root / "baseline", root / "patch", scans=scans)
                             for test_id in ("test_sub", "test_sub_again")]
             self.assertEqual([v.outcome for v in verdicts], [Outcome.REFUTED, Outcome.REFUTED],
                              [v.reason for v in verdicts])
             self.assertTrue(all("tests/helpers.py" in v.reason for v in verdicts))
-            self.assertEqual(scans.call_count, 1)
+            self.assertEqual(parse.call_count, 1)
+
+    def test_a_gate_used_again_reads_the_new_trees(self):
+        """A Gate kept the scan across runs: new trees at the same paths were answered from the old ones."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def trees(helper):
+                for side, calc, expected in (("baseline", "return a - b", 2), ("patch", "return a + b", 8)):
+                    shutil.rmtree(root / side, ignore_errors=True)
+                    (root / side / "tests").mkdir(parents=True)
+                    (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+                    (root / side / "tests" / "__init__.py").write_text("")
+                    if helper:
+                        (root / side / "tests" / "helpers.py").write_text(f"EXPECTED = {expected}\n")
+                    (root / side / "tests" / "test_calc.py").write_text(
+                        "from calc import sub\nfrom tests.helpers import EXPECTED\n\n\n"
+                        "def test_sub():\n    assert sub(5, 3) == EXPECTED\n" if helper else
+                        "from calc import sub\n\n\ndef test_sub():\n    assert sub(5, 3) is not None\n"
+                    )
+
+            gate = Gate([])
+            trees(helper=False)
+            first = gate.verify_claim(CriticClaim("tests/test_calc.py", "test_sub"),
+                                      root / "baseline", root / "patch")
+            trees(helper=True)
+            second = gate.verify_claim(CriticClaim("tests/test_calc.py", "test_sub"),
+                                       root / "baseline", root / "patch")
+            self.assertIs(first.outcome, Outcome.VERIFIED, first.reason)
+            self.assertIs(second.outcome, Outcome.REFUTED, second.reason)
+            self.assertIn("tests/helpers.py", second.reason)
 
     def test_a_test_file_gone_since_the_scan_is_not_copied(self):
         """The scan is taken once; a baseline test file a later run removed is skipped, not a crash."""
@@ -157,11 +188,11 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
                     "def test_sub():\n    assert sub(5, 3) == EXPECTED\n"
                 )
             (root / "baseline" / "tests" / "scratch_notes.txt").write_text("written by a run\n")
-            gate = Gate([])
-            self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "baseline"))
+            gate, scans = Gate([]), {}
+            self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "baseline", scans))
             (root / "baseline" / "tests" / "scratch_notes.txt").unlink()
             verdict = gate.verify_claim(CriticClaim("tests/test_calc.py", "test_sub"),
-                                        root / "baseline", root / "patch")
+                                        root / "baseline", root / "patch", scans=scans)
             self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
 
     def test_the_patch_is_scanned_once_for_every_new_test(self):
@@ -180,18 +211,18 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
                 "def test_two():\n    assert sub(7, 5) == 2\n"
             )
             (root / "patch" / "tests" / "scratch_notes.txt").write_text("written by a run\n")
-            scans = mock.Mock(side_effect=gate_module.production_imported_tests)
-            gate = Gate([])
-            with mock.patch.object(gate_module, "production_imported_tests", scans):
+            parse = mock.Mock(side_effect=gate_module.production_imported_tests)
+            gate, scans = Gate([]), {}
+            with mock.patch.object(gate_module, "production_imported_tests", parse):
                 # Scanned, then removed by a run: skipped where it is copied.
-                self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "patch"))
+                self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "patch", scans))
                 (root / "patch" / "tests" / "scratch_notes.txt").unlink()
                 verdicts = [gate.verify_claim(CriticClaim("tests/test_new.py", test_id),
-                                              root / "baseline", root / "patch")
+                                              root / "baseline", root / "patch", scans=scans)
                             for test_id in ("test_one", "test_two")]
             self.assertEqual([v.outcome for v in verdicts], [Outcome.VERIFIED, Outcome.VERIFIED],
                              [v.reason for v in verdicts])
-            self.assertEqual(scans.call_count, 1)
+            self.assertEqual(parse.call_count, 1)
 
     def test_a_new_test_that_fails_on_the_baseline_is_a_fix(self):
         """The baseline is run with the patch's test files: a new test the old code fails proves the fix."""

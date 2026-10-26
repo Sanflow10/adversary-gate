@@ -408,6 +408,26 @@ class TestSeveralClaims(unittest.TestCase):
         outcomes = {c["test_id"]: c["outcome"] for c in payload["claims"]}
         self.assertEqual(outcomes, {"test_sub": "verified", "test_add": "refuted"})
 
+    def test_every_claim_of_a_run_shares_one_scan_of_the_trees(self):
+        """F-004: the run hands each claim the same scans, so a tree's test files are read once."""
+        from adversary_gate.core.gate import Gate
+
+        seen, real = [], Gate.verify_claim
+
+        def spy(gate, *args, **kwargs):
+            seen.append(kwargs.get("scans"))
+            return real(gate, *args, **kwargs)
+
+        with mock.patch.object(Gate, "verify_claim", spy):
+            code, payload = _run_cli(
+                self.root, "--claim", "test_calc.py::test_sub", "--claim", "test_calc.py::test_add",
+                *self._measured(),
+            )
+        self.assertEqual(code, EXIT_MERGE, payload)
+        self.assertEqual(len(seen), 2)
+        self.assertIsInstance(seen[0], dict)
+        self.assertIs(seen[0], seen[1])
+
     def test_claim_json_takes_any_number_of_claims(self):
         claims = {"claims": [
             {"test_path": "test_calc.py", "test_id": "test_sub"},

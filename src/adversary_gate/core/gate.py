@@ -499,6 +499,7 @@ class Gate:
         require_network_isolation: bool = False,
         run_kwargs: Optional[dict] = None,
         file_limits: Optional[dict] = None,
+        scans: Optional[dict] = None,
     ) -> GateVerdict:
         """``file_limits`` (``timeout_seconds``/``cpu_seconds``/``mem_bytes``)
         bound runs of a *whole test file* -- the check that every test the
@@ -583,14 +584,17 @@ class Gate:
         # file alone and bends ``tests/helpers.py`` rewrote the test all the
         # same, so any baseline test file the patch changed engages the oracle.
         # Read before this claim's runs, which may write into the trees.
-        rewritten_files = self._rewritten(baseline_dir, patch_dir) if baseline_applicable else []
+        # ``scans`` holds the test files of each tree, read once for a run's
+        # claims (F-004); without it every claim reads them afresh, so a Gate
+        # used again on new trees at the same paths never answers from old ones.
+        rewritten_files = self._rewritten(baseline_dir, patch_dir, scans) if baseline_applicable else []
         rewritten = baseline_applicable and (
             _bytes_differ(baseline_dir / claim.test_path, patch_dir / claim.test_path)
             or bool(rewritten_files)
         )
         if not rewritten:
             verdict, details = self._judge(claim, baseline_dir, patch_dir, baseline_applicable, policy, limits)
-            verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits)
+            verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits, scans)
             return finish(self._explain(verdict, details))
 
         # The baseline oracle. Whatever the patch did to the test file, the
@@ -607,7 +611,7 @@ class Gate:
 
         with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
             tree = _transplant(baseline_dir, patch_dir, claim.test_path, Path(scratch),
-                               tests=self._baseline_tests(baseline_dir))
+                               tests=self._baseline_tests(baseline_dir, scans))
             if present:
                 verdict, details = self._judge(claim, baseline_dir, tree, True, policy, limits)
                 verdict.oracle = "baseline"
@@ -641,7 +645,7 @@ class Gate:
         if kept is not None:
             return finish(kept)
         verdict, details = self._judge(claim, baseline_dir, patch_dir, False, policy, limits)
-        verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits)
+        verdict = self._fail_to_pass(verdict, claim, baseline_dir, patch_dir, policy, limits, scans)
         verdict.oracle = "baseline-file"
         verdict.reason = (
             f"{claim.test_id} is new in {claim.test_path}; every test the baseline "
@@ -748,7 +752,7 @@ class Gate:
         return verdict, (baseline_detail, patch_detail)
 
     def _fail_to_pass(self, verdict: GateVerdict, claim, baseline_dir: Path, patch_dir: Path,
-                      policy, limits) -> GateVerdict:
+                      policy, limits, scans: Optional[dict] = None) -> GateVerdict:
         """A test the patch added, run against the baseline's *code* (SWE-bench's FAIL_TO_PASS).
 
         Only a ``discarded`` verdict is examined: a test with no baseline copy
@@ -766,7 +770,7 @@ class Gate:
         with tempfile.TemporaryDirectory(prefix="adversary-f2p-") as scratch:
             tree = Path(scratch) / "tree"
             shutil.copytree(baseline_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
-            for rel, source in self._baseline_tests(patch_dir).items():
+            for rel, source in self._baseline_tests(patch_dir, scans).items():
                 target = tree / rel
                 if target.is_symlink() or target.is_dir():
                     continue
@@ -820,23 +824,25 @@ class Gate:
             verdict.reason = f"{verdict.reason} [{details[0]}; {details[1]}]"
         return verdict
 
-    def _baseline_tests(self, baseline_dir: Path) -> Dict[str, Path]:
-        """The test files of a tree, scanned once per run (F-004)."""
+    def _baseline_tests(self, baseline_dir: Path, scans: Optional[dict] = None) -> Dict[str, Path]:
+        """The test files of a tree, from ``scans`` when the run already read it (F-004)."""
         # The scan parses every module the tree has, and it ran for every
         # claim. Taken at the first claim that needs it, it is the tree as the
         # run received it; a file a later run removed is skipped where it is
-        # copied.
-        cache = self.__dict__.setdefault("_baseline_tests_cache", {})
+        # copied. Kept by the run, not the Gate: one Gate kept them across
+        # runs, and new trees at the same paths were answered from the old.
+        if scans is None:
+            return dict(_baseline_test_files(baseline_dir))
         key = str(Path(baseline_dir).resolve())
-        if key not in cache:
-            cache[key] = dict(_baseline_test_files(baseline_dir))
-        return cache[key]
+        if key not in scans:
+            scans[key] = dict(_baseline_test_files(baseline_dir))
+        return scans[key]
 
-    def _rewritten(self, baseline_dir: Path, patch_dir: Path) -> List[str]:
+    def _rewritten(self, baseline_dir: Path, patch_dir: Path, scans: Optional[dict] = None) -> List[str]:
         """Baseline test files the patch changed or deleted."""
         # Compared again for every claim: runs happen in the trees, and a file
         # an earlier claim's run rewrote is a file the next claim must not trust.
-        return sorted(rel for rel, source in self._baseline_tests(baseline_dir).items()
+        return sorted(rel for rel, source in self._baseline_tests(baseline_dir, scans).items()
                       if _bytes_differ(source, Path(patch_dir) / rel))
 
     def _baseline_file_holds(

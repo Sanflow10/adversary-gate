@@ -1276,6 +1276,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # counted as a kill. --serial-sides means one, whatever was asked.
         execution["mutation_workers"] = 1 if args.serial_sides else args.mutation_workers
 
+        # Which files of each tree are tests, read once for all the claims (F-004).
+        scans: Dict[str, Any] = {}
         verdicts: List[GateVerdict] = [
             gate.verify_claim(
                 claim,
@@ -1298,6 +1300,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "cpu_seconds": args.full_suite_cpu_seconds,
                     "mem_bytes": args.full_suite_memory,
                 },
+                scans=scans,
                 **limits,
             )
             for claim in claims
