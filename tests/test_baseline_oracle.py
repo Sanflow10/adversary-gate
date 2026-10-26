@@ -280,6 +280,18 @@ class TestNewTestInAnExistingFile(unittest.TestCase):
             self.assertEqual(verdict.oracle, "baseline-file")
             self.assertIn("is new in test_calc.py", verdict.reason)
 
+    def test_a_new_test_the_old_code_fails_proves_the_fix(self):
+        """A new test in an old file runs on the baseline's code too: failing there, it proves the fix."""
+        patched = CALC.replace("return a + b", "return a if b is None else a + b")
+        new = TESTS + "\n\ndef test_add_none():\n    assert add(1, None) == 1\n"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _tree(root, patch_calc=patched, patch_tests=new)
+            verdict = _verify(root, "test_add_none")
+            self.assertIs(verdict.outcome, Outcome.VERIFIED, verdict.reason)
+            self.assertEqual(verdict.oracle, "baseline-file")
+            self.assertEqual(verdict.classification.value, "fixed", verdict.reason)
+
     def test_two_new_tests_in_one_file_check_the_old_ones_once(self):
         """Measured on more-itertools def2dab: three new tests in one file ran the
         whole baseline file 3 x 3 times per side -- 452 s of a 782 s call -- to
