@@ -399,7 +399,7 @@ def _uncovered(args) -> Dict[str, List[int]]:
         return {}
 
 
-def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation, reason="") -> List[Dict[str, Any]]:
+def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutation) -> List[Dict[str, Any]]:
     """What would turn this answer into a MERGE, in a form a coding agent can act on.
 
     Empty on MERGE. Built only from :data:`NEXT_STEP_ACTIONS`: fix the code,
@@ -494,12 +494,9 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
         # only when the operator turned it on; otherwise the step repeats why
         # strength or the answer fell short (3.0.16 said "off (...)" here when
         # the cause was a file the gate cannot judge).
-        if (mutation or {}).get("reason"):
-            steps.append({"action": "see_reason", "why": (mutation or {}).get("reason")})
-        elif census.get("minimum") and census.get("why_not"):
-            steps.append({"action": "see_reason", "why": census["why_not"]})
-        elif reason:
-            steps.append({"action": "see_reason", "why": reason})
+        why = (mutation or {}).get("reason") or (census.get("why_not") if census.get("minimum") else "")
+        if why:
+            steps.append({"action": "see_reason", "why": why})
     return [s for s in steps if s["action"] in NEXT_STEP_ACTIONS]
 
 
@@ -1611,17 +1608,18 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             coverage_ratio=coverage_ratio, strength_judged=strength_judged,
             strength_unverified=strength_unverified, mutation=mutation_detail,
         )
+        steps = _next_steps(decision, verdicts, full_codes, args,
+                            coverage_ratio=coverage_ratio, mutation=mutation_detail)
+        if not steps and decision is Decision.INCONCLUSIVE and not unjudged_reason:
+            # Nothing else to name: the answer's own reason, said once.
+            steps = [{"action": "see_reason", "why": reason}]
         payload: Dict[str, Any] = {
             "classification": decisive.classification.value if decisive else None,
             "outcome": decisive.outcome.value if decisive else None,
             "decision": decision.value,
             "reason": reason,
-            "next_steps": _next_steps(
-                decision, verdicts, full_codes, args,
-                coverage_ratio=coverage_ratio, mutation=mutation_detail,
-                reason="" if unjudged_reason else reason,
-            ) + ([{"action": unjudged_action, "flags": unjudged_flags,
-                   "why": unjudged_reason}] if unjudged_reason else []),
+            "next_steps": steps + ([{"action": unjudged_action, "flags": unjudged_flags,
+                                     "why": unjudged_reason}] if unjudged_reason else []),
             "duration_seconds": round(sum(v.duration_seconds for v in verdicts), 6),
             "claims_total": summary["claims_total"],
             "claims_fixed": summary["claims_fixed"],

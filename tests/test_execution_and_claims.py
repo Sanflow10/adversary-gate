@@ -513,6 +513,16 @@ class TestSeveralClaims(unittest.TestCase):
         self.assertEqual(payload["next_steps"],
                          [{"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]}])
 
+    def test_a_reason_already_a_step_is_not_repeated(self):
+        """3.0.17: the answer's reason became the last step when nothing else was named;
+        a reason that already has its own step (here, a test failing on both sides) is not said twice."""
+        (self.root / "baseline" / "test_twice.py").write_text(
+            "from calc import sub\n\n\ndef test_sub_wrong():\n    assert sub(1, 3) == 99\n")
+        code, payload = _run_cli(self.root, "--claim", "test_calc.py::test_sub", *self._measured())
+        self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+        self.assertEqual(payload["next_steps"],
+                         [{"action": "raise_limit", "flags": ["--full-suite-path"], "why": payload["reason"]}])
+
     def test_a_kept_test_that_skips_itself_on_the_patch_is_not_a_merge(self):
         """A skip passes nothing (3.0.14): the baseline's test skips once the patch
         drops the flag it looks for, and the patch broke what it checked."""

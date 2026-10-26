@@ -768,8 +768,10 @@ class Gate:
             shutil.copytree(baseline_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
             for rel, source in self._baseline_tests(patch_dir).items():
                 target = tree / rel
-                if target.is_symlink() or target.is_dir() or not source.is_file():
+                if target.is_symlink() or target.is_dir():
                     continue
+                if not source.is_file():
+                    continue  # scanned before an earlier claim's run removed it
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
             codes, output = self._runs(tree, claim.test_path, claim.test_id, policy, limits)

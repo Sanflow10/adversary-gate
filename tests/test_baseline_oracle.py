@@ -193,6 +193,21 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
                              [v.reason for v in verdicts])
             self.assertEqual(scans.call_count, 1)
 
+    def test_a_new_test_that_fails_on_the_baseline_is_a_fix(self):
+        """The baseline is run with the patch's test files: a new test the old code fails proves the fix."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc in (("baseline", "return a + b"), ("patch", "return a - b")):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+                (root / side / "tests" / "__init__.py").write_text("")
+            (root / "patch" / "tests" / "test_new.py").write_text(
+                "from calc import sub\n\n\ndef test_sub():\n    assert sub(5, 3) == 2\n")
+            verdict = Gate([]).verify_claim(CriticClaim("tests/test_new.py", "test_sub"),
+                                            root / "baseline", root / "patch")
+            self.assertIs(verdict.outcome, Outcome.VERIFIED, verdict.reason)
+            self.assertEqual(verdict.classification.value, "fixed", verdict.reason)
+
     def test_a_helper_kept_in_a_tool_named_directory_comes_back_too(self):
         """3.0.15: ``.tox`` and ``.nox`` were skipped by name, so a helper the
         baseline kept in ``tests/.nox/`` stayed the patch's and the bug merged.
@@ -424,6 +439,23 @@ class TestCommandClaimsUseTheOracle(unittest.TestCase):
             )
             self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
             self.assertEqual(verdict.oracle, "baseline")
+
+    def test_the_reason_names_a_rewritten_file_that_is_no_test_by_name(self):
+        """``check.sh`` is the claim, not a test file by name: the reason still says the patch rewrote it."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc, expected in (("baseline", "a - b", "2"), ("patch", "a + b", "8")):
+                (root / side).mkdir()
+                (root / side / "calc.py").write_text(f"def sub(a, b):\n    return {calc}\n")
+                (root / side / "check.sh").write_text(
+                    'out=$(python3 -c "from calc import sub; print(sub(5, 3))")\n'
+                    f'[ "$out" = "{expected}" ] || exit 1\n'
+                )
+            verdict = Gate([]).verify_claim(
+                CriticClaim("check.sh", "case_sub"), root / "baseline", root / "patch",
+                run_kwargs={"command": "sh check.sh", "env": {"PATH": "/usr/bin:/bin"}},
+            )
+            self.assertIn("(the patch rewrote check.sh)", verdict.reason)
 
 
 class TestCollateralSuiteUsesTheBaselineTests(unittest.TestCase):

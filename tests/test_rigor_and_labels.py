@@ -801,8 +801,8 @@ class TestNextSteps(unittest.TestCase):
             self.assertEqual(payload["next_steps"], [{"action": "see_reason", "why": payload["reason"]}])
             self._assert_safe(payload["next_steps"], root)
 
-    def test_with_nothing_else_to_name_the_step_is_the_reason(self):
-        """No mutation reason: the census only when it is on, else the answer's reason."""
+    def test_with_nothing_else_to_name_the_step_is_the_mutation_or_census_reason(self):
+        """The census's status only when it is on; with no mutation run at all, no crash."""
         from adversary_gate.core.gate import Decision
 
         args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
@@ -810,21 +810,18 @@ class TestNextSteps(unittest.TestCase):
         held = [mock.Mock(outcome=Outcome.VERIFIED)]
         off = {"measured": True, "mutants_counted": 5, "mutants_killed": 5, "interval": [0.87, 1.0],
                "census": {"minimum": 0, "why_not": "off (--census-min-mutants 0)"}}
-        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
-                            mutation=off, reason="coverage was never measured")
-        self.assertEqual(steps, [{"action": "see_reason", "why": "coverage was never measured"}])
         self.assertEqual(_next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
                                      mutation=off), [])
         on = {**off, "census": {"minimum": 3, "why_not": "budget cut the sample: 9 sites, 5 executed"}}
-        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
-                            mutation=on, reason="coverage was never measured")
-        self.assertEqual(steps, [{"action": "see_reason", "why": on["census"]["why_not"]}])
-        said = {**off, "reason": "score covers the 1 Python file(s) mutated only"}
-        steps = _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
-                            mutation=said, reason="coverage was never measured")
-        self.assertEqual(steps, [{"action": "see_reason", "why": said["reason"]}])
+        self.assertEqual(_next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                                     mutation=on), [{"action": "see_reason", "why": on["census"]["why_not"]}])
+        said = {**on, "reason": "score covers the 1 Python file(s) mutated only"}
+        self.assertEqual(_next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                                     mutation=said), [{"action": "see_reason", "why": said["reason"]}])
+        self.assertEqual(_next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=None,
+                                     mutation=None), [])
         self.assertEqual(_next_steps(Decision.BLOCK, held, None, args, coverage_ratio=None,
-                                     mutation=said, reason="x"), [])
+                                     mutation=said), [])
 
     def test_a_regression_says_fix_the_code(self):
         with tempfile.TemporaryDirectory() as directory:
