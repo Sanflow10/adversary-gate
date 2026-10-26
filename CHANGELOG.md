@@ -58,6 +58,10 @@ quando esta seção vira uma com versão e data.
   happened on 3.0.16's run of the gate on itself. The step now says why
   strength fell short, or else the answer's reason, once; the census's status
   appears there only when the operator turned the census on.
+- **Ledger: an external finding that does not hold.** F-005 (a universal
+  Mach-O whose magic is byte-swapped) is recorded in section 23 with why: the
+  loader accepts the fat header only big-endian on disk, and both of those
+  magics already count as native code since 3.0.16.
 
 ---
 
