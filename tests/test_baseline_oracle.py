@@ -143,6 +143,56 @@ class TestHelpersComeFromTheBaselineToo(unittest.TestCase):
             self.assertTrue(all("tests/helpers.py" in v.reason for v in verdicts))
             self.assertEqual(scans.call_count, 1)
 
+    def test_a_test_file_gone_since_the_scan_is_not_copied(self):
+        """The scan is taken once; a baseline test file a later run removed is skipped, not a crash."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, calc, expected in (("baseline", "return a - b", 2), ("patch", "return a + b", 8)):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "calc.py").write_text(f"def sub(a, b):\n    {calc}\n")
+                (root / side / "tests" / "__init__.py").write_text("")
+                (root / side / "tests" / "helpers.py").write_text(f"EXPECTED = {expected}\n")
+                (root / side / "tests" / "test_calc.py").write_text(
+                    "from calc import sub\nfrom tests.helpers import EXPECTED\n\n\n"
+                    "def test_sub():\n    assert sub(5, 3) == EXPECTED\n"
+                )
+            (root / "baseline" / "tests" / "scratch_notes.txt").write_text("written by a run\n")
+            gate = Gate([])
+            self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "baseline"))
+            (root / "baseline" / "tests" / "scratch_notes.txt").unlink()
+            verdict = gate.verify_claim(CriticClaim("tests/test_calc.py", "test_sub"),
+                                        root / "baseline", root / "patch")
+            self.assertIs(verdict.outcome, Outcome.REFUTED, verdict.reason)
+
+    def test_the_patch_is_scanned_once_for_every_new_test(self):
+        """F-004, the other tree: a new test is run on the baseline with the patch's test files."""
+        from unittest import mock
+        from adversary_gate.core import gate as gate_module
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "calc.py").write_text("def sub(a, b):\n    return a - b\n")
+                (root / side / "tests" / "__init__.py").write_text("")
+            (root / "patch" / "tests" / "test_new.py").write_text(
+                "from calc import sub\n\n\ndef test_one():\n    assert sub(5, 3) == 2\n\n\n"
+                "def test_two():\n    assert sub(7, 5) == 2\n"
+            )
+            (root / "patch" / "tests" / "scratch_notes.txt").write_text("written by a run\n")
+            scans = mock.Mock(side_effect=gate_module.production_imported_tests)
+            gate = Gate([])
+            with mock.patch.object(gate_module, "production_imported_tests", scans):
+                # Scanned, then removed by a run: skipped where it is copied.
+                self.assertIn("tests/scratch_notes.txt", gate._baseline_tests(root / "patch"))
+                (root / "patch" / "tests" / "scratch_notes.txt").unlink()
+                verdicts = [gate.verify_claim(CriticClaim("tests/test_new.py", test_id),
+                                              root / "baseline", root / "patch")
+                            for test_id in ("test_one", "test_two")]
+            self.assertEqual([v.outcome for v in verdicts], [Outcome.VERIFIED, Outcome.VERIFIED],
+                             [v.reason for v in verdicts])
+            self.assertEqual(scans.call_count, 1)
+
     def test_a_helper_kept_in_a_tool_named_directory_comes_back_too(self):
         """3.0.15: ``.tox`` and ``.nox`` were skipped by name, so a helper the
         baseline kept in ``tests/.nox/`` stayed the patch's and the bug merged.

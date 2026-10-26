@@ -41,10 +41,12 @@ quando esta seção vira uma com versão e data.
 - **The baseline is scanned once per run, not for every claim (F-004).**
   Which baseline files are tests takes parsing every module the baseline
   has, and it ran up to three times per claim; on an installed pandas (1,415
-  modules) one scan takes 22.5 s, about 11 minutes for 10 claims. It now runs
-  once, at the first claim, before any of its tests. Which of those files the
-  patch changed is still compared for every claim: the runs happen inside the
-  trees, and a file one claim's run rewrote is not trusted by the next.
+  modules) one scan takes 22.5 s, about 11 minutes for 10 claims. Across the
+  claims it now runs once per tree, at the first claim that needs it, and the
+  same holds for the patch's test files a new test is checked against on the
+  baseline. Which of those files the patch changed is still compared for
+  every claim: the runs happen inside the trees, and a file one claim's run
+  rewrote is not trusted by the next.
 
 ### Clearer answers (no verdict changes)
 

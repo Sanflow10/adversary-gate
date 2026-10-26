@@ -161,6 +161,8 @@ def _transplant(baseline_dir: Path, patch_dir: Path, test_path: Optional[str], i
         target = tree / rel
         if target.is_symlink() or target.is_dir():
             continue  # the harness/path policies own these shapes
+        if not source.is_file():
+            continue  # scanned before an earlier claim's run removed it
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     return tree
@@ -764,9 +766,9 @@ class Gate:
         with tempfile.TemporaryDirectory(prefix="adversary-f2p-") as scratch:
             tree = Path(scratch) / "tree"
             shutil.copytree(baseline_dir, tree, symlinks=True, ignore=_COPY_IGNORE)
-            for rel, source in _baseline_test_files(patch_dir):
+            for rel, source in self._baseline_tests(patch_dir).items():
                 target = tree / rel
-                if target.is_symlink() or target.is_dir():
+                if target.is_symlink() or target.is_dir() or not source.is_file():
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
@@ -817,11 +819,12 @@ class Gate:
         return verdict
 
     def _baseline_tests(self, baseline_dir: Path) -> Dict[str, Path]:
-        """The baseline's test files, scanned once per run (F-004).
+        """The test files of a tree, scanned once per run (F-004).
 
-        The scan parses every module the baseline has, and it ran for every
-        claim. Taken at the first claim, before any test has run, it is the
-        tree as the run received it.
+        The scan parses every module the tree has, and it ran for every
+        claim. Taken at the first claim that needs it, it is the tree as the
+        run received it; a file a later run removed is skipped where it is
+        copied.
         """
         cache = self.__dict__.setdefault("_baseline_tests_cache", {})
         key = str(Path(baseline_dir).resolve())
