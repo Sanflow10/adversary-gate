@@ -819,13 +819,11 @@ class Gate:
         return verdict
 
     def _baseline_tests(self, baseline_dir: Path) -> Dict[str, Path]:
-        """The test files of a tree, scanned once per run (F-004).
-
-        The scan parses every module the tree has, and it ran for every
-        claim. Taken at the first claim that needs it, it is the tree as the
-        run received it; a file a later run removed is skipped where it is
-        copied.
-        """
+        """The test files of a tree, scanned once per run (F-004)."""
+        # The scan parses every module the tree has, and it ran for every
+        # claim. Taken at the first claim that needs it, it is the tree as the
+        # run received it; a file a later run removed is skipped where it is
+        # copied.
         cache = self.__dict__.setdefault("_baseline_tests_cache", {})
         key = str(Path(baseline_dir).resolve())
         if key not in cache:
@@ -833,11 +831,9 @@ class Gate:
         return cache[key]
 
     def _rewritten(self, baseline_dir: Path, patch_dir: Path) -> List[str]:
-        """Baseline test files the patch changed or deleted.
-
-        Compared again for every claim: runs happen in the trees, and a file
-        an earlier claim's run rewrote is a file the next claim must not trust.
-        """
+        """Baseline test files the patch changed or deleted."""
+        # Compared again for every claim: runs happen in the trees, and a file
+        # an earlier claim's run rewrote is a file the next claim must not trust.
         return sorted(rel for rel, source in self._baseline_tests(baseline_dir).items()
                       if _bytes_differ(source, Path(patch_dir) / rel))
 
