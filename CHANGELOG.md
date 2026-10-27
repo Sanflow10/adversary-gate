@@ -36,6 +36,13 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
+---
+
+## [3.0.17] — 2026-10-27
+
+A finding of an external audit of 3.0.16 that holds (F-004: a slow scan,
+never a wrong verdict), and clearer `next_steps`. No verdict changes.
+
 ### Performance
 
 - **The baseline is scanned once per run, not for every claim (F-004).**
@@ -46,7 +53,8 @@ quando esta seção vira uma com versão e data.
   same holds for the patch's test files a new test is checked against on the
   baseline. Which of those files the patch changed is still compared for
   every claim: the runs happen inside the trees, and a file one claim's run
-  rewrote is not trusted by the next.
+  rewrote is not trusted by the next. The scans belong to the run: a `Gate`
+  used from Python without them reads the trees afresh for each claim.
 
 ### Clearer answers (no verdict changes)
 
