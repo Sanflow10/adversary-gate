@@ -18,7 +18,7 @@ Concretely, the report-worthy class includes:
 - a `diff` or coverage input that parses into a *different* file set than the
   patch actually contains (parser confusion is fail-open by construction);
 - code execution, file write or network access **outside** the boundary
-  described in [README → Execution boundary](README.md#execution-boundary),
+  described in [README → Execution boundary](docs/EXECUTION_BOUNDARY.md),
   reached by a test the gate ran;
 - a way to bypass `--require-network-isolation` or `--sandbox bwrap` such that
   the run proceeds while the property does not hold.
@@ -31,7 +31,7 @@ Concretely, the report-worthy class includes:
 **Out of scope (by design, and documented as such):**
 
 - code the patch itself contains doing what it likes *inside* the runner's
-  privileges. That is the [Execution boundary](README.md#execution-boundary),
+  privileges. That is the [Execution boundary](docs/EXECUTION_BOUNDARY.md),
   not a vulnerability — see "Known limitations" below.
 - `--require-network-isolation` being set without an actual isolated
   environment. It is a declaration by you about your environment; the tool

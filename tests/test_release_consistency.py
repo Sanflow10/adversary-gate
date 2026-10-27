@@ -1,7 +1,7 @@
 """One version, everywhere it is written.
 
 ``CHANGELOG.md`` -> *Como cortar uma release*, step 3: ``pyproject.toml``,
-``README.md:1`` and the ``demo/demo.py`` banner carry the same version, and
+the ``README.md`` install line and the ``demo/demo.py`` banner carry the same version, and
 "um destes divergindo é o defeito que a auditoria já apontou". Until now that
 was a checklist item. A checklist item is a promise; this is the measurement.
 """
@@ -31,9 +31,11 @@ class TestOneVersion(unittest.TestCase):
     def setUp(self):
         self.version = _pyproject_version()
 
-    def test_readme_title(self):
-        first = (ROOT / "README.md").read_text().splitlines()[0]
-        self.assertEqual(first, f"# AdversaryGate (v{self.version})")
+    def test_readme_install_line(self):
+        """The title carries no version (badges do); the pinned install line does."""
+        readme = (ROOT / "README.md").read_text()
+        self.assertEqual(readme.splitlines()[0], "# AdversaryGate")
+        self.assertIn(f"pip install adversary-gate=={self.version}\n", readme)
 
     def test_package_version(self):
         """``adversary-gate --version`` reads this; it must not lag pyproject (AG-027)."""

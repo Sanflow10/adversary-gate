@@ -1,24 +1,19 @@
-# AdversaryGate (v3.0.17)
+# AdversaryGate
+
+[![PyPI](https://img.shields.io/pypi/v/adversary-gate)](https://pypi.org/project/adversary-gate/)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![CI](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml)
 
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
 
-> **Uso alto de IA ≠ confiança alta.** O custo de um pipeline com agentes de
-> código não está na inteligência do modelo, está no autoengano do pipeline.
+A fail-closed verification gate for patches written by AI coding agents. It runs your tests on the baseline and on the patch, mutation-tests only the lines the patch wrote, and answers `MERGE`, `BLOCK` or `INCONCLUSIVE` — where **uncertainty is a first-class result** instead of a silent approval. CLI, GitHub Action and MCP server.
 
-An evidence-based fail-closed verification gate for AI coding agents where **uncertainty is a first-class result (`INCONCLUSIVE`)** instead of a silent approval.
-
-**Measures Python/pytest repositories today.** On other stacks it runs your suite via `--test-command` but answers `INCONCLUSIVE`, never `MERGE` — see [Language support](#-language-support--read-this-if-your-repo-is-not-python).
+**Python only, for now.** It measures Python/pytest repositories; on other stacks it runs your suite via `--test-command` but answers `INCONCLUSIVE`, never `MERGE` — see [Language support](docs/LANGUAGE_SUPPORT.md).
 
 ```bash
 pip install adversary-gate
 ```
-
-| Document | What it is |
-| --- | --- |
-| 📄 **[CHANGELOG](CHANGELOG.md)** | what changed — and which versions actually have a tag |
-| 🛡️ **[SECURITY](SECURITY.md)** | report a fail-open. A bug in this repo *is* a security bug, because a wrong `MERGE` is the whole failure mode |
-| 📋 **[Findings AG-001…AG-046 and the 3.0.x fixes](ERRORS_AND_INCONSISTENCIES.md)** | every finding, reproduced by real exit code before being fixed — and what is still open |
 
 ---
 
@@ -43,393 +38,7 @@ python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
 
 `demo/demo.py` is an **acceptance test**, not a screenshot: it builds the fixtures, runs the real CLI as a subprocess, reads the real exit codes, and fails if any of the three decisions changes. Its evidence artefacts are checked in under `demo/out/`.
 
-> **`INCONCLUSIVE` is not an error.** It is the gate saying *"I did not measure that"*, and it is exit 2 so CI treats it as "do not merge yet", not as "pass". See [How `diff_coverage` gets its value](#how-diff_coverage-gets-its-value) for the one-step path from `INCONCLUSIVE` to `MERGE`.
-
----
-
-## 🎯 The Thesis
-
-1. **High AI usage ≠ high confidence.** The more a team leans on agents in its real engineering flow, the more the cost of *"looks right"* shows. Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken or never ran.
-2. **Switching models is a symptom.** Teams move between models looking for PRs they can trust. What is missing is **deterministic verification, not a better model**. AdversaryGate runs the same test harness with no LLM in the verifier, which is what makes patches from different models comparable at all.
-3. **The loss is concrete.** Merged regressions, tasks reported done that are not, rollbacks, and reviewer hours spent re-reading the same PR.
-4. **Less pipeline self-deception.** The product does not sell a smarter AI. It sells a pipeline that says *"I did not measure that"* instead of a green check. How to count that honestly is in [Provenance & metrics](#-provenance--metrics) — and the counter this README used to point at is zero by construction on the gate's own logs (AG-029), so it is no longer the pitch.
-
----
-
-## 🔒 The Fail-Closed Model & Double-Filter Rigor
-
-A single invariant governs the entire system:
-> *The gate only reports what a healthy test harness actually executed. Unproduced proof is never proof of clean code.*
-
-| State | Outcome | Meaning |
-|---|---|---|
-| `Executed & Passed` | `Outcome.VERIFIED` | Test ran to completion and evidence confirms clean execution. |
-| `Executed & Failed` | `Outcome.REFUTED` | Test ran to completion and evidence condemns the patch. |
-| `Harness / Error` | `Outcome.UNVERIFIED` | Collection error, syntax error, missing file, timeout or flaky signal. **Never mergeable.** |
-
-### Patch Decision Matrix
-
-- **`Decision.MERGE`**: Requires **every** verdict to be `VERIFIED`, a **measured** `diff_coverage >= 80%`, a suite strength whose **80 % lower confidence bound** is `>= 0.75` when strength was measurable (`suite_strength_lower`), and the full repository test suite to pass on the patch side.
-- **`Decision.BLOCK`**: Triggered if any claim is `REFUTED`, or if the patch fails the full test suite **that the baseline passed** (*collateral regression*). Checked **before** the coverage floor: direct evidence of breakage outranks missing evidence.
-- **`Decision.INCONCLUSIVE`**: Triggered on `UNVERIFIED` outcomes, open circuit breakers, **coverage that was never measured**, a weak test suite (`suite_strength < 0.75`), a strength that could not be measured even though source changed, or a full suite that was already red before the patch. **Never merges.**
-
-Precedence is `BLOCK` > `INCONCLUSIVE` > `MERGE`, and direct evidence always outranks missing evidence: a patch whose claim could not be executed but whose collateral run broke the suite is `BLOCK`, not a shrug.
-
-**A passing claim says *how* it passed (AG-030).** `VERIFIED` comes with one of three classifications: `fixed` — the test **failed on the baseline and passes on the patch**, the strongest evidence there is that the patch fixes what the test checks (SWE-bench's *FAIL_TO_PASS*); `no_regression` — it passed on both sides, which only says nothing it checks broke; `discarded` — a test the patch added, with no "before". The output carries `claims_fixed` and `fix_proven`, so *"this patch fixes what it says it fixes"* is a field, not an inference — and `MERGE` with `fix_proven: false` is a patch that broke nothing and proved nothing about the bug it was for.
-
-**The patch does not get to write its own answer — the baseline does.** If the claim's test file already existed on the baseline and its bytes differ on the patch, the patch's copy is never run for the verdict. The gate copies the patch tree, puts the **baseline's** test file back, and runs the claim there: the patch's code answers to the test that existed before it (the *baseline oracle*; the artefact records `"oracle": "baseline"`). So a bug hidden behind a rewritten assertion is `REFUTED` → `BLOCK`, and an honest refactor of the test file is `VERIFIED` instead of stuck. A test the patch *added to an existing file* has no baseline copy: it is judged like any added test, but only after **every test the baseline shipped in that file** has passed on the patch's code (`"oracle": "baseline-file"`) — so the new test cannot be the cover for an old one the patch bent. The oracle covers three more places a test's answer can hide:
-
-- **Helpers.** Every baseline file that is a test file is put back, not only the claim's — `test_*`, `*_test.py`, `conftest.py`, anything under `tests/` or `__tests__/`, and `*.test.*`, `*.spec.*`, `*_test.go`, `*Test.java`, `*_spec.rb`. A helper whose path says nothing (`testing_utils.py` at the root) cannot be told apart from code under test — `numpy.testing` is public API — so it is **declared**: `--test-support testing_utils.py` (repeatable, a glob; Action input `test-support`). Declared paths are test files everywhere: out of diff coverage and mutation, and restored from the baseline. Any change to a baseline test file engages the oracle, even with the claim's own file untouched.
-- **The collateral suite.** When the patch changed tests the baseline had, the full-suite run also executes the **baseline's** tests against the patch's code (`full_suite_oracle` in the artefact). A test that is no claim's, bent to agree with a bug, is a collateral regression → `BLOCK`.
-- **`--test-command` claims.** The `test-id` of a command suite is a label, so the transplant always applies: the command runs from the baseline's copy of the files.
-
-When the baseline's copy of a Python test cannot be parsed, the old rule stands: a passing rewritten test is `UNVERIFIED`. A test file the patch *adds* is judged as before. A legitimate behaviour change that rewrites its tests therefore lands on `BLOCK` — the old tests fail on the new code — which is the gate saying *"the contract changed; a person signs that"*. Nor does it get to configure the runner that judges it (AG-032): every test-harness file in the tree — the five config names pytest 9 reads (`pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`), plus `pyproject.toml`, `setup.cfg`, any `conftest.py`, `sitecustomize.py`, `usercustomize.py` and `*.pth`, at any depth — must be byte-for-byte the baseline's, or the claim is `UNVERIFIED`. The trees are compared directly, so a harness change the `--diff` leaves out is still caught. The paths named by `--diff` are also checked against the protected-path policy (`conftest.py`, `pytest.ini`, `pyproject.toml`, …), not only the ones passed with `--changed-path`. A directory holding `pyvenv.cfg` is a virtualenv and is skipped by the tree comparison, so from 3.0.7 a `pyvenv.cfg` in the diff is a protected path: a patch cannot turn a directory of its own into one and hide harness files there. Nor can it put a module where it would be imported in place of the real one (AG-048): `python -m pytest` searches the tree's root first, pytest adds the directory of every test module and `conftest.py` that is not a package, and a `pythonpath` setting or a test's `sys.path.insert` can add more. So in every directory that is not a package, an `inspect.py`, a `json.py` or a `pytest/` package the patch adds or changes — any standard-library name, or a module pytest itself loads — is treated as a harness change. A directory without `__init__.py` does not count (a namespace never wins over a real module), virtualenvs are skipped, and a module on pytest's path is also known to the AG-047 check by its bare name.
-
-### How `diff_coverage` gets its value
-
-Coverage is an **evidence** question, not a parameter. There are exactly three ways it can be supplied, and the artefact records which one was used (`diff_coverage_source`):
-
-| `--coverage-source` | Inputs | Meaning |
-|---|---|---|
-| `computed` (via `auto`) | `--diff` + `--coverage-json` | The gate parses the unified diff and the coverage.py JSON report itself, and records the SHA-256 of both. **This is the only measured option.** |
-| `untrusted` | `--coverage-ratio` | A number the caller asserts. Accepted only when you say so out loud; the artefact marks it `untrusted`. |
-| `none` (via `auto`) | neither | No evidence. `diff_coverage_ratio` is `null` and the floor is not cleared → `INCONCLUSIVE`. |
-
-Test files are not part of the ratio: `diff_coverage` is covered added lines over added lines **of source files**. A test executes by construction, so counting its lines let ten unexecuted source lines plus forty test lines read as `0.8`. The artefact records `test_lines_excluded` and `test_files_excluded` next to `changed_lines`.
-
-Documents (README, LICENSE, CHANGELOG and the like) are not code and are left out. A patch that changes documents or configuration and no source line has nothing to cover: its ratio is **not measured**, so the decision cannot be `MERGE` on coverage. A patch of tests alone keeps the vacuous `1.0` it always had. That closes a gap in the earlier 3.0.0 code, where deleting one line of a README measured `1.0`, and a claim that read the README then passed. Every changed source line counts. coverage.py reports a statement on its first line only, so the second line of a statement is covered when its statement ran and counts against the patch when it did not (E); the gate reads the patch's file to tell which statement a line belongs to. A docstring line counts and is never covered. A Python file that `git diff` shows only as `Binary files ... differ` (its `.gitattributes` says `-diff` or `binary`) is **refused with exit 3**, because its changed lines are not in the diff at all (C). The evidence script diffs with `--text --no-textconv`, so the GitHub Action does not reach that case.
-
-A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)**. Before v2.1.0 the flag defaulted to `1.0`, the gate never read a diff or a coverage report, and the GitHub Action passed neither — so `diff_coverage >= 80%` was satisfied by a default value on every run.
-
-`--coverage-floor 0` disables the requirement explicitly; it is not a way to satisfy it.
-
-### How `suite_strength` is measured
-
-It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. Each claim meets the mutants with the copy of its test file that judged it: when the patch rewrote a test the baseline had, that is the baseline's copy (until 3.0.3 the mutants ran the patch's, and asserts the patch added to a rewritten test killed mutants the verdict never ran). It is not derived from coverage or from parsing pytest output.
-
-Several things must hold before a score exists, and each one that fails leaves the strength **not measured**. The claims must pass on the unmutated patch, the reference: if they do not, a mutant that fails the same way is not a kill (D). A Python file the patch adds that cannot be paired with a baseline file, because the baseline is over 400 files or 5000 lines, is never mutated (B). Every changed Python file must be UTF-8: one that is not cannot be mutated, and it used to be skipped in silence while the other files' score stood for the patch. And every claim runs on a neutral copy of the patch: one comment per changed line, a space after each token a mutant would swap, and one no-op assignment — deleted on the same line, so it never shows in `locals()` or a class's `vars()` — in the block of each changed statement (in front of it, or after a docstring or the `from __future__` imports, which must stay first). A claim that fails on that copy reads the code's text or structure instead of what it does (A). The copy catches a claim that reads the file, a piece of a changed line, its whole tree or the bytecode of the changed function; one that reads a smaller piece of the tree, such as a single expression, or that normalizes the text before comparing, can still pass. If that copy cannot be built for a changed file, nothing is measured either.
-
-#### Small changes: why a correct one-line fix is INCONCLUSIVE
-
-The strength floor reads the lower bound of a confidence interval, and a small
-change has few mutation sites: 1 killed out of 1 bounds the strength at 0.38,
-and the default floor (0.75 at 0.80 confidence) takes **at least 5** killed
-mutants. When every mutant was killed and there were simply too few, the
-`reason` says *"the change is too small to measure at this floor"* and gives
-the count — weak tests look different: a survivor, named in `next_steps`.
-More tests cannot add mutants; only a bigger change can. What remains is the
-operator's choice, never the patch's — which is why `next_steps`, which an
-agent reads, names no flag:
-
-- accept the answer: the fix is proven (`fix_proven: true`), only the strength is unmeasured, and a human reviews it;
-- `--census-min-mutants N`, below: judge a complete census of the change by its exact ratio;
-- `--mutate-constants`: also break integer literals, which adds sites on some lines.
-
-**`--census-min-mutants N` (experimental, off by default).** Below the mutant budget the gate breaks *every* mutable site of the change — a census, not a sample. With this flag, when the census covers the whole change (every changed executable line has a site; statement-level sites are added for lines with no operator), nothing was stillborn, **every mutant died**, and there are at least N, the exact ratio is judged instead of the Wilson lower bound. Off by default: "1 killed out of 1 is not strong" stays the rule unless you opt in. A first version let a real bug through (one surviving operator mutant diluted by easy statement-level kills); the ledger has the case.
-
-**`next_steps`.** Every answer that is not `MERGE` lists what would make it one, as actions a coding agent can take: `cover` (file, lines), `kill_mutant` (file, line, mutation), `add_test`, `fix_code`, `human_review_test_edit`, `raise_limit`, `see_reason`. It never suggests editing a baseline test, a harness file, a floor or the policy — those are the oracle.
-
-- Mutants are limited to lines the patch actually wrote; mutating untouched lines would let tests covering unrelated code inflate the score.
-- **A branch that shares its line with its guard gets a mutant of its own.** Coverage is per line, so `return 999 if x == 0 else x + 1` reads as covered when only the `else` ran — and the guard's operator mutant (`==` → `!=`) sends the tested input *into* the hidden arm, so the test kills it and the kill used to count as strength: on 3.0.3 that patch merged at 5/5 with `value(0)` changed from 1 to 999. Now a conditional expression is also replaced by each of its arms, an `and`/`or` loses its last operand, and an `if` or `case` whose body sits on the header's line is switched off. These mutants (`kind: "branch"`) come first on their line. One that **survives** means a branch on a changed line that no claim takes. It is listed in `mutation.blind_spots`, `suite_strength_unverified` turns `true` and the decision is `INCONCLUSIVE`, whatever the other mutants scored — the ratio itself stays what the operator mutants measured — and `next_steps` names the line. Killed, they do not enter the ratio, so they cannot pad it.
-- **Added, modified and deleted** source files all count as changes. A deleted file has nothing left to mutate, so it is reported separately as `mutation.deleted_files` and cannot contribute a score: whenever `deleted_files` is non-empty the patch lands on `INCONCLUSIVE`, never `MERGE`. That includes a *mixed* patch where the surviving file measured `1.0` — that score covered only what was left after the deletion, so `suite_strength_unverified` goes `true` rather than let one file's number authorise the change as a whole.
-- A mutant that no longer runs at all (syntax/collection error) is *stillborn* and excluded from both sides of the ratio rather than counted as a kill.
-- `suite_strength: null` means **not measured** — there was no source change to judge. It is never reported as `1.0`, and it does not block.
-- If source **did** change and no score could be produced, that is *unknown, not strong*: the decision is `INCONCLUSIVE`.
-- **The floor reads a confidence bound, not the ratio (AG-023).** A ratio from one mutant is `1.0` and evidence of almost nothing. The gate computes a two-sided **Wilson interval** around `killed / counted` and applies `--suite-strength-floor` to its **lower bound** (`--strength-confidence`, default `0.80`; `0` restores the raw ratio). At the default, **5 of 5** killed mutants clear 0.75 (lower bound 0.753) and 4 of 4 do not (0.709). The artefact records `suite_strength` (the ratio), `suite_strength_lower`, `mutation.interval` and `mutation.confidence`. Consequence, said plainly: a patch whose changed lines hold fewer than five mutable operators cannot reach `MERGE` at the default — it is `INCONCLUSIVE`, because the gate cannot tell a strong suite from a lucky one on that sample.
-- **Every changed line is broken at least once — with listed exceptions.** With its first operator site, or — on a line no operator reaches — with a statement-level mutant: a `return` gives `None`, a condition is negated, a loop iterates nothing, any other statement is deleted. A changed decorator is replaced by `lambda f: f` (not `cache`, `lru_cache` or `wraps`, whose removal no test can see), a changed default value by `None`, a changed base class by `object` — these lines run on import, so coverage counts them as run with no test looking; until 3.0.7 they had no mutant. Not broken, and listed in `mutation.unmutated_lines`: a call on its own line (a log call, say), an `assert`, an `import`, and a header with nothing of that kind to break. **A listed line does not stop a `MERGE`**: it is judged only by the claims and the full suite, so read the list. A statement-level mutant that survives is a blind spot too, like a branch mutant; killed, it stays out of the ratio. `mutation.mutants_needed` records how many mutants breaking every line once took. The remaining sites fill the sample, one per line before any line gets a second, files and lines in order, up to **12** mutants. Until 3.0.3 the 12 were simply the first 12 changed lines: three untested boundary changes after twelve tested lines merged without ever being broken, and `return a` → `return b` merged beside a tested line. `--mutation-max` (default **60**) is the ceiling: a change that needs more mutants than that to break every line once is **not measured**, and the reason says how far to raise it.
-
-`--mutation-max N` is the ceiling on the cost (`0` disables the *measurement* entirely, which is recorded as such in the evidence artefact). It is the strength floor's escape hatch, the way `--coverage-floor 0` is the coverage floor's: the requirement is **disabled**, not satisfied. What it does *not* switch off is the check for source this engine cannot judge — that is a property of the patch, not of your budget, and it still forces `INCONCLUSIVE` with the budget at zero (AG-014).
-
----
-
-## 🌐 Language support — read this if your repo is not Python
-
-**Today the gate measures Python.** Three layers are Python-specific, and each
-one is a different kind of "no":
-
-| Layer | What it does | Non-Python |
-|---|---|---|
-| Test execution | `python -m pytest <path::id>` | never runs; pytest reports *no tests collected* (exit 5) |
-| Coverage | parses `coverage json` (`files → executed_lines`) | no report in that shape to parse |
-| Mutation | tokenizes Python and swaps operators | cannot break a `.cpp` or a `.rs` |
-
-Everything *above* those layers — decision precedence, the evidence questions,
-the SHA-256'd artefact, exit codes — is language-agnostic. The brain is
-portable; the senses are not.
-
-### What you get today on a non-Python patch
-
-**`INCONCLUSIVE`, never `MERGE`** — and that is deliberate, not a limitation
-that happens to work out.
-
-Until AG-012 it was worse than useless, it was wrong. The mutation scanner only
-walked `*.py`, so a patch whose entire effect was in `calculator.cpp` reported
-`changed_files: []` and the reason **`"no non-test source file changed between
-baseline and patch"`** — a statement that was simply false. With a passing
-Python test and a coverage artefact, that patch reached **`MERGE`** while the
-only thing that had executed anywhere was `assert True`:
-
-```console
-$ adversary-gate --baseline b --patch p --test-path test_ok.py --test-id test_ok \
-      --diff change.diff --coverage-json cov.json
-decision: merge        # changed calculator.cpp from `a - b` to `a * b`
-suite_strength: null   # reason: "no non-test source file changed"
-```
-
-It now records what it actually observed and refuses to judge what it cannot:
-
-```console
-decision: inconclusive                                        exit 2
-suite_strength: null | suite_strength_unverified: true
-mutation.foreign_changed_files: ["calculator.cpp"]
-mutation.reason: "1 non-Python source file(s) changed that suite strength
-                   cannot judge: calculator.cpp"
-```
-
-`INCONCLUSIVE` here is the product working: *the patch changed code we did not
-execute, so we are not saying it is clean.* The alternative — a green checkmark
-over a test suite that never looked at the change — is the exact failure this
-project exists to prevent.
-
-#### The mixed patch, which is the one that hides
-
-The pure-C++ case is easy to spot; the dangerous one is **Python + C++ in the
-same patch**, because there the Python half *does* measure:
-
-```console
-$ adversary-gate ... --diff change.diff --coverage-json cov.json
-decision: merge                                                 # before
-coverage: 0.80   suite_strength: 1.0   suite_strength_unverified: false
-mutation.foreign_changed_files: ["vec.cpp"]      # recorded, never acted on
-```
-
-A `1.0` next to an untouched bug reads as a clean patch. Coverage often masks
-this by accident — an unexecuted `.cpp` line drags the ratio down — but that is
-a coincidence of arithmetic, not a guarantee, so the case is now pinned
-directly: **any** non-Python source in the patch makes
-`suite_strength_unverified` fire, and the artefact says what the score is a
-score *for*:
-
-```console
-decision: inconclusive                                         exit 2
-suite_strength: 1.0 | suite_strength_unverified: true
-mutation.reason: "score covers the 1 Python file(s) mutated only; 1 non-Python
-                  source file(s) in this patch were never judged"
-```
-
-### Which files count as "source we cannot judge"
-
-`NON_SOURCE_SUFFIXES` in `src/adversary_gate/verifiers/strength.py` — a **denylist**, not an
-allowlist. Anything that is not Python, not a test, and not on the list of
-things that are plainly not code (`.md`, `.yml`, `.json`, images, archives,
-object files) counts as source we cannot judge. That direction is
-deliberate: the previous shape was an allowlist of languages somebody had
-remembered to type, and every suffix outside it was invisible. Compiled code a
-runtime loads (`.so`, `.pyd`, `.dll`, `.dylib`, `.pyc`, `.jar`, `.class`,
-`.wasm`, `.exe`) is code: Python imports `rules.so` before `rules.py`. Until
-3.0.7 it was on the not-code list. A project that builds extensions in place
-now gets INCONCLUSIVE when the built files differ from the baseline; build them
-outside the tree, or into `build/`. The tests also never read bytecode from the
-tree's `__pycache__`.
-
-That is not a hypothetical. Until AG-013, a patch whose entire effect was in
-`schema.sql` reported:
-
-~~~
-decision: merge                                   # changed schema.sql
-suite_strength: null
-mutation.reason: "no source file changed between baseline and patch"
-~~~
-
-— the exact false statement AG-012 was opened to remove, still reachable
-through a suffix nobody had listed. `.proto`, `.pyi`, `.vue`, `.sol`, `.tf`
-and `.r` were all in the same hole, and the **mixed** patch (a measured
-`calc.py` plus an unmeasured `schema.sql`) merged with `suite_strength: 1.0`
-and `suite_strength_unverified: false`.
-
-A list of remembered languages has an end; a list of what is *not* code does
-not. Unrecognised now fails closed.
-
-Two sources are unioned, so either alone being wrong cannot open a hole:
-
-| Source | Catches |
-| --- | --- |
-| directory scan (denylist) | changes a hand-written or partial diff left out |
-| `--diff` paths (authoritative) | anything the scan cannot see — generated files, paths absent from both trees |
-
-A documentation-only patch is still unaffected, because `.md` is on the list.
-
-**A test's name is confirmed against who imports it (from 3.0.6).** Tests are
-left out of coverage and mutation, and the oracle puts them back from the
-baseline, so a product module under a test path — a `test_*`/`*_test.py` name,
-or a `tests` directory — used to be invisible: a change to it was never judged.
-Now a test-pathed Python module that a **non-test** module imports is judged as
-source. A helper imported only by other tests stays a test; `conftest.py` and
-`--test-support` are never reclassified. The detection reads imports from the
-AST, so a module reached only through an import path it cannot match, or a
-dynamic import, is not caught (SECURITY.md); declare a real helper with
-`--test-support`, and never put product code under a test path.
-
-### What shipped, and what still requires
-
-**1. Execution on any stack — `--test-command` (shipped).**
-
-```bash
-adversary-gate --baseline before --patch after \
-      --test-path run_tests.sh --test-command "./run_tests.sh"
-```
-
-Replaces pytest with a command you supply, on the baseline side and the patch
-side. The convention is the table below with the pytest names stripped out:
-
-| Exit | Meaning | ExecState |
-| --- | --- | --- |
-| `0` | passed | `PASS` |
-| `1` | failed | `FAIL` — the only code that counts as evidence |
-| `2`/`3`/`4` | the harness itself broke | `UNRUNNABLE` → `UNVERIFIED` |
-| timeout | gave up | `TIMED_OUT` → `UNVERIFIED` |
-
-`--test-id` is no longer required when `--test-command` is given: a suite that
-is one command has no node IDs to name, so the claim is labelled
-`(test-command)`. The collateral full-suite run uses the same command unless
-`--full-suite-command` says otherwise — declaring a non-pytest suite does not
-silently cost you the collateral-regression check.
-
-**2. A coverage adapter — not yet.** `llvm-cov export`, `grcov`,
-`cargo-llvm-cov` and `cargo tarpaulin` all emit different shapes; normalise
-them to `{files: {path: {executed_lines: [...]}}}` and `covered_diff_ratio`
-needs no change at all.
-
-**3. A mutation adapter — not yet, and this one is the hard one.**
-`cargo-mutants` is mature for Rust; for C++ the options (`mull`, LLVM
-pass-based) are much thinner. Without it `suite_strength` stays `null` and
-every non-Python patch is `INCONCLUSIVE`, so **this is a requirement for
-MERGE, not an optimisation.**
-
-The distinction between (1) and (3) matters. `--test-command` turns *"the
-gate cannot run my suite"* into *"the gate ran it"*, which converts
-`UNVERIFIED` into a genuine `PASS` or `FAIL` — a real `BLOCK` becomes
-possible. Only a mutation adapter converts `INCONCLUSIVE` into `MERGE`.
-Until it exists the honest answer for a non-Python repo stays
-`INCONCLUSIVE`, and that is the product working rather than failing.
-
----
-
-## 📊 Measured Pytest Exit Code Taxonomy
-
-| Exit Code | Pytest Meaning | ExecState | Gate Behavior |
-|---|---|---|---|
-| `0` | Tests passed | `PASS` | Evaluated against baseline comparison |
-| `1` | Tests failed | `FAIL` | **The ONLY exit code counted as evidence** |
-| `2` | Collection error (import crash) | `UNRUNNABLE` | `UNVERIFIED` $\rightarrow$ `INCONCLUSIVE` |
-| `3` | Internal error (harness crash) | `UNRUNNABLE` | `UNVERIFIED` $\rightarrow$ `INCONCLUSIVE` |
-| `4` | Usage error (bad path / node ID) | `UNRUNNABLE` | `UNVERIFIED` $\rightarrow$ `INCONCLUSIVE` |
-| `5` | No tests collected | `UNRUNNABLE` | `UNVERIFIED` $\rightarrow$ `INCONCLUSIVE` |
-| `-1` | Sandbox timeout | `TIMED_OUT` | `UNVERIFIED` $\rightarrow$ `INCONCLUSIVE` |
-
----
-
-## 📦 Installation
-
-```bash
-pip install adversary-gate
-```
-
-Check what PyPI is serving before you trust it — `pip index versions
-adversary-gate`. Versions before 3.0.4 are unsupported: each lacks fail-open
-fixes (a patch reaching `MERGE` it should not) that came after it. PyPI gets a
-release when a signed tag is pushed (Trusted Publishing, AG-008 closed), and
-the GitHub Release below gets the same build. Every other route works too, and **none of
-them needs PyPI**:
-
-```bash
-# straight from the repository
-pip install git+https://github.com/Sanflow10/adversary-gate.git
-```
-
-```bash
-# or clone it
-git clone https://github.com/Sanflow10/adversary-gate.git
-cd adversary-gate && pip install .
-```
-
-```bash
-# or don't install it at all
-PYTHONPATH=src python3 -m adversary_gate --help
-```
-
-| Route | Follows | Needs |
-|---|---|---|
-| `pip install git+https://…adversary-gate.git` | `main` | network |
-| `git clone` + `pip install .` | `main` | git |
-| `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
-| `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.17** — every fix | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
-
-### Install a released wheel
-
-`git+…` always follows `main`. For a fixed, versioned build there are two, and
-today they carry the same code:
-
-```bash
-# PyPI -- 3.0.17. Versions before 3.0.4 are unsupported: each lacks fixes the
-# CHANGELOG lists after it.
-pip install adversary-gate==3.0.17
-```
-
-```bash
-# GitHub Release -- 3.0.17: every fix in this document.
-# The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.17/adversary_gate-3.0.17-py3-none-any.whl
-```
-
-The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
-needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.17` has not been published yet. A release
-takes two steps, in this order, and only the first is done by hand:
-
-1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
-   `git push origin vX.Y.Z`. The push starts **Publish to PyPI**, which builds
-   the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
-   and uploads both through Trusted Publishing, so every file carries a PyPI
-   provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token. Before it builds anything it
-   checks the tag's signature with `git verify-tag` against the key in the
-   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
-   kept outside the tree so a push cannot bring its own key): a lightweight
-   tag, an annotated tag with no signature, a signature from another key, or
-   no variable at all, and nothing is published.
-2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with one the same signature check refuses, and refuses while PyPI lacks either
-   package. Then it runs the full test suite and **refuses to publish if it
-   fails**, builds the wheel and sdist, installs the wheel into a clean
-   interpreter, attaches them to the release, and moves the floating tag of the
-   release's major line (`v3`) — only forward, so
-   re-releasing an old version does not drag it back.
-
-**Publish to PyPI → Run workflow** with a tag finishes a run that stopped
-halfway: files already on PyPI are skipped, never replaced.
-
-Until 3.0.3 the Release workflow created the tag itself, with the workflow's
-token, and uploaded the core alone with an API token. Events from that token
-start no other workflow, so for 3.0.2 and 3.0.3 the PyPI publisher never ran:
-`uvx adversary-gate-mcp` kept serving 3.0.0, the core files carry no
-attestation, and those tags are not signed. Like every version before 3.0.4,
-they are unsupported.
-
-### PyPI
-
-Versions before 3.0.4 are unsupported. The audit this project grew from was run
-against `2.0.1`, which predates every fix in this document: `--diff` and
-`--coverage-json` did not exist yet (AG-002).
-
-**AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
-project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
-environment), and `2.4.0` went up through it — OIDC, no token — with PyPI
-provenance attestations attached to the wheel and the sdist. Until then the
-upload step had failed on every tag with `invalid-publisher: valid token, but
-no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
+> **`INCONCLUSIVE` is not an error.** It is the gate saying *"I did not measure that"*, and it is exit 2 so CI treats it as "do not merge yet", not as "pass". See [How `diff_coverage` gets its value](docs/HOW_IT_DECIDES.md#how-diff_coverage-gets-its-value) for the one-step path from `INCONCLUSIVE` to `MERGE`.
 
 ---
 
@@ -466,7 +75,7 @@ which takes at least 5 killed mutants; see next_steps
 
 That is not a failure: the fix *is* proven, and the gate says plainly that it
 could not measure how strong the tests are on a change this small. See
-[Small changes](#small-changes-why-a-correct-one-line-fix-is-inconclusive).
+[Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
 
 ### Command-Line Usage
 
@@ -570,7 +179,7 @@ adversary-gate ... --test-command "make check" --sandbox bwrap \
 feeds the collateral full-suite run too unless you pass `--full-suite-command`.
 `--sandbox bwrap` needs [bubblewrap](https://github.com/containers/bubblewrap)
 installed and refuses to start without it — see
-[Execution boundary](#execution-boundary)
+[Execution boundary](docs/EXECUTION_BOUNDARY.md)
 for exactly what it does and does not contain.
 
 Exit Codes for CI Integration:
@@ -716,7 +325,109 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 
 ---
 
-<a name="execution-boundary" id="execution-boundary"></a>
+## 📦 Installation
+
+```bash
+pip install adversary-gate
+```
+
+Check what PyPI is serving before you trust it — `pip index versions
+adversary-gate`. Versions before 3.0.4 are unsupported: each lacks fail-open
+fixes (a patch reaching `MERGE` it should not) that came after it. PyPI gets a
+release when a signed tag is pushed (Trusted Publishing, AG-008 closed), and
+the GitHub Release below gets the same build. Every other route works too, and **none of
+them needs PyPI**:
+
+```bash
+# straight from the repository
+pip install git+https://github.com/Sanflow10/adversary-gate.git
+```
+
+```bash
+# or clone it
+git clone https://github.com/Sanflow10/adversary-gate.git
+cd adversary-gate && pip install .
+```
+
+```bash
+# or don't install it at all
+PYTHONPATH=src python3 -m adversary_gate --help
+```
+
+| Route | Follows | Needs |
+|---|---|---|
+| `pip install git+https://…adversary-gate.git` | `main` | network |
+| `git clone` + `pip install .` | `main` | git |
+| `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
+| `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
+| GitHub Release wheel (below) | **3.0.17** — every fix | nothing but `pip` |
+| `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
+
+### Install a released wheel
+
+`git+…` always follows `main`. For a fixed, versioned build there are two, and
+today they carry the same code:
+
+```bash
+# PyPI -- 3.0.17. Versions before 3.0.4 are unsupported: each lacks fixes the
+# CHANGELOG lists after it.
+pip install adversary-gate==3.0.17
+```
+
+```bash
+# GitHub Release -- 3.0.17: every fix in this document.
+# The tag carries the "v", the filename does not.
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.17/adversary_gate-3.0.17-py3-none-any.whl
+```
+
+The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
+needs a **GitHub Release** for that tag to exist: if it answers `404`, the
+Release for `v3.0.17` has not been published yet. A release
+takes two steps, in this order, and only the first is done by hand:
+
+1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
+   `git push origin vX.Y.Z`. The push starts **Publish to PyPI**, which builds
+   the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
+   and uploads both through Trusted Publishing, so every file carries a PyPI
+   provenance attestation. It refuses a tag whose `pyproject.toml` names
+   another version, and it reads no API token. Before it builds anything it
+   checks the tag's signature with `git verify-tag` against the key in the
+   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
+   kept outside the tree so a push cannot bring its own key): a lightweight
+   tag, an annotated tag with no signature, a signature from another key, or
+   no variable at all, and nothing is published.
+2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
+   with one the same signature check refuses, and refuses while PyPI lacks either
+   package. Then it runs the full test suite and **refuses to publish if it
+   fails**, builds the wheel and sdist, installs the wheel into a clean
+   interpreter, attaches them to the release, and moves the floating tag of the
+   release's major line (`v3`) — only forward, so
+   re-releasing an old version does not drag it back.
+
+**Publish to PyPI → Run workflow** with a tag finishes a run that stopped
+halfway: files already on PyPI are skipped, never replaced.
+
+Until 3.0.3 the Release workflow created the tag itself, with the workflow's
+token, and uploaded the core alone with an API token. Events from that token
+start no other workflow, so for 3.0.2 and 3.0.3 the PyPI publisher never ran:
+`uvx adversary-gate-mcp` kept serving 3.0.0, the core files carry no
+attestation, and those tags are not signed. Like every version before 3.0.4,
+they are unsupported.
+
+### PyPI
+
+Versions before 3.0.4 are unsupported. The audit this project grew from was run
+against `2.0.1`, which predates every fix in this document: `--diff` and
+`--coverage-json` did not exist yet (AG-002).
+
+**AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
+project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
+environment), and `2.4.0` went up through it — OIDC, no token — with PyPI
+provenance attestations attached to the wheel and the sdist. Until then the
+upload step had failed on every tag with `invalid-publisher: valid token, but
+no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
+
+---
 
 ## 🤖 Coding agents: Hermes (MCP) and Jev (triage)
 
@@ -759,186 +470,25 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
 
 ---
 
-## 🛡️ Execution boundary (read this before trusting it with untrusted code)
+## 🎯 Why
 
-`src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
+Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
 
-**Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space; in the runs reported in issue #4, no finite address-space limit worked there. Since 3.0.5 neither limit is set on Android unless you pass one: the gate recognises it (`sys.platform == "android"`, or `sys.getandroidapilevel` present) and the artefact records `execution.android`. The other limits still apply.
 
-### `--sandbox bwrap` — opt-in, and what it honestly buys
+---
 
-```bash
-adversary-gate ... --sandbox bwrap
-```
+## 📚 Read more
 
-Wraps every claim run and the collateral suite in [bubblewrap](https://github.com/containers/bubblewrap):
-
-| Property | Effect |
+| Document | What it is |
 | --- | --- |
-| `--unshare-net` | no network at all — exfiltration has nowhere to go |
-| `--unshare-pid` | the guest cannot see or signal host processes |
-| `--unshare-ipc`, `--unshare-uts` | no shared memory or message queues with the host, its own hostname |
-| `--unshare-user-try`, `--cap-drop ALL` | a user namespace where the kernel allows one, and no capability inside it |
-| `--tmpfs /tmp` + `HOME=/tmp` | nothing persists between runs, nothing lands in the repo |
-| system tree read-only | `/usr`, `/bin`, `/lib`, `/etc` cannot be written |
-| only the repo is writable | a test cannot touch anything outside the patch |
+| 🧮 **[How it decides](docs/HOW_IT_DECIDES.md)** | the fail-closed model, decision matrix, `diff_coverage` and `suite_strength`, why a one-line fix is `INCONCLUSIVE`, exit-code taxonomy, provenance |
+| 🌐 **[Language support](docs/LANGUAGE_SUPPORT.md)** | what happens on a repository that is not Python/pytest |
+| 🛡️ **[Execution boundary](docs/EXECUTION_BOUNDARY.md)** | read before running it on untrusted code: `--sandbox bwrap` and its limits |
+| ⏱️ **[Performance & compatibility](docs/PERFORMANCE_AND_COMPATIBILITY.md)** | timings, supported Pythons, deprecations |
+| 📄 **[CHANGELOG](CHANGELOG.md)** | what changed in each version |
+| 🔐 **[SECURITY](SECURITY.md)** | report a fail-open. A wrong `MERGE` is the whole failure mode, so a bug here *is* a security bug |
+| 📋 **[Findings register](ERRORS_AND_INCONSISTENCIES.md)** | every finding against the gate itself, reproduced by real exit code before being fixed — and what is still open |
 
-If `bwrap` is missing the gate **refuses to start** (exit 3) rather than quietly running unsandboxed — asking for isolation and not getting it is the failure mode the flag exists to prevent.
-
-**What it is still not.** There is no seccomp profile, the repository itself is writable, and the kernel is the host's: a kernel bug is reachable from inside. Outside the repository, the guest sees only the read-only system tree, the interpreter's prefix, and the user site-packages and scripts directory (not the rest of `~/.local`). It contains casual and opportunistic damage; it is not a defence against code whose purpose is to escape. For that, and for anything where a compromise would matter, use the outer sandbox below — this flag is for the case where you *have no infrastructure and the patch is probably fine*, not the case where the patch is known hostile.
-
-`--require-network-isolation` now has something real to point at: under `--sandbox bwrap` the network genuinely is gone, so `ADVERSARY_NETWORK_ISOLATED=1` becomes a statement you can make honestly instead of a wish. Outside bwrap it remains a **declaration, not a mechanism** — an assertion by *you* about *your* environment, which the tool cannot verify about itself.
-
-### What no mode of this tool provides
-
-Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged user, or any restriction on what the test code may do *by design*. The test code runs arbitrary code from the repository, with whatever privileges you gave the process.
-
-**Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
-
-The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root. Your project's dependencies are not in it, so extend it:
-
-```dockerfile
-FROM adversary-gate-mcp            # docker build -t adversary-gate-mcp .
-USER root
-COPY requirements.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
-USER 10001
-```
-
-Then run the gate with no network, no capabilities, a read-only root and a **throwaway copy** of the repository (a fresh clone, never your working tree: the tests write into it):
-
-```bash
-docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
-  --read-only --tmpfs /tmp:rw,exec --tmpfs /home/gate:rw \
-  --pids-limit 512 --memory 4g \
-  -v "$PWD/throwaway":/work --entrypoint adversary-gate my-project-gate \
-  --baseline /work/baseline --patch /work/patch \
-  --diff /work/changes.diff --coverage-json /work/coverage.json --discover-claims
-```
-
-`--network none` is the boundary `--require-network-isolation` asks you to vouch for; inside it the declaration is true. A container shares the host's kernel: for code known to be hostile, a VM is the stronger boundary.
-
-### What a test cannot see, by construction
-
-Two limits that no runner setting closes, written down so nobody has to discover them:
-
-- **The code under test runs in the same process as the test runner.** A source module the tests import can reach into pytest itself — rewrite a report, patch `assert`'s helpers, swap a fixture — and nothing in the evidence would show it. AG-032 takes the *configuration* away from the patch; it cannot take the interpreter away from the code being tested.
-- **Code can detect that it is under test.** `if "pytest" in sys.modules:` (or a check on the environment, the call stack, the clock) lets a module behave in the test run and misbehave in production. Mutation testing does not help when the branch that matters is the one the tests never take.
-
-Both are deliberate deception, not accidents, and both are reasons `MERGE` means *"permission for a human to look"*, never *"ship it"*.
-
-Two more that the branch mutants narrow but do not close, measured on the case they were built for:
-
-- **A special case kept in data, not in syntax.** `return {0: 999}.get(x, x + 1)` has no conditional for a branch mutant to remove, and the gate never changes a literal. If no claim passes `0`, nothing the gate does reaches the `999`: next to honest, tested changes that bring the sample to five kills, it merges.
-- **A hidden branch whose body has its own line, with an operator on it.** Coverage sees that body — it counts against the ratio — and the default floor (`--coverage-floor 0.80`) tolerates up to one changed line in five that no claim executed. A body with no operator (`return 999`) is broken outright and blocks; one with an operator (`return x + 998`) is a single surviving operator mutant in the ratio, which enough honest kills elsewhere can outweigh (eleven against one, at the defaults). `--coverage-floor 1.0` refuses any changed line that never ran.
-
----
-
-## 🤝 What this decision is, and what it is not
-
-`MERGE` means *every claim the gate was asked to check executed, and the evidence it could produce cleared the floors you configured*. That is a statement about **measurements**, and nothing else.
-
-It is not:
-
-- a judgement about design, naming, security posture, or whether the change should exist;
-- a substitute for human review — `MERGE` is permission for your team to look, not an instruction to merge;
-- proof about code the gate could not execute. Where it could not measure, it said `INCONCLUSIVE` rather than guessing, and that silence is the product working.
-
-**The decision to merge belongs to the person who signs the PR.** The gate's job is to make sure that person is not being lied to by their own pipeline. If a `MERGE` here becomes "the gate said yes, ship it", you have rebuilt the exact self-deception this project exists to remove — just with a better audit trail.
-
----
-
-## 📈 Provenance & metrics
-
-Every execution logs `ctx_model` and `ctx_commit` into the audit trail. Running patches through the same harness allows `compare_models()` to report verification rates side by side — which model's patches the gate could verify, and how often the evidence condemned them.
-
-`self_deception_index` (`unverified_merges / merge_count`) is still computed, and is **always `0` on logs this gate wrote** (AG-029): `decide()` never returns `MERGE` with an unverified claim, so the numerator cannot grow. It only means something when the decision records come from a pipeline that *can* merge unverified work — another gate, or a hand-built log of what actually shipped. The metrics that would say whether `MERGE` means anything — overrides (PR merged while the gate said `BLOCK`/`INCONCLUSIVE`), reverts within N days of a `MERGE`, `INCONCLUSIVE` resolved to `MERGE` — need data from outside the gate and are not implemented. See [`docs/AUDITORIA_PRODUTO_v2.1.1.md` §4.4](docs/AUDITORIA_PRODUTO_v2.1.1.md).
-
----
-
-## ⏱️ Performance
-
-```bash
-python3 scripts/benchmark.py --runs 5          # add --sandbox bwrap to include it
-```
-
-Measured on this machine (Linux 6.8, x86_64, CPython 3.12.3, no sandbox), on
-the same fixture the CI Action smoke test uses — 3 repetitions, one warm-up
-discarded:
-
-| | |
-| --- | --- |
-| median | **20,7 s** |
-| p95 | 21,1 s |
-| range | 20,7 – 21,1 s |
-| decision | `exit 0` / `merge` |
-
-**Read the breakdown before you judge that number.** One decision is **8 pytest
-invocations**, not 3:
-
-```
-1 baseline   1 patch   4 stability rounds (--rounds-used)   ≥1 mutant   1 collateral full-suite
-```
-
-Each one pays Python + pytest startup — **2,29 s here**, because this machine
-auto-loads **9 pytest plugins** (seleniumbase, pytest-html, xdist, metadata,
-rerunfailures, ordering…). The test itself executes in **0,01 s**. So:
-
-```
-8 runs × 2,29 s = 18,3 s  → environment, not gate
-                    ≈2,4 s  → AdversaryGate
-```
-
-Disabling plugin autoload takes a single start from `2,47 s` to `0,53 s` on
-this box — that step is measured; a ~5–6 s total on a clean machine is
-**arithmetic, not a measurement**, and is labelled as such.
-
-The runner hands the child a minimal environment by design, so a variable in
-your shell does **not** reach it. Since 2.3.0 you pass it on purpose:
-`--env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` (Action: `env:`) takes the plugin cost
-out of all eight runs, and the artefact records that you did. Until then, on a
-machine with a heavy plugin set, the gate paid the full cost eight times over
-with no way to opt out — which is why the environment has to be printed next to
-the number.
-
-**This is not a CI performance gate.** Timing on a shared runner is noisy
-enough that any threshold is either too loose to test anything or tight enough
-to go red on somebody else's load. Run it by hand, and keep the machine next to
-the figure. A latency number with no environment attached is not a
-measurement — it is an advertisement.
-
----
-
-## 🧭 Compatibility & deprecation
-
-**What counts as breaking.** Anything a caller or a parser depends on:
-
-| Surface | Why it is a contract |
-| --- | --- |
-| exit codes `0` / `1` / `2` / `3` | CI branches on them |
-| `decision` and `outcome` values | dashboards and status checks match on them |
-| field names in `evidence.jsonl` and the decision artefact | they are parsed, diffed and archived |
-| CLI flags and `action.yml` inputs | pipelines pass them |
-| the `0` / `1` / `2`/`3`/`4` test-command convention | every adapter is written against it |
-
-**What is not.** Prose, argument help, comments, module layout inside `src/`,
-and anything the docs never promised.
-
-**How a deprecation happens.** At least one minor release with the old surface
-still working **and a warning naming the replacement**, then removal in the
-following minor release. A breaking change is a major bump.
-
-**The rule that matters here, and it is the opposite of the usual one:**
-
-> A deprecated input must **fail loudly** — exit 3, with the replacement named —
-> and must never be quietly ignored.
-
-That is not etiquette, it is the same thesis as everything else in this
-repository. A flag that stops being read while the CLI keeps accepting it means
-someone passes `--coverage-ratio 0.95`, gets no coverage floor, and reaches
-`MERGE` on evidence they thought they had gated. Silent deprecation *is*
-fail-open, wearing the costume of good manners. So an unknown or retired flag
-is a usage error, always.
 
 ---
 

@@ -1720,7 +1720,7 @@ Porque a disciplina semver só vale se o procedimento for explícito:
 2. `pyproject.toml` → a mesma versão. Se mudou `Added`, bump de **minor**; se
    mudou apenas `Fixed`, bump de **patch**; se quebrou um contrato documentado,
    bump de **major**.
-3. `README.md:1` e o banner do `demo/demo.py` → a mesma versão. Um destes
+3. A linha `pip install adversary-gate==X` do `README.md` e o banner do `demo/demo.py` → a mesma versão. Um destes
    divergindo é o defeito que a auditoria já apontou.
 4. Abrir PR, CI verde (suíte, análise estática, cobertura, build, demo).
 5. Só então tag `vX.Y.Z`.
