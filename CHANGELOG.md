@@ -80,6 +80,31 @@ they said more, or other, than the code does.
   `--triage jev --require-network-isolation`, the diff was sent to the triage
   endpoint before the run was refused.
 
+- **A module imported by a name built at run time is judged as code.** The
+  import resolver reads literal names only, so a test-folder module reached
+  through `importlib.import_module` or `__import__` with a built name (`".".join(...)`)
+  stayed a test and was reverted to the baseline's copy. Both calls now count
+  as running text, like `exec`: the module they name is code.
+
+### Defaults
+
+- **The sandbox is on by default where it can run.** `--sandbox` defaults to
+  `auto` in the CLI, the MCP server and the Action: bubblewrap wherever a
+  probe shows it can run the project's interpreter, no sandbox elsewhere, and
+  the answer says which (`execution.sandbox`, `sandbox_requested`,
+  `sandbox_note`). Until now the default was no sandbox. `--sandbox bwrap`
+  still refuses to start without it; `--sandbox none` turns it off for tests
+  that need the network. **This changes how tests run by default.**
+- **A change too small to measure can go to a person instead of failing.**
+  A correct one-line fix kills its one mutant, and 1 of 1 cannot clear the
+  strength floor, so most small fixes were INCONCLUSIVE and a team's way out
+  was `continue-on-error`. The decision is unchanged; when every claim held,
+  coverage met the floor and every mutant was killed, the answer now carries
+  `human_review` (`kind: small_change`), and the Action's new
+  `small-change: review` passes the step for that one case with a warning and
+  `review-required: true`. The default (`fail`) behaves as before.
+  Suggested in a public review of the README.
+
 ### Under which rules (report)
 
 - **Every report records the rules it was judged by.** The decision JSON and
