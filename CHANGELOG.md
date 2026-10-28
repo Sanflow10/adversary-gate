@@ -38,6 +38,81 @@ quando esta seção vira uma com versão e data.
 
 ---
 
+## [3.0.18] — unreleased
+
+Holes found by a read-only review of 3.0.17 against the question "what would
+a sceptical auditor ask for", each confirmed on a small repository and each
+with a test that fails on 3.0.17; the report now says which rules a decision
+was made under (a suggestion made in public); and the docs corrected where
+they said more, or other, than the code does.
+
+### Security
+
+- **MCP: the coverage pass writes only its own data directory.** It ran the
+  patch's tests in the tree the gate then judged, with the whole scratch
+  directory writable (under `--sandbox bwrap` too), and the report extractor
+  ran from that directory outside the sandbox. The pass now runs on a copy of
+  the tree with one empty directory writable; the baseline, the diff and the
+  judged tree are written after it, the judged tree is checked against a
+  snapshot taken before the diff (a change refuses the run), and the extractor
+  runs from a directory made after the pass.
+- **Action: the setup steps no longer run from the checkout.** Creating the
+  gate's venv, installing into it and probing the project's interpreter ran
+  `python -m`/`-c` with the pull request's checkout as the working directory,
+  which Python searches first. They now run from an empty directory under
+  `RUNNER_TEMP`; a relative `python` input is still resolved in the checkout.
+- **MCP: a pinned baseline is a commit id or one remote-tracking ref.** A pin
+  on a local branch, a tag or `HEAD` moves when the agent commits or tags, and
+  a local tag or branch named like the remote ref won git's lookup; such a pin
+  now answers `inconclusive` and runs nothing, naming the fix.
+  `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1` restores the old behaviour for a server
+  whose agent cannot write the repository. **This changes behaviour for a
+  server pinned to `HEAD` or a local branch**: it fails closed and says why.
+- **MCP: an agent-chosen baseline is a remote tip or where `HEAD` left one.**
+  Any pushed commit was accepted, an older one from before a test existed or
+  was tightened included. An agent that can move `HEAD` itself still chooses;
+  pin the baseline to close that (README, MCP section).
+- **MCP: the operator's policy spells out every flag.** The gate's parser
+  accepts an abbreviated flag, the server's own checks read exact names, so
+  an abbreviated `--sandbox` reached the gate but not the coverage pass, and an
+  abbreviated evidence flag passed the refusal. It is refused now.
+- **CLI: a missing network isolation or bwrap is refused before triage.** With
+  `--triage jev --require-network-isolation`, the diff was sent to the triage
+  endpoint before the run was refused.
+
+### Under which rules (report)
+
+- **Every report records the rules it was judged by.** The decision JSON and
+  each decision record in the evidence log carry `coverage_floor` (until now
+  it appeared only in a failing reason), `gate_version`, a `policy` block with
+  every option that decides an answer as it stood after triage (`--env` by
+  name only, never a value) and `policy_sha256`. The MCP answer carries the
+  same, and the kind of baseline pin. A test keeps every CLI option classified
+  as policy or evidence. Suggested in a public comment on the launch post.
+
+### Fixes
+
+- **A `Gate` used again as a library re-checks a file's old tests.** Whether a
+  file's baseline tests hold on the patch was cached on the `Gate`, keyed by
+  the trees' paths; it is kept for the run now, like the scans of 3.0.17.
+  CLI, MCP and Action create one `Gate` per process and were not affected.
+
+### Docs
+
+- Corrected against the code: a test that passes on the baseline and hangs on
+  the patch is `REFUTED`, not unverified; blank and comment-only lines are out
+  of the coverage ratio (AG-040); the `pyvenv.cfg` rule since 3.0.11; the two
+  operator choices that relax the MERGE conditions; which resource limits
+  apply to which run; a module name written out in `importlib.import_module`
+  or `__import__` is read; the evidence log is not tamper-evident (moved from
+  the report-worthy list to the known limitations); bwrap drops capabilities
+  but keeps the user id; stale links after the README was slimmed; the Action's
+  full-suite limit and strength floor; the test-command exit table; the
+  performance page's run count; supported Pythons; the findings range on the
+  site.
+
+---
+
 ## [3.0.17] — 2026-10-27
 
 A finding of an external audit of 3.0.16 that holds (F-004: a slow scan,
