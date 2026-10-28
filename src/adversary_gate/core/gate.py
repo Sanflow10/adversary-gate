@@ -641,6 +641,7 @@ class Gate:
                 claim, baseline_dir, tree, policy, {**limits, **(file_limits or {})},
                 key=(str(Path(baseline_dir).resolve()), str(Path(patch_dir).resolve()),
                      claim.test_path, policy.runs),
+                scans=scans,
             )
         if kept is not None:
             return finish(kept)
@@ -846,7 +847,8 @@ class Gate:
                       if _bytes_differ(source, Path(patch_dir) / rel))
 
     def _baseline_file_holds(
-        self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None
+        self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None,
+        scans: Optional[dict] = None,
     ) -> Optional[GateVerdict]:
         """``None`` when the baseline's whole test file passes on both sides.
 
@@ -857,7 +859,9 @@ class Gate:
         # The answer depends on the baseline, the patch and the file -- not on
         # which new test in it asked. Several new tests in one file used to
         # rerun the whole file for each (more-itertools def2dab: 452 s of 782).
-        cache = self.__dict__.setdefault("_file_holds_cache", {})
+        # Kept for the run, in ``scans``, not on the Gate: a Gate used again on
+        # new trees at the same paths answered from the old ones (3.0.18).
+        cache = scans.setdefault(("baseline-file-holds",), {}) if scans is not None else {}
         if key is not None and key in cache:
             base_codes, base_out, tree_codes, tree_out = cache[key]
         else:
