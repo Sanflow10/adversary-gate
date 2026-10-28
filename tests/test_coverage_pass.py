@@ -167,12 +167,11 @@ class TestASmallChangeCanBeRoutedToAPerson(unittest.TestCase):
     reports it; the default fails as before (3.0.18)."""
 
     def test_the_review_branch_is_narrow(self):
-        import yaml
-        action = yaml.safe_load((ROOT / "action.yml").read_text())
-        self.assertEqual(action["inputs"]["small-change"]["default"], "fail")
-        self.assertIn("review-required", action["outputs"])
-        gate = next(s for s in action["runs"]["steps"] if s.get("id") == "gate")["run"]
-        branch = gate[gate.index('REVIEW="$('):gate.index("exit $EXIT_CODE")]
+        text = (ROOT / "action.yml").read_text()  # as text: PyYAML is not a dependency
+        small = text[text.index("  small-change:\n"):text.index("  bug-kind:\n")]
+        self.assertIn("default: 'fail'", small)
+        self.assertIn("  review-required:\n", text[text.index("outputs:"):text.index("runs:")])
+        branch = text[text.index('REVIEW="$('):text.rindex("exit $EXIT_CODE")]
         self.assertIn("kind') == 'small_change'", branch)
         self.assertIn('[ "$EXIT_CODE" = "2" ] && [ "$REVIEW" = "true" ] && '
                       '[ "$AG_SMALL_CHANGE" = "review" ]', branch)
