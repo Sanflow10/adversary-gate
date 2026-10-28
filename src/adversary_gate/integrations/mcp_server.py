@@ -308,17 +308,15 @@ _HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def _operator_base(repo: Path, pinned: str) -> "tuple[str, str]":
-    """``(commit, "")`` for the operator's pin, or ``(pinned, why it is refused)``.
-
-    A commit id names one commit for good. A name must name exactly one ref,
-    and a remote-tracking one: a local branch, a tag or ``HEAD`` moves when
-    the agent commits or tags, and then the pin names the agent's oracle.
-    Until 3.0.18 any name was taken, so a pin on a local ``main`` was weaker
-    than no pin, whose base must at least be pushed. A local tag or branch
-    named like the remote one (``origin/main``) won git's lookup the same way.
-    ``ADVERSARY_GATE_ALLOW_LOCAL_PIN=1`` takes any name, for a server whose
-    agent cannot write the repository.
-    """
+    """``(commit, "")`` for the operator's pin, or ``(pinned, why it is refused)``."""
+    # A commit id names one commit for good. A name must name exactly one ref,
+    # and a remote-tracking one: a local branch, a tag or ``HEAD`` moves when
+    # the agent commits or tags, and then the pin names the agent's oracle.
+    # Until 3.0.18 any name was taken, so a pin on a local ``main`` was weaker
+    # than no pin, whose base must at least be pushed. A local tag or branch
+    # named like the remote one (``origin/main``) won git's lookup the same way.
+    # ``ADVERSARY_GATE_ALLOW_LOCAL_PIN=1`` takes any name, for a server whose
+    # agent cannot write the repository.
     if _HEX_ID.fullmatch(pinned) or _local_pin_allowed():
         return pinned, ""
     named = [ref for ref in dict.fromkeys(
@@ -346,7 +344,7 @@ def _ref_exists(repo: Path, ref: str) -> bool:
 
 
 def _local_pin_allowed() -> bool:
-    """The operator vouches that the agent cannot move a local ref."""
+    # The operator vouches that the agent cannot move a local ref.
     return os.environ.get("ADVERSARY_GATE_ALLOW_LOCAL_PIN", "").strip().lower() in ("1", "true", "yes")
 
 

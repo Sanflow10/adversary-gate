@@ -275,7 +275,7 @@ def _copy_files(repo: Path, dest: Path, rels: Sequence[str]) -> None:
 
 
 def _fresh(path: Path) -> Path:
-    """``path``, which nothing may have made yet: the coverage pass ran before it."""
+    # ``path``, which nothing may have made yet: the coverage pass ran before it.
     if os.path.lexists(path):
         raise EvidenceError(f"{path.name} already exists in the scratch directory: something "
                             "wrote there while the patch's tests ran")
@@ -283,7 +283,7 @@ def _fresh(path: Path) -> Path:
 
 
 def _snapshot(root: Path, rels: Sequence[str]) -> dict:
-    """What each of ``rels`` holds under ``root``: content hash, link target, or absent."""
+    # What each of ``rels`` holds under ``root``: content hash, link target, or absent.
     held = {}
     for rel in rels:
         path = root / rel

@@ -713,7 +713,7 @@ EVIDENCE_OPTIONS = (
 
 
 def _policy(args: argparse.Namespace) -> Dict[str, Any]:
-    """The deciding options as they stood when the decision was made (after triage)."""
+    # The deciding options as they stood when the decision was made (after triage).
     policy = {name: getattr(args, name) for name in POLICY_OPTIONS}
     # Names only: a value given with --env may be a secret.
     policy["env"] = sorted(item.split("=", 1)[0] for item in args.env)

@@ -268,6 +268,51 @@ class TestTriageThroughTheCli(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(fake.requests, [])
 
+    def test_the_evidence_log_records_the_rules_too(self):
+        fake = _FakeJev(_answer(risk="low", confidence=0.99))
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            log = root / "evidence.jsonl"
+            with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "sk-test"}), \
+                    contextlib.redirect_stdout(io.StringIO()) as out, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--test-path", "test_calc.py", "--test-id", "test_ops",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--full-suite-path", "", "--triage", "jev", "--triage-endpoint", fake.url,
+                    "--evidence-log", str(log),
+                ])
+            payload = json.loads(out.getvalue())
+            records = [json.loads(line) for line in log.read_text().splitlines()]
+        decision = [r for r in records if "policy_sha256" in json.dumps(r)]
+        self.assertTrue(decision, records)
+        self.assertIn(payload["policy_sha256"], json.dumps(decision[-1]))
+
+    def test_bwrap_missing_is_refused_before_anything_runs(self):
+        """The refusal moved above triage (3.0.18); it still answers exit 3."""
+        fake = _FakeJev(_answer())
+        self.addCleanup(fake.close)
+        from adversary_gate import cli
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            with mock.patch.object(cli, "bwrap_available", return_value=False), \
+                    mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "sk-test"}), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--test-path", "test_calc.py", "--test-id", "test_ops",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--triage", "jev", "--triage-endpoint", fake.url, "--sandbox", "bwrap",
+                ])
+        self.assertEqual(code, 3, err.getvalue())
+        self.assertIn("bwrap", err.getvalue())
+        self.assertEqual(fake.requests, [])
+
     def test_jev_down_is_recorded_and_changes_nothing(self):
         fake = _FakeJev(_answer(), status=503)
         self.addCleanup(fake.close)
@@ -380,6 +425,30 @@ class TestGitEvidence(unittest.TestCase):
             (repo / "test_probe.py").write_text(probe)
             with self.assertRaisesRegex(EvidenceError, "already exists"):
                 prepare(repo, "HEAD", root / "work", python=sys.executable)
+
+    def test_a_tree_that_changed_after_the_diff_is_refused(self):
+        """The judged tree is copied after the coverage pass: a file that changed
+        since the diff was taken -- a test of the pass, or another writer --
+        would be judged with lines no diff names (3.0.18). Links are compared
+        by target."""
+        from adversary_gate.integrations import gitevidence
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "link.py").symlink_to("calc.py")
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            same = prepare(repo, "HEAD", root / "same", python=sys.executable, coverage=False)
+            self.assertTrue((same.patch / "link.py").is_symlink())
+            real_copy = gitevidence._copy_files
+
+            def late_writer(source, dest, rels):
+                if dest.name == "patch":
+                    (source / "calc.py").write_text(CALC)
+                return real_copy(source, dest, rels)
+
+            with mock.patch.object(gitevidence, "_copy_files", side_effect=late_writer):
+                with self.assertRaisesRegex(EvidenceError, "changed while the evidence"):
+                    prepare(repo, "HEAD", root / "late", python=sys.executable, coverage=False)
 
     def test_the_report_holds_only_the_changed_lines(self):
         """Measured on more-itertools: ``coverage json --show-contexts`` took 193 s
