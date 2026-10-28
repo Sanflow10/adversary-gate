@@ -14,6 +14,7 @@ Exit codes are part of the contract, because CI reads them:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -688,6 +689,35 @@ def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
     triage.escalated = bool(raised)
     triage.applied = raised
     return triage.to_dict()
+
+
+#: The options that decide an answer, recorded with it (3.0.18): two reports
+#: judged under different floors, limits or sandboxes say so, and
+#: ``policy_sha256`` tells them apart at a glance. The rest name the evidence
+#: or label the record; a test keeps the two lists covering the parser, so a
+#: new option has to be put in one of them.
+POLICY_OPTIONS = (
+    "test_support", "triage", "triage_endpoint", "triage_threshold", "discover_claims",
+    "max_claims", "bug_kind", "aggression", "max_rounds", "coverage_source", "coverage_floor",
+    "suite_strength_floor", "strength_confidence", "serial_sides", "mutation_workers",
+    "mutation_max", "census_min_mutants", "mutate_constants", "full_suite_path",
+    "full_suite_timeout", "full_suite_cpu_seconds", "full_suite_memory", "test_command",
+    "full_suite_command", "sandbox", "python", "timeout", "cpu_seconds", "memory", "pass_env",
+    "env", "require_network_isolation",
+)
+EVIDENCE_OPTIONS = (
+    "help", "version", "baseline", "patch", "test_path", "test_id", "claim", "claim_json",
+    "criterion_id", "criterion", "rationale", "changed_path", "coverage_ratio", "diff",
+    "coverage_json", "rounds_used", "evidence_log", "model", "commit", "report",
+)
+
+
+def _policy(args: argparse.Namespace) -> Dict[str, Any]:
+    """The deciding options as they stood when the decision was made (after triage)."""
+    policy = {name: getattr(args, name) for name in POLICY_OPTIONS}
+    # Names only: a value given with --env may be a secret.
+    policy["env"] = sorted(item.split("=", 1)[0] for item in args.env)
+    return policy
 
 
 def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
@@ -1573,6 +1603,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 unjudged_flags = ["--full-suite-path"]
 
+        policy = _policy(args)
+        policy_sha256 = hashlib.sha256(
+            json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
             log.append_decision(
@@ -1599,6 +1632,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
                     "execution": execution,
                     "discovery": discovery,
+                    "coverage_floor": args.coverage_floor,
+                    "gate_version": __version__,
+                    "policy": policy,
+                    "policy_sha256": policy_sha256,
                 },
             )
 
@@ -1642,6 +1679,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
             "measurement_seconds": round(mutation_seconds, 6),
             "execution": execution,
+            # Under which rules: every deciding option, and one hash of them.
+            "coverage_floor": args.coverage_floor,
+            "gate_version": __version__,
+            "policy": policy,
+            "policy_sha256": policy_sha256,
         }
         if discovery is not None:
             payload["discovery"] = discovery

@@ -212,6 +212,38 @@ class TestTriageThroughTheCli(unittest.TestCase):
         self.assertEqual(payload["execution"]["triage"]["applied"],
                          {"strength_confidence": 0.95, "coverage_floor": 0.90})
 
+    def test_the_report_records_the_rules_it_was_judged_by(self):
+        """Which floors a decision cleared was not in the report: the coverage
+        floor appeared only in a failing reason, and nothing told two runs under
+        different rules apart (3.0.18). The policy is recorded as it stood when
+        the decision was made -- after triage raised it -- with one hash."""
+        reports = {}
+        for risk, confidence in (("low", 0.99), ("high", 0.9)):
+            fake = _FakeJev(_answer(risk=risk, confidence=confidence))
+            self.addCleanup(fake.close)
+            with tempfile.TemporaryDirectory() as directory:
+                self._tree(Path(directory))
+                reports[risk] = self._run(Path(directory), fake)[1]
+        low, high = reports["low"], reports["high"]
+        self.assertEqual(low["coverage_floor"], 0.80)
+        self.assertEqual(high["coverage_floor"], 0.90)
+        self.assertEqual(high["policy"]["strength_confidence"], 0.95)
+        self.assertEqual(low["policy"]["triage"], "jev")
+        self.assertEqual(len(low["policy_sha256"]), 64)
+        self.assertNotEqual(low["policy_sha256"], high["policy_sha256"])
+        self.assertTrue(low["gate_version"])
+
+    def test_every_option_is_policy_or_evidence(self):
+        """A new option has to be put in one list: a deciding one left out of the
+        policy would be a rule the report does not show."""
+        from adversary_gate import cli
+        dests = {action.dest for action in cli.build_parser()._actions}
+        self.assertEqual(set(cli.POLICY_OPTIONS) | set(cli.EVIDENCE_OPTIONS), dests)
+        self.assertFalse(set(cli.POLICY_OPTIONS) & set(cli.EVIDENCE_OPTIONS))
+        args = cli.build_parser().parse_args(
+            ["--baseline", "b", "--patch", "p", "--env", "TOKEN=s3cret", "--env", "MODE=x"])
+        self.assertEqual(cli._policy(args)["env"], ["MODE", "TOKEN"])  # names, never values
+
     def test_jev_down_is_recorded_and_changes_nothing(self):
         fake = _FakeJev(_answer(), status=503)
         self.addCleanup(fake.close)
@@ -709,6 +741,11 @@ class TestVerifyRepoTool(unittest.TestCase):
         self.assertEqual(result["baseline_chosen_by"], "operator")
         self.assertEqual(result["decision"], "merge", result["reason"])
         self.assertNotIn("base_ref", policy["agent_controls"])
+        # The answer carries the rules it was judged by (3.0.18).
+        self.assertIn("remote-tracking", result["baseline_pin"])
+        self.assertFalse(result["baseline_pin_required"])
+        self.assertEqual(len(result["policy_sha256"]), 64)
+        self.assertEqual(result["policy"]["coverage_floor"], 0.8)
 
     def _git(self, repo, *args):
         subprocess.run(["git", "-C", str(repo), *args], check=True, env={**os.environ, **GIT_ENV})

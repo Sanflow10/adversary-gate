@@ -140,6 +140,9 @@ def _summary(result: Dict[str, Any]) -> Dict[str, Any]:
         "suite_strength": payload.get("suite_strength"),
         "suite_strength_lower": payload.get("suite_strength_lower"),
         "triage": (payload.get("execution") or {}).get("triage"),
+        # Under which rules (3.0.18): the gate's record of every deciding option.
+        "policy": payload.get("policy"),
+        "policy_sha256": payload.get("policy_sha256"),
         # What would turn this into a MERGE, in actions a coding agent can take:
         # fix_code, cover lines, kill a named mutant, add a *new* test -- never
         # edit a baseline test, a harness file or a floor.
@@ -259,6 +262,8 @@ def verify_repo(
             summary["baseline"] = base
             summary["baseline_sha"] = evidence.baseline_sha
             summary["baseline_chosen_by"] = "operator" if pinned else "agent"
+            summary["baseline_pin"] = _pin_kind(pinned)
+            summary["baseline_pin_required"] = _pin_required()
             return summary
     except (EvidenceError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
