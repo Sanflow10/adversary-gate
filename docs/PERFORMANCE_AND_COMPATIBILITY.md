@@ -5,7 +5,7 @@ Back to the [README](../README.md).
 ## ⏱️ Performance
 
 ```bash
-python3 scripts/benchmark.py --runs 5          # add --sandbox bwrap to include it
+python3 scripts/benchmark.py --runs 3          # add --sandbox bwrap to include it
 ```
 
 Measured on this machine (Linux 6.8, x86_64, CPython 3.12.3, no sandbox), on
@@ -15,35 +15,30 @@ discarded:
 | | |
 | --- | --- |
 | median | **20,7 s** |
-| p95 | 21,1 s |
+| max | 21,1 s |
 | range | 20,7 – 21,1 s |
 | decision | `exit 0` / `merge` |
 
-**Read the breakdown before you judge that number.** One decision is **8 pytest
-invocations**, not 3:
-
-```
-1 baseline   1 patch   4 stability rounds (--rounds-used)   ≥1 mutant   1 collateral full-suite
-```
-
-Each one pays Python + pytest startup — **2,29 s here**, because this machine
-auto-loads **9 pytest plugins** (seleniumbase, pytest-html, xdist, metadata,
-rerunfailures, ordering…). The test itself executes in **0,01 s**. So:
-
-```
-8 runs × 2,29 s = 18,3 s  → environment, not gate
-                    ≈2,4 s  → AdversaryGate
-```
+**Read what runs before you judge that number.** One decision starts pytest
+many times: each claim three times on each side by default (five for
+`--bug-kind performance`, a hundred for `concurrency`), each mutant once, and
+the collateral suite on both sides. Each start pays Python + pytest startup —
+**2,29 s here**, because this machine auto-loads **9 pytest plugins**
+(seleniumbase, pytest-html, xdist, metadata, rerunfailures, ordering…). The
+test itself executes in **0,01 s**, so most of the figure above is the
+environment, not the gate. (Until 3.0.18 this page counted "8 runs" with four
+"stability rounds" from `--rounds-used`; that flag is a count the caller
+declares, and the gate never runs it.)
 
 Disabling plugin autoload takes a single start from `2,47 s` to `0,53 s` on
-this box — that step is measured; a ~5–6 s total on a clean machine is
-**arithmetic, not a measurement**, and is labelled as such.
+this box — that step is measured; what it saves over a whole decision on a
+clean machine is **not measured here**.
 
 The runner hands the child a minimal environment by design, so a variable in
 your shell does **not** reach it. Since 2.3.0 you pass it on purpose:
 `--env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` (Action: `env:`) takes the plugin cost
-out of all eight runs, and the artefact records that you did. Until then, on a
-machine with a heavy plugin set, the gate paid the full cost eight times over
+out of every run, and the artefact records that you did. Until then, on a
+machine with a heavy plugin set, the gate paid the full cost on every run
 with no way to opt out — which is why the environment has to be printed next to
 the number.
 
@@ -56,6 +51,11 @@ measurement — it is an advertisement.
 ---
 
 ## 🧭 Compatibility & deprecation
+
+**Supported Pythons.** CPython 3.10 or newer (`requires-python >= 3.10`); CI
+runs the suite on 3.10, 3.11, 3.12, 3.13 and 3.14 on Linux (ubuntu-latest).
+Android (Termux) has been run by hand ([report](TERMUX_VALIDATION_3.0.4.md));
+macOS and Windows are not tested.
 
 **What counts as breaking.** Anything a caller or a parser depends on:
 

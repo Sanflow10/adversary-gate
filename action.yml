@@ -122,8 +122,9 @@ inputs:
       Scope it to the project the patch belongs to: a repository that hosts
       another project as a fixture should have *that* project's suite judged,
       not its own. Left at the default, the collateral run is this repository's
-      entire test suite, which does not fit the gate's 30-second execution
-      budget and therefore reports INCONCLUSIVE instead of a result.
+      entire test suite, under the gate's full-suite limit (900 s of wall
+      clock; the Action does not change it): a suite that runs longer reports
+      INCONCLUSIVE instead of a result.
     required: false
   sandbox:
     description: >-
@@ -131,7 +132,7 @@ inputs:
       network, private PID and /tmp, read-only system, only the repository
       writable. Requires bubblewrap on the runner; the gate refuses to start
       without it rather than running unsandboxed. Not a substitute for a
-      container or VM -- see "Execution boundary" in the README.
+      container or VM -- see docs/EXECUTION_BOUNDARY.md.
     required: false
     default: 'none'
   bug-kind:
@@ -181,7 +182,7 @@ inputs:
     required: false
     default: '0.80'
   suite-strength-floor:
-    description: 'Minimum required suite strength ratio (0.0 to 1.0)'
+    description: 'Minimum suite strength (0.0 to 1.0), applied to the Wilson lower bound of the mutation score at strength-confidence, not to the plain ratio'
     required: false
     default: '0.75'
   evidence-log:

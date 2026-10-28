@@ -1002,7 +1002,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_limit,
         default=30,
         metavar="SECONDS|none",
-        help="wall-clock limit for each test run, mutants and full suite included (default 30)",
+        help="wall-clock limit for each claim and mutant run (default 30); the full suite has --full-suite-timeout",
     )
     parser.add_argument(
         "--cpu-seconds",

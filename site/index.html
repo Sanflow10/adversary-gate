@@ -271,7 +271,7 @@ pre code { background: none; padding: 0; font-size: inherit; }
       <ol class="steps">
         <li>
           <h3>Runs the same tests on both sides</h3>
-          <p>Name the tests, or let coverage pick the ones that executed the changed lines. Each runs on the baseline and on the patch, three times per side, on your project's Python. Only a real test failure counts as evidence. Import errors, missing tests, timeouts and runs killed by their limits are unverified.</p>
+          <p>Name the tests, or let coverage pick the ones that executed the changed lines. Each runs on the baseline and on the patch, three times per side by default (more for concurrency or performance bugs), on your project's Python. Only a real test failure counts as evidence, and so does a test that finishes on the baseline but hangs on the patch. Import errors, missing tests, other timeouts and runs killed by their limits are unverified.</p>
         </li>
         <li>
           <h3>Measures diff coverage from artefacts</h3>
@@ -405,7 +405,7 @@ adversary-gate ... \
   <section id="findings" aria-labelledby="findings-title">
     <div class="wrap">
       <h2 id="findings-title">Every bug in the gate is published</h2>
-      <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-046, and every fix of the 3.0.x line, are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
+      <p class="intro">A wrong MERGE is the failure this tool exists to prevent, so a bug in it is handled as a security issue. Findings AG-001 to AG-049, and every fix of the 3.0.x line, are public. Each one says how it was reproduced, what changed, and whether it is still open.</p>
       <ul class="ledger">
         <li><span class="id">AG-032</span><span class="status">fixed in 2.4.0</span><p>A patch shipped its own <code>.pytest.ini</code> and a plugin that lied only for the exact bytes of its bug, and got MERGE, exit 0. Every test-harness file is now compared tree against tree with the baseline.</p></li>
         <li><span class="id">AG-024</span><span class="status">fixed in 2.3.0</span><p>A test killed by the memory limit exited 1 and was read as the patch breaking it. It is now a harness death, and every limit is a flag.</p></li>
