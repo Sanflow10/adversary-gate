@@ -90,7 +90,8 @@ def _boundary(policy: List[str]) -> Dict[str, Any]:
     policy itself; the coverage pass runs the same tests earlier and must not
     run them outside what the operator asked for.
     """
-    sandbox: Optional[str] = None
+    # The gate's own default, so the coverage pass and the gate agree (3.0.18).
+    sandbox: Optional[str] = "auto"
     for i, arg in enumerate(policy):
         if arg == "--sandbox" and i + 1 < len(policy):
             sandbox = policy[i + 1]

@@ -8,11 +8,21 @@ Read this before trusting the gate with untrusted code. Back to the [README](../
 
 **Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space; in the runs reported in issue #4, no finite address-space limit worked there. Since 3.0.5 neither limit is set on Android unless you pass one: the gate recognises it (`sys.platform == "android"`, or `sys.getandroidapilevel` present) and the artefact records `execution.android`. The other limits still apply.
 
-### `--sandbox bwrap` — opt-in, and what it honestly buys
+### `--sandbox` — on by default where it can run, and what it honestly buys
 
 ```bash
-adversary-gate ... --sandbox bwrap
+adversary-gate ...                  # 'auto' (the default since 3.0.18)
+adversary-gate ... --sandbox bwrap  # refuse to start without it
+adversary-gate ... --sandbox none   # off: tests that need the network
 ```
+
+`auto` probes once whether bubblewrap can run the project's interpreter. If it
+can, every run is wrapped; if it cannot -- no `bwrap` on the runner, a kernel
+that refuses user namespaces, an interpreter outside what the sandbox binds
+(a `uv`-managed Python under `~/.local/share` is one) -- the runs go without it
+and the answer says so: `execution.sandbox` is `none`, `execution.sandbox_requested`
+is `auto`, and `execution.sandbox_note` says why. Until 3.0.18 the default was
+no sandbox at all. Use `--sandbox bwrap` when running without it must not happen.
 
 Wraps every claim run and the collateral suite in [bubblewrap](https://github.com/containers/bubblewrap):
 

@@ -128,13 +128,15 @@ inputs:
     required: false
   sandbox:
     description: >-
-      'none' (default) or 'bwrap'. bwrap wraps every run in bubblewrap: no
-      network, private PID and /tmp, read-only system, only the repository
-      writable. Requires bubblewrap on the runner; the gate refuses to start
-      without it rather than running unsandboxed. Not a substitute for a
+      'auto' (default since 3.0.18), 'bwrap' or 'none'. bwrap wraps every run
+      in bubblewrap: no network, private PID and /tmp, read-only system, only
+      the repository writable. 'auto' uses it wherever bubblewrap can run the
+      project's interpreter and says in the answer when it could not; 'bwrap'
+      refuses to start without it rather than running unsandboxed; 'none'
+      turns it off (tests that need the network). Not a substitute for a
       container or VM -- see docs/EXECUTION_BOUNDARY.md.
     required: false
-    default: 'none'
+    default: 'auto'
   bug-kind:
     description: 'Bug category: deterministic, concurrency, or performance'
     required: false

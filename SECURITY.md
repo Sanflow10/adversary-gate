@@ -43,7 +43,8 @@ Concretely, the report-worthy class includes:
 These are open, deliberate, and are **not** reports unless you can show one of
 them produces a `MERGE` it should not:
 
-- **The test code runs with your privileges.** `--sandbox bwrap` adds no
+- **The test code runs with your privileges.** The sandbox (on by default
+  where bubblewrap can run, `--sandbox bwrap` to require it) adds no
   network, a private PID namespace, a private `/tmp`, a read-only system tree
   and a repository that is the only writable path (the coverage pass of the
   MCP tool and of the Action's `base-sha` mode also writes one fresh directory

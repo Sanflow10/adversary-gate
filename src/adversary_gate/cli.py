@@ -39,7 +39,8 @@ from adversary_gate.core.types import (
     GateVerdict,
     Outcome,
 )
-from adversary_gate.sandbox.runner import SandboxResult, build_target, bwrap_available, run_test
+from adversary_gate.sandbox.runner import (SandboxResult, build_target, bwrap_available,
+                                           resolve_sandbox, run_test)
 from adversary_gate.sandbox.runner import _SUMMARY as _PYTEST_SUMMARY
 from adversary_gate.verifiers.coverage import (
     UnparseableDiff,
@@ -981,12 +982,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sandbox",
-        default="none",
-        choices=["none", "bwrap"],
+        default="auto",
+        choices=["auto", "none", "bwrap"],
         help="wrap every test run in bubblewrap: no network, private PID and "
-        "/tmp, read-only system, read-write only the repository. Opt-in "
-        "defence in depth -- it needs 'bwrap' installed, and it is not a "
-        "substitute for running the whole gate inside a container or VM. "
+        "/tmp, read-only system, read-write only the repository. 'auto' (the "
+        "default since 3.0.18) uses it wherever bwrap can run the interpreter "
+        "and says in the answer when it could not; 'bwrap' refuses to start "
+        "without it; 'none' turns it off. Defence in depth, not a substitute "
+        "for running the whole gate inside a container or VM. "
         "When you use it, --require-network-isolation becomes truthful: the "
         "network really is gone, so ADVERSARY_NETWORK_ISOLATED=1 is no longer "
         "a wish.",
@@ -1132,6 +1135,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # suite alike (AG-024, AG-025). One set of choices, recorded once, so
         # the artefact says what the numbers were measured under.
         python = _resolve_python(args.python)
+        # ``auto`` decided once, here, so every run and the record agree.
+        sandbox_requested = args.sandbox
+        args.sandbox, sandbox_note = resolve_sandbox(args.sandbox, python)
         run_env, env_record = _run_environment(args)
         limits = {
             "timeout_seconds": args.timeout,
@@ -1174,6 +1180,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # the default on Android (#4).
             "android": _on_android(),
             "sandbox": args.sandbox,
+            "sandbox_requested": sandbox_requested,
+            # Why ``auto`` came to no sandbox, when it did: not hidden.
+            "sandbox_note": sandbox_note or None,
             # Whether the two sides of each check overlapped: it changes how
             # likely a wall-clock limit is to fire, so it belongs with them.
             "serial_sides": args.serial_sides,

@@ -166,8 +166,9 @@ the harness dying, not as a failing test: it says nothing about the patch.
 adversary-gate --baseline before --patch after \
       --test-path run_tests.sh --test-command "./run_tests.sh"
 
-# 2. wrap every run in bubblewrap: no network, private PID//tmp,
-#    read-only system, only the repo writable
+# 2. every run is wrapped in bubblewrap by default wherever it can run
+#    (no network, private PID//tmp, read-only system, only the repo
+#    writable); --sandbox bwrap refuses to start without it
 adversary-gate ... --sandbox bwrap
 
 # 3. both together -- the usual shape for a patch from someone else
@@ -177,8 +178,10 @@ adversary-gate ... --test-command "make check" --sandbox bwrap \
 
 `--test-command` needs no `--test-id` (there are no node IDs to name), and it
 feeds the collateral full-suite run too unless you pass `--full-suite-command`.
-`--sandbox bwrap` needs [bubblewrap](https://github.com/containers/bubblewrap)
-installed and refuses to start without it — see
+The default, `--sandbox auto`, uses [bubblewrap](https://github.com/containers/bubblewrap)
+wherever it can run the project's interpreter and says in the answer when it
+could not; `--sandbox bwrap` refuses to start without it; `--sandbox none`
+turns it off for tests that need the network — see
 [Execution boundary](docs/EXECUTION_BOUNDARY.md)
 for exactly what it does and does not contain.
 
