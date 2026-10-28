@@ -248,6 +248,10 @@ runs:
         AG_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        # Not from the checkout: ``-m`` and ``-c`` put the working directory
+        # first on sys.path, so a ``venv/`` or ``pip/`` at the root of the pull
+        # request ran here, before any sandbox, with this venv in reach (3.0.18).
+        mkdir -p "${RUNNER_TEMP}/adversary-gate/cwd" && cd "${RUNNER_TEMP}/adversary-gate/cwd"
         VENV="${RUNNER_TEMP}/adversary-gate/venv"
         "$AG_SETUP_PYTHON" -m venv "$VENV"
         "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$AG_ACTION_PATH" coverage
@@ -267,11 +271,20 @@ runs:
         AG_TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
+        # A relative 'python' input names a path in the checkout; resolved
+        # there, then every probe below runs from a directory of the gate's
+        # own, as in the step above.
+        WORKSPACE="$PWD"
+        mkdir -p "${RUNNER_TEMP}/adversary-gate/cwd" && cd "${RUNNER_TEMP}/adversary-gate/cwd"
         TOOLS="${RUNNER_TEMP}/adversary-gate/tools"
         mkdir -p "$TOOLS/bin"
         PROJECT=""
         if [ -n "$AG_PYTHON_IN" ]; then
-          PROJECT="$(command -v "$AG_PYTHON_IN" || true)"
+          PROJECT="$(cd "$WORKSPACE" && command -v "$AG_PYTHON_IN" || true)"
+          case "$PROJECT" in
+            /*|"") ;;
+            *) PROJECT="$WORKSPACE/$PROJECT" ;;
+          esac
           if [ -z "$PROJECT" ] || [ ! -x "$PROJECT" ]; then
             echo "::error::python: '$AG_PYTHON_IN' is not an executable interpreter"
             exit 3

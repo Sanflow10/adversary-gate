@@ -139,6 +139,27 @@ class TestTheActionRunsItsOwnGate(unittest.TestCase):
                 self.assertIn(" -I", flags)
         self.assertNotIn('PYTHONPATH="${{ github.action_path }}/src"', text)
 
+    def test_no_python_runs_from_the_checkout_before_the_sandbox(self):
+        """The setup steps ran ``python -m venv``, ``-m pip`` and ``-c 'import
+        pytest'`` in the checkout, without ``-I``: a ``venv/`` or ``pip/`` at
+        the root of the PR ran in place of the module, before any sandbox and
+        with the gate's own venv in reach (3.0.18). Every ``-m``/``-c`` call
+        is isolated, or its step has left the checkout first."""
+        import re
+        text = (ROOT / "action.yml").read_text()
+        steps = text.split("    - name: ")[1:]
+        seen = 0
+        for step in steps:
+            left = step.find('cd "${RUNNER_TEMP}/adversary-gate/cwd"')
+            for call in re.finditer(r'"\$(?:[A-Z_]*PYTHON|PROJECT|found|VENV/bin/python)"((?: -[A-Za-z]+)+)', step):
+                flags = call.group(1)
+                if not re.search(r" -[mc]\b", flags):
+                    continue
+                seen += 1
+                with self.subTest(step=step.splitlines()[0], call=call.group(0)):
+                    self.assertTrue(" -I" in flags or 0 <= left < call.start())
+        self.assertGreaterEqual(seen, 6)
+
 
 if __name__ == "__main__":
     unittest.main()
