@@ -547,7 +547,8 @@ def changed_foreign_source_files(
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
             code.add(rel)
-    # A test folder is no hiding place for text a module runs, changed or not:
+    # No folder is a hiding place for text a module runs -- the whole tree is
+    # read, test folders included, whether the module changed or not:
     # ``exec(open("tests/data/rules.txt").read())`` reached MERGE (3.0.15), and
     # so did a patch that changed only that text, its module already there.
     runners = _resident_runners(Path(patch_dir))
