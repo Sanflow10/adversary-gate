@@ -203,12 +203,20 @@ def verify_repo(
                               "is not set: a baseline the caller chooses is an oracle the caller "
                               "chooses, so nothing was run",
                     "claims": [], "baseline_chosen_by": None}
-        base = pinned or base_ref
+        base = base_ref
         # ``@file`` is an option too: pytest 8.2+ reads more arguments from it.
         options = [a for a in (pytest_args or []) if a.startswith(("-", "@"))]
         if options:
             raise ValueError(f"pytest_args takes test paths only, not options: {options}")
-        if not pinned:
+        if pinned:
+            base, refused = _operator_base(Path(repo), pinned)
+            if refused:
+                return {"decision": "inconclusive", "exit_code": None, "mergeable": False,
+                        "reason": refused, "claims": [], "baseline_chosen_by": "operator",
+                        "next_steps": [{"action": "see_reason",
+                                        "why": "the operator pins a commit id or a remote-tracking "
+                                               "ref (origin/main) in ADVERSARY_GATE_BASE_REF"}]}
+        else:
             # The agent's own baseline is its own oracle: with the default
             # "HEAD", a commit that rewrote a test judged the patch by that
             # test. Until 3.0.11 any commit was taken. Now it must already be
@@ -258,14 +266,72 @@ def _agent_base(repo: Path, base: str) -> "tuple[str, str]":
     does not.
     """
     commit = _git(repo, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}").strip()
-    remote = _git(repo, "for-each-ref", "--count=1", "--format=%(refname)",
-                  "--contains", commit, "refs/remotes").strip()
-    if remote:
-        return commit, ""
-    return base, (f"the baseline {base!r} ({commit[:12]}) is on no remote-tracking branch: "
-                  "a baseline the agent committed itself is an oracle the agent wrote, so "
-                  "nothing was run. Pass a base_ref already pushed (e.g. origin/main), or have "
-                  "the operator pin one with ADVERSARY_GATE_BASE_REF")
+    tips = _git(repo, "for-each-ref", "--format=%(objectname)", "--contains", commit,
+                "refs/remotes").split()
+    if not tips:
+        return base, (f"the baseline {base!r} ({commit[:12]}) is on no remote-tracking branch: "
+                      "a baseline the agent committed itself is an oracle the agent wrote, so "
+                      "nothing was run. Pass a base_ref already pushed (e.g. origin/main), or have "
+                      "the operator pin one with ADVERSARY_GATE_BASE_REF")
+    # Pushed is not enough: any older commit is pushed too, one from before a
+    # test existed or was tightened among them, and the patch would be judged
+    # against that (3.0.18). The base is a remote tip, or where HEAD left one.
+    head = _git(repo, "rev-parse", "--verify", "--quiet", "HEAD^{commit}").strip() \
+        if _ref_exists(repo, "HEAD") else ""
+    for tip in tips:
+        if commit == tip or (head and commit == _git(repo, "merge-base", head, tip).strip()):
+            return commit, ""
+    return base, (f"the baseline {base!r} ({commit[:12]}) is older than where this branch left "
+                  "the remote one: a pushed commit from before a test existed or was tightened "
+                  "would judge the patch, so nothing was run. Pass the branch's base "
+                  "(e.g. origin/main), or have the operator pin one with ADVERSARY_GATE_BASE_REF")
+
+
+#: A full object id, SHA-1 or SHA-256: names one commit for good.
+_HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _operator_base(repo: Path, pinned: str) -> "tuple[str, str]":
+    """``(commit, "")`` for the operator's pin, or ``(pinned, why it is refused)``.
+
+    A commit id names one commit for good. A name must name exactly one ref,
+    and a remote-tracking one: a local branch, a tag or ``HEAD`` moves when
+    the agent commits or tags, and then the pin names the agent's oracle.
+    Until 3.0.18 any name was taken, so a pin on a local ``main`` was weaker
+    than no pin, whose base must at least be pushed. A local tag or branch
+    named like the remote one (``origin/main``) won git's lookup the same way.
+    ``ADVERSARY_GATE_ALLOW_LOCAL_PIN=1`` takes any name, for a server whose
+    agent cannot write the repository.
+    """
+    if _HEX_ID.fullmatch(pinned) or _local_pin_allowed():
+        return pinned, ""
+    named = [ref for ref in dict.fromkeys(
+        (pinned, f"refs/{pinned}", f"refs/tags/{pinned}", f"refs/heads/{pinned}",
+         f"refs/remotes/{pinned}", f"refs/remotes/{pinned}/HEAD"))
+        if ref.startswith("refs/") and _ref_exists(repo, ref)]
+    if len(named) == 1 and named[0].startswith("refs/remotes/"):
+        commit = _git(repo, "rev-parse", "--verify", "--quiet", f"{named[0]}^{{commit}}").strip()
+        if _HEX_ID.fullmatch(commit):
+            return commit, ""
+    what = ", ".join(named) or "no ref (HEAD, or a name git does not know)"
+    return pinned, (f"the operator's pin {pinned!r} names {what}: a pinned baseline must be a "
+                    "commit id or exactly one remote-tracking ref, because a local branch, a tag "
+                    "or HEAD moves when the agent commits or tags, and then the agent picks the "
+                    "oracle. Nothing was run. Pin origin/main or a commit id, or set "
+                    "ADVERSARY_GATE_ALLOW_LOCAL_PIN=1 if the agent cannot write this repository")
+
+
+def _ref_exists(repo: Path, ref: str) -> bool:
+    try:
+        _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    except EvidenceError:
+        return False
+    return True
+
+
+def _local_pin_allowed() -> bool:
+    """The operator vouches that the agent cannot move a local ref."""
+    return os.environ.get("ADVERSARY_GATE_ALLOW_LOCAL_PIN", "").strip().lower() in ("1", "true", "yes")
 
 
 def _too_slow(timeout_seconds: int) -> Dict[str, Any]:
@@ -290,9 +356,12 @@ def _pin_kind(pinned: Optional[str]) -> str:
     commit for good; a ref name names whatever the ref points at when a run starts."""
     if not pinned:
         return "none"
-    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", pinned):
+    if _HEX_ID.fullmatch(pinned):
         return "commit id"
-    return "ref name (resolved at the start of each run; a commit id never moves)"
+    if _local_pin_allowed():
+        return "ref name, any kind (ADVERSARY_GATE_ALLOW_LOCAL_PIN): resolved at the start of each run"
+    return ("ref name, remote-tracking only (resolved at the start of each run; a commit id "
+            "never moves)")
 
 
 def _pin_required() -> bool:
