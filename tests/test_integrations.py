@@ -263,6 +263,68 @@ class TestGitEvidence(unittest.TestCase):
                                     capture_output=True, text=True).stdout
             self.assertEqual(sorted(status.split()), sorted(["M", "calc.py", "??", "extra.py"]))
 
+    def test_the_coverage_pass_cannot_rewrite_the_oracle_or_the_judged_tree(self):
+        """Until 3.0.18 the patch's tests ran in the tree the gate then judged,
+        with the whole scratch directory writable -- under bwrap too -- and
+        ``COVERAGE_FILE`` named it. A new test rewrote the baseline's copy of a
+        test and the patch's code before the gate read either."""
+        probe = (
+            "import os, pathlib\n\n\n"
+            "def test_probe():\n"
+            "    work = pathlib.Path(os.environ['COVERAGE_FILE']).parent\n"
+            "    for rel, text in (('baseline/test_calc.py', 'def test_ops():\\n    pass\\n'),\n"
+            "                      ('patch/calc.py', 'REWRITTEN = 1\\n')):\n"
+            "        if (work / rel).is_file():\n"
+            "            (work / rel).write_text(text)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            (repo / "test_probe.py").write_text(probe)
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable)
+            self.assertEqual((evidence.baseline / "test_calc.py").read_text(), TESTS)
+            self.assertEqual((evidence.patch / "calc.py").read_text(), _clean_patch(CALC))
+
+    def test_the_extractor_imports_nothing_the_coverage_pass_wrote(self):
+        """The report is extracted with ``python -c``, outside any sandbox, and
+        ``-c`` puts the working directory first on sys.path. Until 3.0.18 that
+        directory was the one the patch's tests could write: a ``json.py``
+        planted there ran in the gate's own process. (``coverage``, not ``json``:
+        a ``.pth`` file may have imported ``json`` before the path is searched.)"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "planted-module-ran"
+            probe = (
+                "import os, pathlib\n\n\n"
+                "def test_probe():\n"
+                "    work = pathlib.Path(os.environ['COVERAGE_FILE']).parent\n"
+                f"    (work / 'coverage.py').write_text(\"open({str(marker)!r}, 'w').close()\\n\")\n"
+            )
+            repo = _git_repo(root)
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            (repo / "test_probe.py").write_text(probe)
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable)
+            self.assertFalse(marker.exists())
+            self.assertIn("calc.py", json.loads(evidence.coverage.read_text())["files"])
+
+    def test_a_scratch_path_made_while_the_tests_ran_is_refused(self):
+        """Without a sandbox the tests can write anywhere the user can: a
+        baseline directory that exists before the gate writes it is not one
+        the gate wrote."""
+        probe = (
+            "import os, pathlib\n\n\n"
+            "def test_probe():\n"
+            "    work = pathlib.Path(os.environ['COVERAGE_FILE']).parents[2]\n"
+            "    (work / 'baseline').mkdir(exist_ok=True)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "test_probe.py").write_text(probe)
+            with self.assertRaisesRegex(EvidenceError, "already exists"):
+                prepare(repo, "HEAD", root / "work", python=sys.executable)
+
     def test_the_report_holds_only_the_changed_lines(self):
         """Measured on more-itertools: ``coverage json --show-contexts`` took 193 s
         and wrote 312 MB -- every line of every file, each with every test that
