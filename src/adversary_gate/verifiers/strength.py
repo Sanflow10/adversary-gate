@@ -618,7 +618,12 @@ _TEXT_RUNNERS = frozenset({"exec", "eval", "compile", "run_path", "run_module",
                            "execlp", "execlpe", "spawnv", "spawnve", "spawnvp",
                            "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe",
                            "posix_spawn", "posix_spawnp", "startfile",
-                           "create_subprocess_exec", "create_subprocess_shell"})
+                           "create_subprocess_exec", "create_subprocess_shell",
+                           # A module imported by a name built at run time
+                           # (``".".join(["tests", "rules"])``) is run text
+                           # too: the import resolver reads only literal names,
+                           # and the module looked like a test (3.0.18).
+                           "import_module", "__import__"})
 
 
 def _runs_text(source: bytes) -> bool:

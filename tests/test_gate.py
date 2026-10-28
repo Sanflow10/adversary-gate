@@ -2046,6 +2046,34 @@ class TestForeignSourceCannotMergeUnmeasured(unittest.TestCase):
             self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
                              ["docs/usage.txt", "tests/data/abc.py", "tests/data/kit.py"])
 
+    def test_a_test_folder_module_imported_by_a_built_name_is_code(self):
+        """``import_module(".".join(["tests", "rules"]))``: the resolver reads literal
+        names only, so the module stayed a test, reverted to the baseline's copy,
+        and the logic in it was never judged (3.0.18)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            (root / "patch" / "calculator.cpp").write_text(
+                (root / "baseline" / "calculator.cpp").read_text()
+            )
+            for side, factor in (("baseline", 2), ("patch", 3)):
+                (root / side / "tests").mkdir(parents=True, exist_ok=True)
+                (root / side / "tests" / "rules.py").write_text(f"def scale(a):\n    return a * {factor}\n")
+            # A module that imports other modules by name, none of them this one: a test.
+            plugins = ("import importlib\n\n\ndef load(name):\n"
+                       "    return importlib.import_module('plugins.' + name)\n")
+            (root / "patch" / "calc.py").write_text(plugins)
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"), [])
+            (root / "patch" / "calc.py").write_text(
+                "import importlib\n\n_rules = importlib.import_module('.'.join(['tests', 'rules']))\n\n\n"
+                "def add(a, b):\n    return _rules.scale(a) + b\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/rules.py"])
+            (root / "patch" / "calc.py").write_text(
+                "_rules = __import__('.'.join(['tests', 'rules']), fromlist=['scale'])\n")
+            self.assertEqual(changed_foreign_source_files(root / "baseline", root / "patch"),
+                             ["tests/rules.py"])
+
     def test_text_whose_module_did_not_change_is_code(self):
         """The module already ran ``tests/data/rules.*``; a patch changing only that reached MERGE (3.0.15)."""
         runner = ("import os\n\n_ns = {}\nexec(open(os.path.join('tests', 'data', 'rules.py')).read(), _ns)\n"
