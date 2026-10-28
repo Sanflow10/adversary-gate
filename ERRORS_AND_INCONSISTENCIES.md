@@ -521,6 +521,15 @@ CHANGELOG.
 
 ---
 
+## 22a. AG-048 e AG-049 — achados por leitura do código (2026-10-15 e 2026-10-17)
+
+| ID | Severidade | Reprodução | Estado |
+|---|---|---|---|
+| **AG-048** | Alta — fail-open | `python -m pytest` procura módulos primeiro na raiz da árvore, e o pytest acrescenta ao caminho a pasta de cada módulo de teste e `conftest.py` que não é pacote (um `pythonpath` ou um `sys.path.insert` do teste acrescentam mais). Um `inspect.py`, `json.py` ou pacote `pytest/` que o patch punha numa dessas pastas era importado no lugar do módulo real, só do lado do patch (medido com um módulo marcador inofensivo no pytest 9.1.1), e nenhuma checagem do harness o nomeava. **Não reproduzido como ataque.** | **Corrigido na `3.0.9`** — em toda pasta que não é pacote, um módulo ou pacote com nome da biblioteca padrão, ou de um módulo que o pytest carrega, que o patch adiciona ou muda conta como mudança no harness. Pasta sem `__init__.py` não conta (um namespace nunca vence um módulo real), virtualenvs são pulados, e um arquivo que o baseline já tinha é comparado, não recusado. O resolvedor do AG-047 também reconhece pelo nome curto um módulo no caminho do pytest. Testes: `TestAModuleTheRunnerWouldImportIsTheHarness`, `test_a_standard_module_name_on_the_import_path_is_not_a_merge`, `test_a_module_on_pytests_path_is_matched_by_its_bare_name`. |
+| **AG-049** | Média — fail-open de política | A regra que deixa um glob `**/X` casar um caminho na raiz tirava o `**/` com `str.lstrip`, que remove um conjunto de caracteres, não um prefixo. `**/*.env` virava o literal `.env`: um `app.env` na raiz não gerava violação, enquanto `sub/app.env` gerava, e nada avisava que a regra não tinha valido. | **Corrigido na `3.0.10`** — usa `removeprefix`. Os outros globs recursivos só casavam na raiz porque havia um gêmeo de raiz na lista; um teste agora confere cada um (`tests/test_harness_integrity.py`). |
+
+---
+
 ## 23. Achados externos que não procedem
 
 Os achados de fora entram aqui quando a reprodução não confirma o que eles
