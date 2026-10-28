@@ -1138,6 +1138,26 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "cpu_seconds": args.cpu_seconds,
             "mem_bytes": args.memory,
         }
+        if args.require_network_isolation and os.environ.get(
+            "ADVERSARY_NETWORK_ISOLATED"
+        ) != "1":
+            # Fail fast instead of letting the first run_test raise halfway
+            # through the measurements -- and before triage, which sends the
+            # diff over the network (3.0.18: it ran first).
+            raise ValueError(
+                "--require-network-isolation was given but ADVERSARY_NETWORK_ISOLATED "
+                "is not '1'; run inside an outer sandbox that has isolated the network"
+            )
+
+        if args.sandbox == "bwrap" and not bwrap_available():
+            # Checked before anything executes: asking for isolation and
+            # quietly not getting it is the failure mode this flag exists to
+            # prevent.
+            raise ValueError(
+                "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
+                "install bubblewrap (apt install bubblewrap) or drop the flag"
+            )
+
         triage_record: Optional[Dict[str, Any]] = None
         if args.triage == "jev":
             triage_record = _run_triage(args)
@@ -1175,25 +1195,6 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             added = [node for node in found if node not in named]
             claims.extend(_claim(args, path, test_id) for path, test_id in added)
             discovery["claims_added"] = [f"{path}::{test_id}" for path, test_id in added]
-
-        if args.require_network_isolation and os.environ.get(
-            "ADVERSARY_NETWORK_ISOLATED"
-        ) != "1":
-            # Fail fast instead of letting the first run_test raise halfway
-            # through the measurements.
-            raise ValueError(
-                "--require-network-isolation was given but ADVERSARY_NETWORK_ISOLATED "
-                "is not '1'; run inside an outer sandbox that has isolated the network"
-            )
-
-        if args.sandbox == "bwrap" and not bwrap_available():
-            # Checked before anything executes: asking for isolation and
-            # quietly not getting it is the failure mode this flag exists to
-            # prevent.
-            raise ValueError(
-                "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
-                "install bubblewrap (apt install bubblewrap) or drop the flag"
-            )
 
         log = None
         if args.evidence_log:

@@ -244,6 +244,30 @@ class TestTriageThroughTheCli(unittest.TestCase):
             ["--baseline", "b", "--patch", "p", "--env", "TOKEN=s3cret", "--env", "MODE=x"])
         self.assertEqual(cli._policy(args)["env"], ["MODE", "TOKEN"])  # names, never values
 
+    def test_a_refused_network_sends_nothing_to_triage(self):
+        """Triage posted the diff before the network-isolation check refused the
+        run: the refusal came after the one call it exists to prevent (3.0.18)."""
+        fake = _FakeJev(_answer())
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._tree(root)
+            env = {key: value for key, value in os.environ.items()
+                   if key != "ADVERSARY_NETWORK_ISOLATED"}
+            env["TYPESAFE_API_KEY"] = "sk-test"
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--test-path", "test_calc.py", "--test-id", "test_ops",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--triage", "jev", "--triage-endpoint", fake.url,
+                    "--require-network-isolation",
+                ])
+        self.assertEqual(code, 3)
+        self.assertEqual(fake.requests, [])
+
     def test_jev_down_is_recorded_and_changes_nothing(self):
         fake = _FakeJev(_answer(), status=503)
         self.addCleanup(fake.close)
