@@ -67,7 +67,7 @@ More tests cannot add mutants; only a bigger change can. What remains is the
 operator's choice, never the patch's — which is why `next_steps`, which an
 agent reads, names no flag:
 
-- accept the answer: the fix is proven (`fix_proven: true`), only the strength is unmeasured, and a human reviews it;
+- accept the answer: only the strength is unmeasured, and a human reviews it. From 3.0.18 the answer names this case in `human_review` (`kind: small_change`, with `fix_proven` and the kills needed) when every claim held, coverage met the floor and every mutant was killed, and the Action's `small-change: review` passes the step for that one case with a warning and `review-required: true`, so a team routes small fixes to a person instead of turning the gate off; every other INCONCLUSIVE still fails;
 - `--census-min-mutants N`, below: judge a complete census of the change by its exact ratio;
 - `--mutate-constants`: also break integer literals, which adds sites on some lines.
 

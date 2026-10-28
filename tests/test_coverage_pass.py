@@ -161,5 +161,24 @@ class TestTheActionRunsItsOwnGate(unittest.TestCase):
         self.assertGreaterEqual(seen, 6)
 
 
+class TestASmallChangeCanBeRoutedToAPerson(unittest.TestCase):
+    """small-change: review passes the step for one INCONCLUSIVE only -- a change
+    too small to measure, where every other measurement held -- and still
+    reports it; the default fails as before (3.0.18)."""
+
+    def test_the_review_branch_is_narrow(self):
+        import yaml
+        action = yaml.safe_load((ROOT / "action.yml").read_text())
+        self.assertEqual(action["inputs"]["small-change"]["default"], "fail")
+        self.assertIn("review-required", action["outputs"])
+        gate = next(s for s in action["runs"]["steps"] if s.get("id") == "gate")["run"]
+        branch = gate[gate.index('REVIEW="$('):gate.index("exit $EXIT_CODE")]
+        self.assertIn("kind') == 'small_change'", branch)
+        self.assertIn('[ "$EXIT_CODE" = "2" ] && [ "$REVIEW" = "true" ] && '
+                      '[ "$AG_SMALL_CHANGE" = "review" ]', branch)
+        self.assertIn("::warning", branch)
+        self.assertIn("is not 'fail' or 'review'", branch)
+
+
 if __name__ == "__main__":
     unittest.main()

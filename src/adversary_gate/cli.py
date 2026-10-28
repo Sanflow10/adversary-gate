@@ -270,6 +270,34 @@ def _too_few_mutants(mutation, args) -> Optional[int]:
     return needed if needed is not None and needed > counted else None
 
 
+def _small_change_review(decision, verdicts, full_codes, args, *, coverage_ratio,
+                         mutation, fix_proven, unjudged) -> Optional[Dict[str, Any]]:
+    """What a person signs, when the only gap is a change too small to measure."""
+    # A correct one-line fix kills its one mutant, yet 1 of 1
+    # cannot clear the strength floor, so the answer is INCONCLUSIVE -- and a
+    # team that sees that on every small fix turns the gate off (a reviewer of
+    # 3.0.17). It stays INCONCLUSIVE; this names the one case where every
+    # other measurement held, so a workflow can route it to a person instead
+    # (the Action's small-change: review). Never a MERGE (3.0.18).
+    needed = _too_few_mutants(mutation, args)
+    if (decision is not Decision.INCONCLUSIVE or unjudged or needed is None
+            or not verdicts
+            or any(v.outcome is not Outcome.VERIFIED for v in verdicts)
+            or coverage_ratio is None or coverage_ratio < args.coverage_floor
+            or (full_codes is not None and tuple(full_codes) != (0, 0))):
+        return None
+    killed = (mutation or {}).get("mutants_killed")
+    return {
+        "kind": "small_change",
+        "why": (f"every claim held, coverage met and every mutant was killed, but {killed} of "
+                f"{killed} is too few to measure the tests at this floor ({needed} needed): "
+                "a person reviews the change instead"),
+        "fix_proven": bool(fix_proven),
+        "mutants_killed": killed,
+        "kills_needed": needed,
+    }
+
+
 def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=None,
             strength_judged=None, strength_unverified=False, mutation=None) -> str:
     """One sentence that agrees with the decision (AG-034).
@@ -1674,6 +1702,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "claims_total": summary["claims_total"],
             "claims_fixed": summary["claims_fixed"],
             "fix_proven": summary["fix_proven"],
+            "human_review": _small_change_review(
+                decision, verdicts, full_codes, args, coverage_ratio=coverage_ratio,
+                mutation=mutation_detail, fix_proven=summary["fix_proven"],
+                unjudged=bool(unjudged_reason)),
             "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,

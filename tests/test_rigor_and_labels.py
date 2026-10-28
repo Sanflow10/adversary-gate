@@ -636,6 +636,10 @@ class TestNextSteps(unittest.TestCase):
             self.assertIn("operator", steps[0]["why"])
             self.assertIn("too small to measure", payload["reason"])
             self._assert_safe(steps, root)
+            # Named for a person to sign (3.0.18), never a merge.
+            self.assertEqual(payload["decision"], "inconclusive")
+            self.assertEqual(payload["human_review"]["kind"], "small_change")
+            self.assertEqual(payload["human_review"]["kills_needed"], 5)
 
             with self.subTest("a survivor is weak tests, not a small change"):
                 body = (root / "patch" / "calc.py").read_text().replace(
@@ -648,6 +652,16 @@ class TestNextSteps(unittest.TestCase):
                 self.assertNotIn("too small", payload["reason"])
                 self.assertNotIn("too small", json.dumps(payload["next_steps"]))
                 self.assertNotIn("is small", json.dumps(payload["next_steps"]))
+                self.assertIsNone(payload["human_review"])
+
+            with self.subTest("a coverage shortfall is not a small change"):
+                _tree(root, 1)
+                cov = json.loads((root / "cov.json").read_text())
+                cov["files"]["calc.py"]["executed_lines"] = []
+                (root / "cov.json").write_text(json.dumps(cov))
+                _, payload = _cli(root)
+                self.assertEqual(payload["decision"], "inconclusive")
+                self.assertIsNone(payload["human_review"])
 
     def test_the_count_follows_the_operators_floor(self):
         """5/5 clears 0.75 and is too small for 0.99: the count is the floor's, not fixed."""

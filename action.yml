@@ -137,6 +137,16 @@ inputs:
       container or VM -- see docs/EXECUTION_BOUNDARY.md.
     required: false
     default: 'auto'
+  small-change:
+    description: >-
+      'fail' (default) or 'review'. A change too small to measure -- every
+      claim held, coverage met, all its mutants killed, but too few of them
+      for the strength floor -- is INCONCLUSIVE (exit 2).
+      With 'review', that one case passes the step with a warning that a
+      person must review the change, and review-required is 'true'; every
+      other INCONCLUSIVE still fails. It never turns anything into a merge.
+    required: false
+    default: 'fail'
   bug-kind:
     description: 'Bug category: deterministic, concurrency, or performance'
     required: false
@@ -220,6 +230,11 @@ outputs:
   claims-total:
     description: 'How many claims were verified in this run'
     value: ${{ steps.gate.outputs.claims-total }}
+  review-required:
+    description: >-
+      'true' when the answer is a change too small to measure, which a
+      person has to review (see small-change); 'false' otherwise.
+    value: ${{ steps.gate.outputs.review-required }}
   python:
     description: 'The interpreter the tests ran on'
     value: ${{ steps.python.outputs.python }}
@@ -475,6 +490,7 @@ runs:
         AG_FULL_SUITE_COMMAND: ${{ inputs.full-suite-command }}
         AG_FULL_SUITE_PATH: ${{ inputs.full-suite-path }}
         AG_SANDBOX: ${{ inputs.sandbox }}
+        AG_SMALL_CHANGE: ${{ inputs.small-change }}
         AG_BUG_KIND: ${{ inputs.bug-kind }}
         AG_COVERAGE_FLOOR: ${{ inputs.coverage-floor }}
         AG_COVERAGE_SOURCE: ${{ inputs.coverage-source }}
@@ -627,5 +643,18 @@ runs:
         echo "outcome=${OUTCOME}" >> "$GITHUB_OUTPUT"
         echo "claims-total=${CLAIMS_TOTAL}" >> "$GITHUB_OUTPUT"
         echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+        # The one INCONCLUSIVE a person can sign: a proven fix too small to
+        # measure. Routed to review only when asked; never a merge (3.0.18).
+        REVIEW="$(echo "$JSON_OUT" | "$AG_GATE_PYTHON" -I -c "import sys, json; r = json.load(sys.stdin).get('human_review') or {}; print('true' if r.get('kind') == 'small_change' else 'false')" 2>/dev/null || echo false)"
+        echo "review-required=${REVIEW}" >> "$GITHUB_OUTPUT"
+        case "$AG_SMALL_CHANGE" in
+          fail|review) ;;
+          *) echo "::error::small-change: '$AG_SMALL_CHANGE' is not 'fail' or 'review'"; exit 3 ;;
+        esac
+        if [ "$EXIT_CODE" = "2" ] && [ "$REVIEW" = "true" ] && [ "$AG_SMALL_CHANGE" = "review" ]; then
+          echo "::warning title=AdversaryGate::human review required: every measurement held, but the change is too small to measure the tests; a person must review it before merging"
+          exit 0
+        fi
 
         exit $EXIT_CODE
