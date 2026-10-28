@@ -66,6 +66,14 @@ EXIT_MEANING = {0: "merge", 1: "block", 2: "inconclusive", 3: "usage error", 4: 
 def policy_args() -> List[str]:
     """The operator's flags, from ``ADVERSARY_GATE_POLICY``."""
     args = shlex.split(os.environ.get("ADVERSARY_GATE_POLICY", ""))
+    # Every flag spelled out. The gate's parser takes ``--sand`` for
+    # ``--sandbox``, the checks here read exact names: an abbreviation ran the
+    # coverage pass outside the sandbox the gate itself then used (3.0.18).
+    from adversary_gate.cli import build_parser
+    known = set(build_parser()._option_string_actions)
+    short = [a for a in args if a.startswith("--") and a.split("=", 1)[0] not in known]
+    if short:
+        raise ValueError(f"ADVERSARY_GATE_POLICY: spell out these flags in full: {short}")
     clash = [a for a in args if a.split("=", 1)[0] in _EVIDENCE_FLAGS]
     if clash:
         raise ValueError(f"ADVERSARY_GATE_POLICY may not set evidence flags: {clash}")

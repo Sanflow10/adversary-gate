@@ -609,6 +609,21 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
             mcp_server.verify_repo(str(ROOT))
         self.assertEqual(fake.call_args.kwargs.get("sandbox"), "bwrap")
 
+    def test_an_abbreviated_policy_flag_is_refused(self):
+        """The gate's parser took ``--sand bwrap`` for ``--sandbox bwrap``; the
+        coverage pass read the exact name only, so it ran outside the sandbox
+        the gate then used (3.0.18). Evidence flags abbreviated slipped past the
+        refusal the same way."""
+        for policy in ("--sand bwrap", "--sandbox=bwrap --evidence-l /tmp/x"):
+            with self.subTest(policy=policy), \
+                    mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY": policy}):
+                with self.assertRaisesRegex(ValueError, "spell out"):
+                    mcp_server.policy_args()
+        with mock.patch.dict(os.environ, {"ADVERSARY_GATE_POLICY":
+                                          "--sandbox bwrap --coverage-floor=0.9"}):
+            self.assertEqual(mcp_server.policy_args(),
+                             ["--sandbox", "bwrap", "--coverage-floor=0.9"])
+
     def test_timeout_seconds_reaches_the_coverage_pass(self):
         """It stayed at prepare's 600 s whatever the caller asked (3.0.11)."""
         with mock.patch.object(mcp_server, "_agent_base", return_value=("HEAD", "")), \
