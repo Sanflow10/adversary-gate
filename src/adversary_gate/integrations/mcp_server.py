@@ -22,6 +22,9 @@ environment the operator sets in the agent's MCP configuration:
   ``"baseline_chosen_by": "agent"``. Pinning names the baseline; it is
   not a defence against an agent that can write the repository's ``.git``
   (refs, objects, configuration) -- run such an agent where it cannot;
+  A pin is a commit id or a remote-tracking ref: a local branch, a tag or
+  ``HEAD`` moves when the agent commits or tags, so it is refused unless
+  ``ADVERSARY_GATE_ALLOW_LOCAL_PIN=1`` (3.0.18);
 * ``ADVERSARY_GATE_REQUIRE_PINNED_BASE`` ``1`` makes the pin mandatory: with
   no ``ADVERSARY_GATE_BASE_REF``, ``verify_repo`` answers ``inconclusive``
   without running anything, instead of letting the agent pick its own oracle.

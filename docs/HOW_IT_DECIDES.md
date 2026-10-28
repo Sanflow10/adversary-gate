@@ -118,6 +118,8 @@ It is not:
 
 ## 📈 Provenance & metrics
 
+**Under which rules.** Every report and every decision record in the evidence log carries `gate_version`, `coverage_floor`, a `policy` block with every option that decides an answer (floors, confidence, mutation limits, sandbox, time and memory limits, triage, the test commands, the interpreter; `--env` by name only) as it stood when the decision was made — after triage raised a floor, if it did — and `policy_sha256`, one hash of that block. Two reports with different hashes were judged under different rules; the block says which. The MCP answer carries the same two fields and the kind of baseline pin (3.0.18).
+
 Every execution logs `ctx_model` and `ctx_commit` into the audit trail. Running patches through the same harness allows `compare_models()` to report verification rates side by side — which model's patches the gate could verify, and how often the evidence condemned them.
 
 `self_deception_index` (`unverified_merges / merge_count`) is still computed, and is **always `0` on logs this gate wrote** (AG-029): `decide()` never returns `MERGE` with an unverified claim, so the numerator cannot grow. It only means something when the decision records come from a pipeline that *can* merge unverified work — another gate, or a hand-built log of what actually shipped. The metrics that would say whether `MERGE` means anything — overrides (PR merged while the gate said `BLOCK`/`INCONCLUSIVE`), reverts within N days of a `MERGE`, `INCONCLUSIVE` resolved to `MERGE` — need data from outside the gate and are not implemented. See [`docs/AUDITORIA_PRODUTO_v2.1.1.md` §4.4](AUDITORIA_PRODUTO_v2.1.1.md).
