@@ -36,10 +36,6 @@ A seção fica sem número de propósito: uma versão no `pyproject.toml` sem ta
 correspondente é uma promessa de artefato que não existe, e o bump só acontece
 quando esta seção vira uma com versão e data.
 
----
-
-## [3.0.18] — unreleased
-
 Holes found by a read-only review of 3.0.17 against the question "what would
 a sceptical auditor ask for", each confirmed on a small repository and each
 with a test that fails on 3.0.17; the report now says which rules a decision
