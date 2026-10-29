@@ -309,7 +309,7 @@ _HEX_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 def _operator_base(repo: Path, pinned: str) -> "tuple[str, str]":
-    """``(commit, "")`` for the operator's pin, or ``(pinned, why it is refused)``."""
+    # ``(commit, "")`` for the operator's pin, or ``(pinned, why it is refused)``.
     # A commit id names one commit for good. A name must name exactly one ref,
     # and a remote-tracking one: a local branch, a tag or ``HEAD`` moves when
     # the agent commits or tags, and then the pin names the agent's oracle.

@@ -644,17 +644,9 @@ runs:
         echo "claims-total=${CLAIMS_TOTAL}" >> "$GITHUB_OUTPUT"
         echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
 
-        # The one INCONCLUSIVE a person can sign: a proven fix too small to
-        # measure. Routed to review only when asked; never a merge (3.0.18).
-        REVIEW="$(echo "$JSON_OUT" | "$AG_GATE_PYTHON" -I -c "import sys, json; r = json.load(sys.stdin).get('human_review') or {}; print('true' if r.get('kind') == 'small_change' else 'false')" 2>/dev/null || echo false)"
-        echo "review-required=${REVIEW}" >> "$GITHUB_OUTPUT"
-        case "$AG_SMALL_CHANGE" in
-          fail|review) ;;
-          *) echo "::error::small-change: '$AG_SMALL_CHANGE' is not 'fail' or 'review'"; exit 3 ;;
-        esac
-        if [ "$EXIT_CODE" = "2" ] && [ "$REVIEW" = "true" ] && [ "$AG_SMALL_CHANGE" = "review" ]; then
-          echo "::warning title=AdversaryGate::human review required: every measurement held, but the change is too small to measure the tests; a person must review it before merging"
-          exit 0
-        fi
-
-        exit $EXIT_CODE
+        # The one INCONCLUSIVE a person can sign, routed to review only when
+        # asked; never a merge (3.0.18). In Python, so the tests reach it.
+        FINAL=0
+        "$AG_GATE_PYTHON" -I -m adversary_gate.integrations.action_review --exit-code "$EXIT_CODE" \
+          --mode "$AG_SMALL_CHANGE" --output "$GITHUB_OUTPUT" <<< "$JSON_OUT" || FINAL=$?
+        exit $FINAL

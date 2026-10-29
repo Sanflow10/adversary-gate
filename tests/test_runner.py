@@ -378,6 +378,19 @@ class TestTheSandboxIsOnByDefault(unittest.TestCase):
         self.assertEqual(again, first)
         self.assertEqual(probe.call_count, 1)
 
+    def test_a_bwrap_that_does_not_start_falls_back(self):
+        with mock.patch.object(runner, "bwrap_available", return_value=True), \
+                mock.patch.object(runner, "bwrap_prefix", return_value=["bwrap"]), \
+                mock.patch.object(runner.subprocess, "run", side_effect=OSError("exec format error")):
+            sandbox, why = runner.resolve_sandbox("auto", sys.executable)
+        self.assertEqual(sandbox, "none")
+        self.assertIn("did not start", why)
+
+    def test_an_unknown_sandbox_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                self.assertRaisesRegex(ValueError, "expected 'none', 'bwrap' or 'auto'"):
+            runner.run_test(Path(directory), "test_x.py", sandbox="docker")
+
     def test_an_explicit_choice_is_kept(self):
         self.assertEqual(runner.resolve_sandbox("none"), ("none", ""))
         self.assertEqual(runner.resolve_sandbox("bwrap"), ("bwrap", ""))

@@ -272,7 +272,7 @@ def _too_few_mutants(mutation, args) -> Optional[int]:
 
 def _small_change_review(decision, verdicts, full_codes, args, *, coverage_ratio,
                          mutation, fix_proven, unjudged) -> Optional[Dict[str, Any]]:
-    """What a person signs, when the only gap is a change too small to measure."""
+    # What a person signs, when the only gap is a change too small to measure.
     # A correct one-line fix kills its one mutant, yet 1 of 1
     # cannot clear the strength floor, so the answer is INCONCLUSIVE -- and a
     # team that sees that on every small fix turns the gate off (a reviewer of

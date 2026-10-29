@@ -109,7 +109,7 @@ _AUTO_LOCK = threading.Lock()
 
 
 def resolve_sandbox(sandbox: Optional[str], python: Optional[str] = None) -> Tuple[str, str]:
-    """``(the sandbox a run uses, why it is not bwrap)`` for the one requested."""
+    # ``(the sandbox a run uses, why it is not bwrap)`` for the one requested.
     # ``auto`` is bwrap wherever bwrap can run the project's interpreter, and
     # no sandbox elsewhere -- said in the answer, never silently (3.0.18; the
     # default was no sandbox). A missing binary, a kernel without user

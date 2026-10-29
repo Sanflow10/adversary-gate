@@ -16,11 +16,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import json
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
 
 def _bwrap_runs_here() -> bool:
     """Raw bwrap with a network namespace, none of the gate's arguments: GitHub's
@@ -166,17 +168,58 @@ class TestASmallChangeCanBeRoutedToAPerson(unittest.TestCase):
     too small to measure, where every other measurement held -- and still
     reports it; the default fails as before (3.0.18)."""
 
-    def test_the_review_branch_is_narrow(self):
+    SMALL = json.dumps({"decision": "inconclusive", "human_review": {"kind": "small_change"}})
+    OTHER = json.dumps({"decision": "inconclusive", "human_review": None})
+
+    def _run(self, answer, exit_code, mode):
+        import contextlib
+        import io
+        from unittest import mock
+
+        from adversary_gate.integrations import action_review
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            printed = io.StringIO()
+            with mock.patch("sys.stdin", io.StringIO(answer)), contextlib.redirect_stdout(printed):
+                code = action_review.main(["--exit-code", str(exit_code), "--mode", mode,
+                                           "--output", str(output)])
+            written = output.read_text() if output.exists() else ""
+        return code, written, printed.getvalue()
+
+    def test_review_passes_only_a_small_change(self):
+        self.assertEqual(self._run(self.SMALL, 2, "review")[0], 0)
+        code, written, printed = self._run(self.SMALL, 2, "review")
+        self.assertEqual(written, "review-required=true\n")
+        self.assertIn("::warning", printed)
+        self.assertEqual(self._run(self.OTHER, 2, "review")[0], 2)  # any other INCONCLUSIVE fails
+        self.assertEqual(self._run(self.SMALL, 1, "review")[0], 1)  # never over a BLOCK
+        self.assertEqual(self._run(self.SMALL, 2, "fail")[0], 2)    # the default fails
+        self.assertEqual(self._run("not json", 2, "review")[:2], (2, "review-required=false\n"))
+
+    def test_an_unknown_mode_is_a_usage_error(self):
+        code, written, printed = self._run(self.SMALL, 2, "maybe")
+        self.assertEqual(code, 3)
+        self.assertIn("::error", printed)
+
+    def test_it_runs_as_a_module(self):
+        import io
+        import runpy
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            argv = ["action_review", "--exit-code", "0", "--mode", "fail",
+                    "--output", str(Path(directory) / "out")]
+            with mock.patch("sys.argv", argv), mock.patch("sys.stdin", io.StringIO("{}")), \
+                    self.assertRaises(SystemExit) as done:
+                runpy.run_module("adversary_gate.integrations.action_review", run_name="__main__")
+        self.assertEqual(done.exception.code, 0)
+
+    def test_the_action_uses_it(self):
         text = (ROOT / "action.yml").read_text()  # as text: PyYAML is not a dependency
         small = text[text.index("  small-change:\n"):text.index("  bug-kind:\n")]
         self.assertIn("default: 'fail'", small)
         self.assertIn("  review-required:\n", text[text.index("outputs:"):text.index("runs:")])
-        branch = text[text.index('REVIEW="$('):text.rindex("exit $EXIT_CODE")]
-        self.assertIn("kind') == 'small_change'", branch)
-        self.assertIn('[ "$EXIT_CODE" = "2" ] && [ "$REVIEW" = "true" ] && '
-                      '[ "$AG_SMALL_CHANGE" = "review" ]', branch)
-        self.assertIn("::warning", branch)
-        self.assertIn("is not 'fail' or 'review'", branch)
+        self.assertIn('-I -m adversary_gate.integrations.action_review --exit-code "$EXIT_CODE"', text)
+        self.assertTrue(text.rstrip().endswith("exit $FINAL") or "exit $FINAL" in text)
 
 
 if __name__ == "__main__":
