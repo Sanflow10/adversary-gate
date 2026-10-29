@@ -37,8 +37,9 @@ correspondente é uma promessa de artefato que não existe, e o bump só acontec
 quando esta seção vira uma com versão e data.
 
 Holes found by a read-only review of 3.0.17 against the question "what would
-a sceptical auditor ask for", each confirmed on a small repository and each
-with a test that fails on 3.0.17; the report now says which rules a decision
+a sceptical auditor ask for", by a reader of the code and by the release's own
+test runs, each confirmed on a small repository and each with a test that
+fails on 3.0.17; the report now says which rules a decision
 was made under (a suggestion made in public); and the docs corrected where
 they said more, or other, than the code does.
 
@@ -76,6 +77,25 @@ they said more, or other, than the code does.
   `--triage jev --require-network-isolation`, the diff was sent to the triage
   endpoint before the run was refused.
 
+- **The whole suite is judged by the baseline's tests alone.** One run of the
+  whole suite collects every test module in one process, and the baseline's
+  copy of the tests was used only when the patch rewrote one, with the test
+  files the patch added kept beside it. That run now uses the baseline's tests
+  without the added files whenever the patch changed or added any;
+  `full_suite_oracle.added_test_files` lists them. The same holds for the run
+  of rewritten tests when the full suite is off. **Cost:** a patch that adds a
+  test runs the suite twice, side by side. Reported privately.
+- **The claims run in copies of the trees.** Every later measurement read the
+  trees the claims had run in. A file the trees shipped that a claim's run
+  changed or removed is now recorded (`execution.claims_rewrote`) and keeps
+  the answer from `MERGE`; the trees handed to the gate are not written.
+- **The neutral copy cannot be told from the mutants.** Its comment and
+  assignment are drawn at random for each run, it and every mutant end in a
+  comment line of a random length, and every copy keeps the times of the file
+  it replaces.
+- **MCP: a file rewritten in the same second as `git add` is in the diff.** The
+  diff ran on a copy of the index that git trusted more than its own; a file
+  rewritten at the same size within that second was left out.
 - **A module imported by a name built at run time is judged as code.** The
   import resolver reads literal names only, so a test-folder module reached
   through `importlib.import_module` or `__import__` with a built name (`".".join(...)`)
@@ -113,6 +133,10 @@ they said more, or other, than the code does.
 
 ### Fixes
 
+- **A signal death reads the same inside bubblewrap.** bwrap reports a child
+  killed by signal N as exit 128 + N where an unsandboxed run reads -N; with
+  the sandbox on by default, a mutant the CPU limit killed counted as
+  stillborn instead of a hang, and a measured suite lost kills.
 - **A `Gate` used again as a library re-checks a file's old tests.** Whether a
   file's baseline tests hold on the patch was cached on the `Gate`, keyed by
   the trees' paths; it is kept for the run now, like the scans of 3.0.17.
@@ -130,7 +154,9 @@ they said more, or other, than the code does.
   but keeps the user id; stale links after the README was slimmed; the Action's
   full-suite limit and strength floor; the test-command exit table; the
   performance page's run count; supported Pythons; the findings range on the
-  site.
+  site. Two limits are written down: without the sandbox the gate's runs share
+  the machine, and a claim that normalises the code's structure can still
+  tell a mutant from the patch (SECURITY.md, Known limitations).
 
 ---
 

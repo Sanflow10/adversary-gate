@@ -61,6 +61,18 @@ them produces a `MERGE` it should not:
   tamper with pytest in-process, or behave differently when it detects a test
   run. That is out of reach of any test-based gate; see
   [What a test cannot see](docs/EXECUTION_BOUNDARY.md#what-a-test-cannot-see-by-construction).
+- **Without the sandbox, the gate's runs share your machine.** The claims and
+  the measurement run in copies of the trees (3.0.18), but a test can still
+  write outside them -- a file in `/tmp`, the bytecode cache the runs share --
+  and a later run can read it. With bubblewrap each run has its own `/tmp` and
+  the cache is read-only. When `--sandbox auto` falls back to none, the answer
+  says so (`sandbox_note`); for untrusted patches require `--sandbox bwrap`.
+- **A claim written to recognise the measurement can still pass it.** The
+  neutral copy that catches a claim reading the code has markers drawn at
+  random, a random size and the file's own times (3.0.18), but a claim that
+  normalises the code's structure before comparing it can tell a mutant from
+  the patch without running either. Mutation testing assumes the claims test
+  behaviour; the copy narrows how far a claim that does not can go.
 - **Only pytest and `--test-command` are executed.** There is no mutation
   adapter yet, so non-Python stacks cannot reach `MERGE` at all — that is a
   missing feature, not a bypass.
