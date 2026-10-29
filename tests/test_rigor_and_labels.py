@@ -355,7 +355,10 @@ class TestMutantsInParallel(unittest.TestCase):
                     import time as _t
                     _t.sleep(reference_seconds)
                 return SandboxResult(0, "", "", False)
-            source = (Path(directory) / "calc.py").read_text()
+            # A mutant is known by its code, not by the comment line of a
+            # random length every copy ends in (3.0.18).
+            source = "\n".join(line for line in (Path(directory) / "calc.py").read_text().splitlines()
+                               if not line.startswith("#"))
             if seen.get(source):
                 return SandboxResult(0, "", "", False)
             seen[source] = 1
