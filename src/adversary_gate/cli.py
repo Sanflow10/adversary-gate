@@ -751,6 +751,32 @@ def _policy(args: argparse.Namespace) -> Dict[str, Any]:
     return policy
 
 
+def _changed_in_copy(original: Path, copy: Path) -> List[str]:
+    """Files of ``original`` that are changed or gone in ``copy``, the tree the claims ran in.
+
+    Files a run added are not counted: tests write reports and caches. A file
+    the tree shipped, changed, is the tests rewriting what they are judged on.
+    """
+    changed: List[str] = []
+    for current, dirs, files in os.walk(original):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".pytest_cache")]
+        for name in files:
+            if name.endswith(".pyc"):
+                continue
+            source = Path(current) / name
+            rel = source.relative_to(original).as_posix()
+            target = copy / rel
+            if source.is_symlink():
+                same = target.is_symlink() and os.readlink(source) == os.readlink(target)
+            else:
+                same = (not target.is_symlink() and target.is_file()
+                        and source.stat().st_size == target.stat().st_size
+                        and source.read_bytes() == target.read_bytes())
+            if not same:
+                changed.append(rel)
+    return changed
+
+
 def _full_oracle(rewritten: Sequence[str], added: Sequence[str],
                  exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
     """What the collateral run judged the patch's code with, when it was not the patch's tests."""
@@ -1356,11 +1382,22 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
         # Which files of each tree are tests, read once for all the claims (F-004).
         scans: Dict[str, Any] = {}
+        # The claims run in copies of the trees (3.0.18). They ran in the trees
+        # every later measurement reads -- mutation, its oracle, the serial
+        # suite -- and a claim that rewrote the patch's source had the rest of
+        # the gate measure other code: the source put back to the baseline's
+        # bytes read as "no source changed" and reached MERGE.
+        claims_scratch = tempfile.TemporaryDirectory(prefix="adversary-claims-")
+        background.append(claims_scratch)
+        claim_trees = {side: Path(claims_scratch.name) / side for side in ("baseline", "patch")}
+        for side, source in (("baseline", args.baseline), ("patch", args.patch)):
+            shutil.copytree(Path(source), claim_trees[side], symlinks=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
         verdicts: List[GateVerdict] = [
             gate.verify_claim(
                 claim,
-                Path(args.baseline),
-                Path(args.patch),
+                claim_trees["baseline"],
+                claim_trees["patch"],
                 # ``--changed-path`` used to be the *only* input to the path
                 # policy, and the Action never passes it -- so the protection for
                 # conftest.py, pytest config and the like existed and was never
@@ -1384,6 +1421,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             for claim in claims
         ]
         all_verified = bool(verdicts) and all(v.outcome is Outcome.VERIFIED for v in verdicts)
+        claims_rewrote = sorted(
+            f"{side}/{rel}" for side, source in (("baseline", args.baseline), ("patch", args.patch))
+            for rel in _changed_in_copy(Path(source), claim_trees[side])
+        )
+        execution["claims_rewrote"] = claims_rewrote
 
         # ------------------------------------------------------------------
         # Patch-level measurements. Both used to be parameters that defaulted
@@ -1650,6 +1692,17 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "patch kept what they checked; run the full suite"
                 )
                 unjudged_flags = ["--full-suite-path"]
+
+        if decision is Decision.MERGE and claims_rewrote:
+            decision = Decision.INCONCLUSIVE
+            unjudged_action = "see_reason"
+            unjudged_flags = []
+            unjudged_reason = (
+                f"the claims' runs changed or removed {', '.join(claims_rewrote[:5])}"
+                + (f" (+{len(claims_rewrote) - 5} more)" if len(claims_rewrote) > 5 else "")
+                + ": a test that rewrites the tree it is judged in makes its own passing "
+                "say nothing about the code as shipped; review those tests"
+            )
 
         policy = _policy(args)
         policy_sha256 = hashlib.sha256(
