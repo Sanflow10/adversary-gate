@@ -146,5 +146,26 @@ class TestTheCoveragePassIsIsolated(unittest.TestCase):
                     prepare(repo, "HEAD", root / "late", python=sys.executable, coverage=False)
 
 
+    def test_a_file_rewritten_in_the_same_tick_is_in_the_diff(self):
+        """git checks a file's bytes only when the file is not older than its
+        index; the gate's copy of the index was newer, so a file rewritten at
+        the same size in the clock second of ``git add`` was in no diff -- one
+        run in a hundred (3.0.18). Pinned here without the race: the times put
+        back, ctime left out of git's check (the repository's own setting)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            subprocess.run(["git", "-C", str(repo), "config", "core.trustctime", "false"], check=True)
+            past = (1_600_000_000, 1_600_000_000)
+            os.utime(repo / "calc.py", past)
+            subprocess.run(["git", "-C", str(repo), "update-index", "--really-refresh"],
+                           check=True, capture_output=True)
+            changed = CALC.replace("return a + b", "return a - b")
+            self.assertEqual(len(changed), len(CALC))
+            (repo / "calc.py").write_text(changed)
+            os.utime(repo / "calc.py", past)
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, coverage=False)
+            self.assertIn("+    return a - b", evidence.diff.read_text())
+
 if __name__ == "__main__":
     unittest.main()

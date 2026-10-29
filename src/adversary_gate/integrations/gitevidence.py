@@ -317,6 +317,13 @@ def _private_index(repo: Path, workdir: Path) -> dict:
         # One mark per call: given both, ``update-index`` applies only one.
         for flag in ("--no-assume-unchanged", "--no-skip-worktree"):
             _git(repo, "update-index", flag, "--", *hidden, env=env)
+    # git trusts a file whose size and times match its index entry, and checks
+    # its bytes only when the file is not older than the index itself. The
+    # copy is newer than the index git wrote, so a file rewritten in the same
+    # clock tick as ``git add``, at the same size, was in no diff -- one run
+    # in a hundred (3.0.18). Dated 1970, every entry the stat check passes is
+    # compared by content.
+    os.utime(index, (1, 1))
     return env
 
 
