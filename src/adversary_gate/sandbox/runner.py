@@ -327,6 +327,9 @@ def _limit_resources(
 #: child (``communicate``) is not, which is where the time goes.
 _SPAWN_LOCK = threading.Lock()
 
+#: Signal numbers a death under bwrap can report as 128 + N.
+_SIGNALS = frozenset(int(s) for s in signal.valid_signals())
+
 #: One bytecode cache per interpreter, warmed once per gate process.
 _BYTECODE_CACHES: dict = {}
 _BYTECODE_LOCK = threading.Lock()
@@ -499,13 +502,21 @@ def run_test(
                 start_new_session=True,
             )
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        returncode = proc.returncode
+        if sandbox == "bwrap" and returncode - 128 in _SIGNALS:
+            # bwrap reports a child killed by a signal as 128 + its number;
+            # without it the same death reads -N. Read alike, a mutant the CPU
+            # limit killed was a hang without the sandbox and stillborn inside
+            # it (3.0.18). A test can exit 137 on purpose, but it can as well
+            # kill itself with SIGKILL outside bwrap: nothing new is granted.
+            returncode = 128 - returncode
         # The pytest heuristics below look for pytest's own error strings;
         # applying them to an arbitrary caller command would rewrite that
         # command's real exit code on the strength of unrelated text.
         code = (
-            proc.returncode
+            returncode
             if command
-            else _nothing_passed(_detect_harness_error(proc.returncode, stdout, stderr), stdout)
+            else _nothing_passed(_detect_harness_error(returncode, stdout, stderr), stdout)
         )
         return SandboxResult(_detect_resource_death(code, stdout, stderr), stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:

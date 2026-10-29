@@ -76,5 +76,34 @@ class TestTheSandboxIsOnByDefault(unittest.TestCase):
         self.assertEqual(_boundary(["--sandbox", "none"])["sandbox"], "none")
 
 
+class TestASignalReadsTheSameInsideBwrap(unittest.TestCase):
+    """bwrap reports a child killed by signal N as exit 128 + N; outside it the
+    death reads -N. A mutant the CPU limit killed counted as a hang -- a kill --
+    without the sandbox and as stillborn inside it, so the new default lost
+    kills (3.0.18)."""
+
+    def test_128_plus_a_signal_reads_as_that_signal_under_bwrap_only(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(runner, "bwrap_prefix", return_value=[]):
+            inside = runner.run_test(Path(directory), "", command="exit 137", sandbox="bwrap")
+            outside = runner.run_test(Path(directory), "", command="exit 137", sandbox="none")
+            plain = runner.run_test(Path(directory), "", command="exit 3", sandbox="bwrap")
+        self.assertEqual(inside.exit_code, -9)
+        self.assertEqual(outside.exit_code, 137)
+        self.assertEqual(plain.exit_code, 3)
+
+    @unittest.skipUnless(runner.resolve_sandbox("auto", sys.executable)[0] == "bwrap",
+                         "bwrap cannot run the interpreter here")
+    def test_a_cpu_limit_death_is_the_same_with_and_without_bwrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "test_x.py").write_text(
+                "def test_x():\n    i = 0\n    while True:\n        i -= 1\n")
+            codes = {sandbox: runner.run_test(Path(directory), "test_x.py", timeout_seconds=60,
+                                              cpu_seconds=2, sandbox=sandbox).exit_code
+                     for sandbox in ("none", "bwrap")}
+        self.assertEqual(codes["bwrap"], codes["none"], codes)
+        self.assertLess(codes["bwrap"], 0, codes)
+
+
 if __name__ == "__main__":
     unittest.main()
