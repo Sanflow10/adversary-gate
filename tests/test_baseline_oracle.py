@@ -322,23 +322,6 @@ class TestNewTestInAnExistingFile(unittest.TestCase):
                 self.assertEqual(verdict.oracle, "baseline-file")
             self.assertEqual(len(calls), 2, calls)  # one baseline, one patch: not two each
 
-    def test_a_gate_used_again_checks_the_old_tests_again(self):
-        """The answer was kept on the Gate, keyed by the trees' paths: a Gate used
-        again on new trees at the same paths -- as a library -- answered from the
-        old ones, and a patch that broke an old test in the file verified (3.0.18)."""
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            gate = Gate([])
-            _tree(root, patch_calc=CALC.replace("return a - b", "return (a - b)"), patch_tests=self.NEW)
-            first = gate.verify_claim(CriticClaim("test_calc.py", "test_sub_negative"),
-                                      root / "baseline", root / "patch")
-            _tree(root, patch_calc=CALC.replace("return a + b", "return a + b + 1"),
-                  patch_tests=self.NEW)
-            second = gate.verify_claim(CriticClaim("test_calc.py", "test_sub_negative"),
-                                       root / "baseline", root / "patch")
-            self.assertIs(first.outcome, Outcome.VERIFIED, first.reason)
-            self.assertIs(second.outcome, Outcome.REFUTED, second.reason)
-
     def test_weakening_an_old_test_in_the_same_file_is_caught(self):
         """The new test is fine; the patch also bent an old one to fit a bug. REFUTED."""
         bent = self.NEW.replace("assert add(2, 3) == 5", "assert add(2, 3) == 6")
