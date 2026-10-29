@@ -28,7 +28,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from adversary_gate import __version__
 from adversary_gate.core.exitmap import PYTEST_NO_TESTS, PYTEST_OK, PYTEST_TESTS_FAILED
-from adversary_gate.core.gate import Gate, GateConfig, rewritten_test_files, transplant_tree
+from adversary_gate.core.gate import (
+    Gate, GateConfig, added_test_files, rewritten_test_files, suite_oracle_tree, transplant_tree,
+)
 from adversary_gate.core.metrics import compute_metrics, format_report
 from adversary_gate.core.types import (
     AcceptanceCriterion,
@@ -749,13 +751,16 @@ def _policy(args: argparse.Namespace) -> Dict[str, Any]:
     return policy
 
 
-def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
+def _full_oracle(rewritten: Sequence[str], added: Sequence[str],
+                 exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
     """What the collateral run judged the patch's code with, when it was not the patch's tests."""
-    if not rewritten:
+    if not rewritten and not added:
         return None
     return {
         "source": "baseline",
         "rewritten_test_files": list(rewritten),
+        # Left out of that run, not judged by it (3.0.18).
+        "added_test_files": list(added),
         "exit_code": exit_code,
     }
 
@@ -1268,6 +1273,11 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         full_command = args.full_suite_command or args.test_command
         full_suite_ran = bool(full_command) or bool(args.full_suite_path)
         rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
+        # The whole suite is judged by the baseline's tests alone whenever the
+        # patch touched the tests at all: see :func:`suite_oracle_tree`.
+        added_tests = added_test_files(Path(args.baseline), Path(args.patch))
+        suite_oracle_files = [*rewritten_tests, *added_tests]
+        suite_oracle_record = (rewritten_tests, added_tests) if full_suite_ran else ((), ())
         oracle_full_code: Optional[int] = None
         suite_unsettled: Optional[str] = None
 
@@ -1332,8 +1342,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
             )
             oracle_tree = (
-                transplant_tree(Path(args.baseline), Path(args.patch), scratch / "oracle")
-                if rewritten_tests else None
+                suite_oracle_tree(Path(args.baseline), Path(args.patch), scratch / "oracle")
+                if suite_oracle_files else None
             )
             suite_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adversary-suite")
             background.append(suite_pool)
@@ -1515,9 +1525,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
             def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int]]:
-                if rewritten_tests:
+                if suite_oracle_files:
                     with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
-                        tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                        tree = suite_oracle_tree(Path(args.baseline), Path(args.patch), Path(scratch))
                         return _patch_suite(Path(args.patch), tree)
                 return _patch_suite(Path(args.patch), None)
 
@@ -1667,7 +1677,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "mutation": mutation_detail,
                     "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
-                    "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
+                    "full_suite_oracle": _full_oracle(*suite_oracle_record, oracle_full_code),
                     "execution": execution,
                     "discovery": discovery,
                     "coverage_floor": args.coverage_floor,
@@ -1718,7 +1728,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "diff_coverage_source": coverage_source,
             "diff_coverage": coverage_detail,
             "full_suite_ran": full_suite_ran,
-            "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
+            "full_suite_oracle": _full_oracle(*suite_oracle_record, oracle_full_code),
             "measurement_seconds": round(mutation_seconds, 6),
             "execution": execution,
             # Under which rules: every deciding option, and one hash of them.
