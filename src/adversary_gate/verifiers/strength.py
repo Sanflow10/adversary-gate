@@ -54,7 +54,10 @@ import difflib
 import io
 import keyword
 import math
+import os
+import secrets
 import shutil
+import string
 import tempfile
 import time
 import tokenize
@@ -777,17 +780,32 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
 
 
 #: Appended to the end of every logical line the patch wrote, in the canary copy.
-_CANARY = "  # adversary-gate canary"
+#: Drawn once per process (3.0.18): a fixed marker was one a claim could look
+#: for, pass on, and fail on every mutant -- every mutant killed.
+_CANARY = f"  # {secrets.token_hex(8)}"
 #: The statement the canary adds after (or before) code the patch wrote. Assigning
 #: it changes the tree and the bytecode of the function that holds it, and nothing
 #: the code computes. The name ends in ``__``, so a class does not mangle it. It is
 #: deleted on the same line: left bound, it showed up in ``locals()`` and in a
 #: class's ``vars()``, and an honest test of either failed on the copy (3.0.1).
-_PROBE = "__adversary_probe__"
+_PROBE = f"__p{secrets.token_hex(8)}__"
 _PROBE_LINE = f"{_PROBE} = 0; del {_PROBE}"
 _SIMPLE = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Return, ast.Raise,
            ast.Assert, ast.Pass, ast.Delete, ast.Import, ast.ImportFrom, ast.Global,
            ast.Nonlocal, ast.Break, ast.Continue)
+
+
+def _padding(length: int) -> str:
+    """A comment line of about ``length`` characters, nothing else."""
+    return "#" + "".join(secrets.choice(string.ascii_letters) for _ in range(max(1, length))) + "\n"
+
+
+def _write_like(target: Path, text: str, like: Path) -> None:
+    """Write ``text`` with the times of ``like``: a fresh mtime told a mutant
+    from the reference, whose copies keep theirs (3.0.18)."""
+    target.write_text(text, encoding="utf-8")
+    stat = like.stat()
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 class CanaryUnavailable(Exception):
@@ -1809,11 +1827,17 @@ def measure_mutation_score(
         # The unmutated claims passed (checked above), so a claim that fails on
         # the neutral copy is reading the code, not running it.
         trees = [work] if twin is None else [work, twin]
+        # The canary and every mutant end in a comment line of a random length,
+        # the mutants' drawn over the canary's sizes: a claim that passes on the
+        # canary's size passes on the mutants' as well (3.0.18).
+        grown = {rel: len(neutral) - len(originals[rel]) for rel, neutral in canary_files.items()}
         if canary_files:
             _fresh(work)
             for rel, neutral in canary_files.items():
+                padded = neutral + ("" if neutral.endswith("\n") else "\n") + _padding(
+                    secrets.randbelow(64))
                 for tree in trees:
-                    (tree / rel).write_text(neutral, encoding="utf-8")
+                    _write_like(tree / rel, padded, pristine / rel)
             try:
                 probe = _run()
                 if probe.timed_out or probe.exit_code < 0:
@@ -1825,7 +1849,7 @@ def measure_mutation_score(
             finally:
                 for rel in canary_files:
                     for tree in trees:
-                        (tree / rel).write_text(originals[rel], encoding="utf-8")
+                        _write_like(tree / rel, originals[rel], pristine / rel)
             detail["canary"] = {"files": sorted(canary_files), "exit_code": probe.exit_code}
             if probe.exit_code != PYTEST_OK:
                 sensitive = probe.exit_code == PYTEST_TESTS_FAILED
@@ -1879,15 +1903,17 @@ def measure_mutation_score(
                     shutil.copytree(pristine, directory)
                 else:
                     _fresh(directory)
+                padded = mutant_source + ("" if mutant_source.endswith("\n") else "\n") + _padding(
+                    grown.get(rel.as_posix(), 0) + secrets.randbelow(64))
                 for target in targets_:
-                    target.write_text(mutant_source, encoding="utf-8")
+                    _write_like(target, padded, pristine / rel)
                 return _run(directory)
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
                 return exc
             finally:
                 for target in targets_:
                     if target.exists():
-                        target.write_text(original, encoding="utf-8")
+                        _write_like(target, original, pristine / rel)
 
         # (outcome, contended): contended runs had a neighbour.
         outcomes: List[Tuple[Any, bool]] = []
