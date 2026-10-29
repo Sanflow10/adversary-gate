@@ -115,5 +115,48 @@ class TestAnAddedTestModuleCannotVouchForTheOldOnes(unittest.TestCase):
         self.assertEqual(payload["full_suite_oracle"]["added_test_files"], ["tests/test_double.py"])
 
 
+class TestTheRewrittenTestsRunAlone(unittest.TestCase):
+    """With the full suite off, the baseline's version of a rewritten test file
+    runs on the patch's code; a ``tests/__init__.py`` the patch added was
+    imported first and replaced the function the old test checks (3.0.18)."""
+
+    def test_an_added_package_init_does_not_vouch_for_a_rewritten_test(self):
+        calc = BASE.replace("return a + b", "return a + b + 1") + NEW.format(double="add(x, x) - 1")
+        swap = (
+            "import sys\n\nimport calc\n\n_bugged = calc.add\n\n\n"
+            "def _add(a, b):\n"
+            "    caller = sys._getframe(1).f_code.co_filename\n"
+            "    return _bugged(a, b) - (1 if caller.endswith('test_calc.py') else 0)\n\n\n"
+            "calc.add = _add\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, code in (("baseline", BASE), ("patch", calc)):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "checks").mkdir()
+                (root / side / "calc.py").write_text(code)
+                (root / side / "tests" / "test_calc.py").write_text(OLD_TEST)
+            (root / "patch" / "tests" / "test_calc.py").write_text(OLD_TEST + "\n# reviewed\n")
+            (root / "patch" / "tests" / "__init__.py").write_text(swap)
+            (root / "patch" / "checks" / "test_double.py").write_text(NEW_TEST.format(head=""))
+            diff = "".join(difflib.unified_diff(BASE.splitlines(True), calc.splitlines(True),
+                                                "a/calc.py", "b/calc.py", n=0))
+            (root / "change.diff").write_text(diff)
+            lines = list(range(1, calc.count("\n") + 1))
+            (root / "cov.json").write_text(json.dumps({"files": {"calc.py": {"executed_lines": lines}}}))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--claim", "checks/test_double.py::test_double",
+                    "--claim", "checks/test_double.py::test_more",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    "--full-suite-path", "",
+                ])
+            payload = json.loads(out.getvalue())
+        self.assertNotEqual(code, EXIT_MERGE, payload["reason"])
+        self.assertEqual(payload["execution"]["rewritten_tests_run"]["patch"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

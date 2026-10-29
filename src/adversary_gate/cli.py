@@ -1645,7 +1645,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             for claim in claims:
                 deselected += ["--deselect", build_target(claim.test_path, claim.test_id)]
             with tempfile.TemporaryDirectory(prefix="adversary-rewritten-") as scratch:
-                tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                # Without the test files the patch added: see suite_oracle_tree.
+                tree = suite_oracle_tree(Path(args.baseline), Path(args.patch), Path(scratch))
                 ran = run_test(
                     tree, "", targets=rewritten_runnable,
                     require_network_isolation=args.require_network_isolation,
