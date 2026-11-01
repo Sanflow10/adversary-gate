@@ -222,3 +222,25 @@ class TestTheEvidenceTakesWhatACommitWouldHold(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnEnvironmentInThePatchAddsNoTests(unittest.TestCase):
+    """An installed environment ships test files of its own; they are not tests
+    the patch added, and taking them out of the oracle tree breaks nothing."""
+
+    def test_a_directory_with_pyvenv_cfg_is_not_walked(self):
+        from adversary_gate.core.gate import added_test_files
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side in ("baseline", "patch"):
+                (root / side / "tests").mkdir(parents=True)
+                (root / side / "tests" / "test_calc.py").write_text("def test_a():\n    pass\n")
+            (root / "patch" / "tests" / "test_new.py").write_text("def test_b():\n    pass\n")
+            env = root / "patch" / "env"
+            (env / "lib" / "tests").mkdir(parents=True)
+            (env / "pyvenv.cfg").write_text("home = /usr/bin\n")
+            (env / "lib" / "tests" / "test_vendored.py").write_text("def test_c():\n    pass\n")
+            self.assertEqual(added_test_files(root / "baseline", root / "patch"), ["tests/test_new.py"])
+            (env / "pyvenv.cfg").unlink()
+            self.assertIn("env/lib/tests/test_vendored.py",
+                          added_test_files(root / "baseline", root / "patch"))
