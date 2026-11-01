@@ -28,7 +28,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"::error::small-change: {args.mode!r} is not 'fail' or 'review'")
         return EXIT_USAGE
     try:
-        answer = json.loads(sys.stdin.read() or "{}")
+        answer = json.loads(sys.stdin.read())
     except json.JSONDecodeError:
         answer = {}
     review = (answer.get("human_review") or {}) if isinstance(answer, dict) else {}
