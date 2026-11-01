@@ -49,6 +49,31 @@ class TestTheSandboxIsOnByDefault(unittest.TestCase):
         self.assertEqual(again, first)
         self.assertEqual(probe.call_count, 1)
 
+    def test_the_probe_runs_the_interpreter_the_run_uses(self):
+        with mock.patch.object(runner, "_probe_bwrap", return_value=("none", "x")) as probe:
+            runner.resolve_sandbox("auto", "/opt/project/bin/python")
+            runner.resolve_sandbox("auto")
+        self.assertEqual([c.args for c in probe.call_args_list],
+                         [("/opt/project/bin/python",), (sys.executable,)])
+
+    def test_the_reason_quotes_the_last_line_bwrap_wrote(self):
+        failed = subprocess.CompletedProcess([], 1, "", "a warning\nbwrap: setting up uid map: denied\n")
+        with mock.patch.object(runner, "bwrap_available", return_value=True), \
+                mock.patch.object(runner, "bwrap_prefix", return_value=["bwrap"]), \
+                mock.patch.object(runner.subprocess, "run", return_value=failed) as run:
+            why = runner.resolve_sandbox("auto", sys.executable)[1]
+        self.assertEqual(why, f"bwrap could not run {sys.executable}: bwrap: setting up uid map: denied")
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertTrue(run.call_args.kwargs["text"])
+
+    def test_a_silent_failure_is_named_by_its_exit_code(self):
+        failed = subprocess.CompletedProcess([], 3, "", "")
+        with mock.patch.object(runner, "bwrap_available", return_value=True), \
+                mock.patch.object(runner, "bwrap_prefix", return_value=["bwrap"]), \
+                mock.patch.object(runner.subprocess, "run", return_value=failed):
+            self.assertEqual(runner.resolve_sandbox("auto", sys.executable),
+                             ("none", f"bwrap could not run {sys.executable}: exit 3"))
+
     def test_a_bwrap_that_does_not_start_falls_back(self):
         with mock.patch.object(runner, "bwrap_available", return_value=True), \
                 mock.patch.object(runner, "bwrap_prefix", return_value=["bwrap"]), \
