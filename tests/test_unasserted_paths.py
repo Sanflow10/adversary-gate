@@ -76,7 +76,7 @@ class TestALinkIsComparedByItsTarget(unittest.TestCase):
 
 
 class TestAClaimThatRewritesManyFilesSaysSo(unittest.TestCase):
-    def test_the_reason_counts_the_rest_and_the_step_is_to_read_it(self):
+    def _run(self, count: int):
         base = "def f(x):\n    return x * 2\n"
         calc = (base.replace("x * 2", "x * 3")
                 + "\n\ndef h(x):\n    return x - 1\n\n\ndef k(x):\n    return x % 5\n"
@@ -87,7 +87,7 @@ class TestAClaimThatRewritesManyFilesSaysSo(unittest.TestCase):
             "    assert calc.f(1) == 3\n    assert calc.h(5) == 4\n"
             "    assert calc.k(7) == 2\n    assert calc.m(4) and not calc.m(3)\n    assert calc.n(9) == 4\n"
             "    here = pathlib.Path(calc.__file__).parent\n"
-            "    for i in range(7):\n"
+            f"    for i in range({count}):\n"
             "        (here / f'data{i}.txt').write_text('changed')\n"
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -97,7 +97,7 @@ class TestAClaimThatRewritesManyFilesSaysSo(unittest.TestCase):
                 (root / side / "calc.py").write_text(code)
                 (root / side / "tests" / "test_calc.py").write_text(
                     "from calc import f\n\n\ndef test_f():\n    assert f(1) in (2, 3)\n")
-                for i in range(7):
+                for i in range(count):
                     (root / side / f"data{i}.txt").write_text("shipped")
             (root / "patch" / "tests" / "test_new.py").write_text(new_test)
             (root / "change.diff").write_text("".join(difflib.unified_diff(
@@ -114,12 +114,22 @@ class TestAClaimThatRewritesManyFilesSaysSo(unittest.TestCase):
                 ])
             payload = json.loads(out.getvalue())
         self.assertEqual(code, EXIT_INCONCLUSIVE, payload["reason"])
-        self.assertEqual(len(payload["execution"]["claims_rewrote"]), 7)
+        self.assertEqual(len(payload["execution"]["claims_rewrote"]), count)
+        return payload
+
+    def test_the_reason_counts_the_rest_and_the_step_is_to_read_it(self):
+        payload = self._run(7)
         self.assertIn("(+2 more)", payload["reason"])
         step = payload["next_steps"][-1]
         self.assertEqual(step["action"], "see_reason")
         self.assertEqual(step["flags"], [])
         self.assertIn("(+2 more)", step["why"])
+
+    def test_five_rewritten_files_are_all_named(self):
+        payload = self._run(5)
+        self.assertNotIn("more)", payload["reason"])
+        for i in range(5):
+            self.assertIn(f"data{i}.txt", payload["reason"])
 
 
 class TestTheReviewStepReadsOnlyAnObject(unittest.TestCase):
@@ -220,9 +230,6 @@ class TestTheEvidenceTakesWhatACommitWouldHold(unittest.TestCase):
         self.assertEqual(evidence.untracked, ["added.py"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestAnEnvironmentInThePatchAddsNoTests(unittest.TestCase):
     """An installed environment ships test files of its own; they are not tests
@@ -244,3 +251,58 @@ class TestAnEnvironmentInThePatchAddsNoTests(unittest.TestCase):
             (env / "pyvenv.cfg").unlink()
             self.assertIn("env/lib/tests/test_vendored.py",
                           added_test_files(root / "baseline", root / "patch"))
+
+
+class TestASmallChangeIsNamedOnlyWhenEverythingElseHeld(unittest.TestCase):
+    """The review hand-off names the one INCONCLUSIVE where every claim held,
+    coverage met and the whole suite passed on both sides."""
+
+    MUTATION = {"measured": True, "mutants_counted": 1, "mutants_killed": 1, "interval": [0.2, 1.0]}
+
+    def _review(self, full_codes):
+        import argparse
+        import types
+        from adversary_gate.core.types import Decision, Outcome
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80, coverage_floor=0.8)
+        return cli._small_change_review(
+            Decision.INCONCLUSIVE, [types.SimpleNamespace(outcome=Outcome.VERIFIED)], full_codes, args,
+            coverage_ratio=1.0, mutation=dict(self.MUTATION), fix_proven=True, unjudged=False)
+
+    def test_a_suite_that_passed_on_both_sides_keeps_the_review(self):
+        for full_codes in (None, (0, 0), [0, 0]):
+            with self.subTest(full_codes=full_codes):
+                review = self._review(full_codes)
+                self.assertIsNotNone(review)
+                self.assertEqual(review["kind"], "small_change")
+                self.assertEqual(review["mutants_killed"], 1)
+                self.assertIn("but 1 of 1 is too few", review["why"])
+
+    def test_a_suite_that_failed_on_either_side_drops_it(self):
+        for full_codes in ((0, 1), (1, 0)):
+            with self.subTest(full_codes=full_codes):
+                self.assertIsNone(self._review(full_codes))
+
+
+class TestWhatTheCopyAndTheOracleLeaveOut(unittest.TestCase):
+    def test_git_and_cache_directories_are_not_the_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original, copy = Path(directory) / "original", Path(directory) / "copy"
+            for rel in (".git/HEAD", "__pycache__/calc.cpython-312.opt", ".pytest_cache/v/lastfailed",
+                        "pkg/__pycache__/notes.txt", "calc.py"):
+                (original / rel).parent.mkdir(parents=True, exist_ok=True)
+                (original / rel).write_text("x\n")
+            copy.mkdir()
+            (copy / "calc.py").write_text("x\n")
+            self.assertEqual(cli._changed_in_copy(original, copy), [])
+            (copy / "calc.py").write_text("y\n")
+            self.assertEqual(cli._changed_in_copy(original, copy), ["calc.py"])
+
+    def test_no_oracle_record_when_the_patch_kept_every_test_file(self):
+        self.assertIsNone(cli._full_oracle([], [], 0))
+        self.assertEqual(cli._full_oracle([], ["tests/test_new.py"], 1),
+                         {"source": "baseline", "rewritten_test_files": [],
+                          "added_test_files": ["tests/test_new.py"], "exit_code": 1})
+
+
+if __name__ == "__main__":
+    unittest.main()

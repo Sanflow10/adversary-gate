@@ -20,6 +20,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from adversary_gate import cli
 from adversary_gate.cli import main
 from adversary_gate.integrations import mcp_server
 
@@ -231,3 +232,73 @@ class TestPolicyFlagsAreSpelledOut(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheReportSaysHowItRan(unittest.TestCase):
+    """The execution block and the policy hash, from a run without triage."""
+
+    def _run(self, *extra: str, resolved=None, full_suite=False, shape=None, spy=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            TestTheReportRecordsItsRules._tree(None, root)
+            if shape is not None:
+                shape(root)
+            out = io.StringIO()
+            patches = [mock.patch.dict(os.environ, {"ADVERSARY_NETWORK_ISOLATED": "1"})]
+            if resolved is not None:
+                patches.append(mock.patch.object(cli, "resolve_sandbox", return_value=resolved))
+            if spy is not None:
+                patches.append(mock.patch.object(cli, spy, wraps=getattr(cli, spy)))
+            with contextlib.ExitStack() as stack:
+                self.spied = [stack.enter_context(patch) for patch in patches][-1]
+                stack.enter_context(contextlib.redirect_stdout(out))
+                stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+                code = main([
+                    "--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                    "--test-path", "test_calc.py", "--test-id", "test_ops",
+                    "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
+                    *(() if full_suite else ("--full-suite-path", "")), *extra,
+                ])
+        return code, json.loads(out.getvalue())
+
+    def test_no_suite_run_records_no_oracle(self):
+        def add_a_test(root):
+            (root / "patch" / "test_extra.py").write_text("def test_more():\n    assert True\n")
+        _, payload = self._run("--sandbox", "none", shape=add_a_test)
+        self.assertIsNone(payload["full_suite_oracle"])
+        _, payload = self._run("--sandbox", "none", shape=add_a_test, full_suite=True)
+        self.assertEqual(payload["full_suite_oracle"]["added_test_files"], ["test_extra.py"])
+
+    def test_untouched_tests_build_no_oracle_tree(self):
+        _, payload = self._run("--sandbox", "none", full_suite=True, spy="suite_oracle_tree")
+        self.assertIsNone(payload["full_suite_oracle"])
+        self.spied.assert_not_called()
+
+    def test_a_link_in_the_patch_stays_a_link_where_the_claims_run(self):
+        def link(root):
+            for side in ("baseline", "patch"):
+                (root / side / "notes.txt").write_text("rates\n")
+                os.symlink("notes.txt", root / side / "current.txt")
+        code, payload = self._run("--sandbox", "none", shape=link)
+        self.assertEqual(code, 0, payload.get("reason"))
+        self.assertFalse(payload.get("claims_rewrote"), payload.get("reason"))
+
+    def test_an_isolated_network_lets_the_run_go_on(self):
+        code, payload = self._run("--require-network-isolation", "--sandbox", "none")
+        self.assertEqual(code, 0, payload.get("reason"))
+        self.assertTrue(payload["policy"]["require_network_isolation"])
+
+    def test_the_sandbox_note_is_null_unless_auto_fell_back(self):
+        _, payload = self._run("--sandbox", "none")
+        self.assertIsNone(payload["execution"]["sandbox_note"])
+        _, payload = self._run("--sandbox", "auto", resolved=("none", "bwrap is not on PATH"))
+        self.assertEqual(payload["execution"]["sandbox"], "none")
+        self.assertEqual(payload["execution"]["sandbox_note"], "bwrap is not on PATH")
+
+    def test_the_policy_hash_is_of_the_sorted_policy(self):
+        import hashlib
+        _, payload = self._run("--sandbox", "none")
+        policy = payload["policy"]
+        self.assertNotEqual(list(policy), sorted(policy))  # else the order could not matter
+        self.assertEqual(payload["policy_sha256"], hashlib.sha256(
+            json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest())

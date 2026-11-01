@@ -288,7 +288,7 @@ def _small_change_review(decision, verdicts, full_codes, args, *, coverage_ratio
             or coverage_ratio is None or coverage_ratio < args.coverage_floor
             or (full_codes is not None and tuple(full_codes) != (0, 0))):
         return None
-    killed = (mutation or {}).get("mutants_killed")
+    killed = mutation["mutants_killed"]  # a needed count means a measured mutation
     return {
         "kind": "small_change",
         "why": (f"every claim held, coverage met and every mutant was killed, but {killed} of "
