@@ -104,6 +104,37 @@ class TestTheCoveragePassIsIsolated(unittest.TestCase):
             self.assertFalse(marker.exists())
             self.assertIn("calc.py", json.loads(evidence.coverage.read_text())["files"])
 
+    def test_a_workdir_that_already_exists_is_used(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            (root / "work").mkdir()
+            evidence = prepare(repo, "HEAD", root / "work", python=sys.executable)
+            self.assertIn("calc.py", json.loads(evidence.coverage.read_text())["files"])
+
+    def test_an_extractor_that_fails_says_why_as_text(self):
+        from adversary_gate.integrations import gitevidence
+        real_run = subprocess.run
+        seen = []
+
+        def run(argv, *args, **kwargs):
+            if gitevidence._EXTRACT in argv:
+                seen.append(kwargs)
+                return subprocess.CompletedProcess(argv, 1, "", "Traceback\nValueError: no such table\n")
+            return real_run(argv, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = _git_repo(root)
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.object(gitevidence.subprocess, "run", run), \
+                    self.assertRaisesRegex(EvidenceError, r"no report: Traceback\nValueError: no such table$"):
+                prepare(repo, "HEAD", root / "work", python=sys.executable)
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0]["capture_output"])
+        self.assertTrue(seen[0]["text"])
+
     def test_a_scratch_path_made_while_the_tests_ran_is_refused(self):
         """Without a sandbox the tests can write anywhere the user can: a
         baseline directory that exists before the gate writes it is not one
