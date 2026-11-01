@@ -1,55 +1,44 @@
 # Contributing to AdversaryGate
 
-Thank you for wanting to help. A few rules keep this project trustworthy —
-it is a merge gate, so it is held to a stricter standard than most tools.
+AdversaryGate is a merge gate: a wrong `MERGE` is its whole failure mode. To
+keep every line of it accountable, **the code is written by the maintainer
+alone, and pull requests with code are not accepted.**
 
-## 1. Sign the CLA first
+There is no CLA: no outside code is accepted, so there is nothing to sign.
 
-Before a pull request can be merged, sign the
-[CLA](CLA.md) by commenting on the PR:
+That does not mean help is not wanted. These are welcome, and credited:
 
-```
-I have read the CLA at CLA.md and I hereby sign it.
-```
+## Report a fail-open privately
 
-This preserves the project's dual-license (AGPL-3.0 + commercial). One
-comment covers all present and future contributions.
+A patch that reaches `MERGE` when it should not is a security bug. Report it
+through [private vulnerability reporting](SECURITY.md), not in a public issue.
+The fix is written by the maintainer, and the reporter is credited in the
+published advisory.
 
-## 2. Every claim about behavior needs a test
+## Report a bug or a confusing result
 
-The project's own history is documented in
-[ERRORS_AND_INCONSISTENCIES.md](ERRORS_AND_INCONSISTENCIES.md) — bugs found
-in this project carry their own ID (AG-###). Fixes land with:
+Open an issue with:
 
-- a regression test that fails before the fix and passes after;
-- the AG-### entry updated or created;
-- no weakening of existing tests (a test that was failing must stay
-  meaningful, not be deleted or loosened to make CI green).
+- the version (`adversary-gate --version`) and the command you ran;
+- the JSON answer, or the part of it that looks wrong;
+- the smallest repository or diff that reproduces it, if you can share one.
 
-If you found a bug, you are welcome to open an issue using the AG-### ledger
-format.
+A reproduction is the most useful thing you can send. Please describe the
+behaviour; do not attach a patch — fixes are written from the report, not
+copied from it.
 
-## 3. Fail-closed is the invariant
+## Ask for something
 
-When adding or changing behavior, ask: *when this fails, which way does it
-fall?* The answer must never be "towards MERGE". Missing evidence, crashed
-harnesses, unreadable files, and unknown states resolve to `INCONCLUSIVE`,
-never to a pass. PRs that introduce a path that can approve a patch without
-evidence will be rejected regardless of test status.
+An issue describing what you need — a language, a CI system, an option — is
+how features get prioritised. Say what you would use it for.
 
-## 4. Environment
+## What every change here is held to
 
-- CPython 3.10–3.12 supported (3.13+ works but is untested).
-- `pip install -e .[dev]` for development dependencies.
-- `pytest` must pass; `scripts/verify_fixes.sh` must pass.
-- Resource-limit behavior differs on non-glibc platforms (see
-  [docs/TERMUX_VALIDATION.md](docs/TERMUX_VALIDATION.md)); do not add tests
-  that assume `RLIMIT_AS` works everywhere.
+For context on how fixes are made, whoever writes them:
 
-## 5. Commit and PR conventions
-
-- One logical change per PR.
-- The artefact JSON is part of the interface: changes to its fields must be
-  documented in `CHANGELOG.md` and backwards-compatible or versioned.
-- CI must pass. If CI fails for a platform-specific reason, say so in the PR
-  and why it cannot be reproduced in the supported matrix.
+- **Fail-closed is the invariant.** Missing evidence, crashed harnesses and
+  unknown states resolve to `INCONCLUSIVE`, never to a pass.
+- **Every fix lands with a regression test** that fails before it and passes
+  after, and with its entry in
+  [ERRORS_AND_INCONSISTENCIES.md](ERRORS_AND_INCONSISTENCIES.md).
+- **No test is weakened** to make CI green.

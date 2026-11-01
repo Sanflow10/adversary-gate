@@ -1,6 +1,7 @@
 # AdversaryGate
 
 [![PyPI](https://img.shields.io/pypi/v/adversary-gate)](https://pypi.org/project/adversary-gate/)
+[![Downloads](https://img.shields.io/pypi/dm/adversary-gate)](https://pypistats.org/packages/adversary-gate)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![CI](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml)
 
@@ -19,7 +20,7 @@ pip install adversary-gate
 
 ## 🎬 Watch it decide (60 seconds)
 
-![AdversaryGate — demonstração ao vivo](demo/demo.gif)
+![AdversaryGate — live demo](demo/demo.gif)
 
 **B and C are the same patch.** Same code, same tests, same execution. The only difference is that C brought evidence (`--diff` + `--coverage-json`); B brought none.
 
@@ -42,7 +43,17 @@ python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
 
 ---
 
+## 🎯 Why
+
+Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
+
+---
+
 ## 🚀 Quick Start (CLI & GitHub Action)
+
+**On GitHub, start with the [Action](#github-action-integration-actionyml)**: one input,
+`base-sha`, and it derives the baseline, the diff and the coverage report itself.
+The CLI below runs the same gate anywhere else.
 
 ### First run, in one minute
 
@@ -91,6 +102,9 @@ adversary-gate \
   --evidence-log evidence.jsonl \
   --report
 ```
+
+`--model` (which model wrote the patch) and `--report` (the metrics report on
+stderr) are optional.
 
 Produce the two artefacts in your own pipeline, for example:
 
@@ -143,7 +157,7 @@ adversary-gate ... --python .venv/bin/python \
 | `--full-suite-timeout` | `900` | wall-clock seconds for the collateral full-suite run |
 | `--full-suite-cpu-seconds` | none | CPU seconds for the collateral full-suite run |
 | `--full-suite-memory` | `4G`; `none` on Android | address space for the collateral full-suite run |
-| `--memory` | `512M`; `none` on Android | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
+| `--memory` | `512M`; `none` on Android | address space per run (`K`/`M`/`G`); use `none` for the JVM and Node, which cannot start under one |
 | `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
 | `--env NAME=VALUE` | — | set one |
 | `--serial-sides` | off | run the baseline and patch sides of a check one after the other instead of together, and the full suite after the claims and mutants instead of alongside the claims; forces `--mutation-workers 1` (small machines; tests that share a fixed `/tmp` path or a port). The mutants never run beside the suite either way (AG-043) |
@@ -196,7 +210,7 @@ Exit Codes for CI Integration:
 ### GitHub Action Integration (`action.yml`)
 
 **One ref in.** `base-sha` derives the baseline, the diff and the coverage
-report itself, so the first thing you install is not a `INCONCLUSIVE`:
+report itself, so the first thing you install is not an `INCONCLUSIVE`:
 
 ```yaml
 name: Verification Gate
@@ -310,7 +324,7 @@ from a non-coverage.py tool — pass the paths explicitly instead:
           coverage json -o coverage.json
 
       - name: Run AdversaryGate
-        uses: Sanflow10/adversary-gate@main
+        uses: Sanflow10/adversary-gate@v3
         with:
           baseline: './baseline'
           patch: './patch'
@@ -334,101 +348,40 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 pip install adversary-gate
 ```
 
-Check what PyPI is serving before you trust it — `pip index versions
-adversary-gate`. Versions before 3.0.4 are unsupported: each lacks fail-open
-fixes (a patch reaching `MERGE` it should not) that came after it. PyPI gets a
-release when a signed tag is pushed (Trusted Publishing, AG-008 closed), and
-the GitHub Release below gets the same build. Every other route works too, and **none of
-them needs PyPI**:
+PyPI gets each release from a signed tag through Trusted Publishing, and every
+file carries a PyPI provenance attestation. Versions before 3.0.4 are
+unsupported: each lacks fail-open fixes (a patch reaching `MERGE` it should
+not) that came after it. To pin the version:
 
 ```bash
-# straight from the repository
-pip install git+https://github.com/Sanflow10/adversary-gate.git
-```
-
-```bash
-# or clone it
-git clone https://github.com/Sanflow10/adversary-gate.git
-cd adversary-gate && pip install .
-```
-
-```bash
-# or don't install it at all
-PYTHONPATH=src python3 -m adversary_gate --help
-```
-
-| Route | Follows | Needs |
-|---|---|---|
-| `pip install git+https://…adversary-gate.git` | `main` | network |
-| `git clone` + `pip install .` | `main` | git |
-| `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
-| `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.17** — every fix | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
-
-### Install a released wheel
-
-`git+…` always follows `main`. For a fixed, versioned build there are two, and
-today they carry the same code:
-
-```bash
-# PyPI -- 3.0.17. Versions before 3.0.4 are unsupported: each lacks fixes the
-# CHANGELOG lists after it.
 pip install adversary-gate==3.0.17
 ```
 
+The same build is attached to the GitHub Release, at a plain public URL — no
+PyPI, no GitHub login:
+
 ```bash
-# GitHub Release -- 3.0.17: every fix in this document.
 # The tag carries the "v", the filename does not.
 pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.17/adversary_gate-3.0.17-py3-none-any.whl
 ```
 
-The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
-needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.17` has not been published yet. A release
-takes two steps, in this order, and only the first is done by hand:
+Or follow `main` instead of a release:
 
-1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
-   `git push origin vX.Y.Z`. The push starts **Publish to PyPI**, which builds
-   the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
-   and uploads both through Trusted Publishing, so every file carries a PyPI
-   provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token. Before it builds anything it
-   checks the tag's signature with `git verify-tag` against the key in the
-   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
-   kept outside the tree so a push cannot bring its own key): a lightweight
-   tag, an annotated tag with no signature, a signature from another key, or
-   no variable at all, and nothing is published.
-2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with one the same signature check refuses, and refuses while PyPI lacks either
-   package. Then it runs the full test suite and **refuses to publish if it
-   fails**, builds the wheel and sdist, installs the wheel into a clean
-   interpreter, attaches them to the release, and moves the floating tag of the
-   release's major line (`v3`) — only forward, so
-   re-releasing an old version does not drag it back.
+```bash
+pip install git+https://github.com/Sanflow10/adversary-gate.git   # from the repository
+PYTHONPATH=src python3 -m adversary_gate --help                   # from a clone, nothing installed
+```
 
-**Publish to PyPI → Run workflow** with a tag finishes a run that stopped
-halfway: files already on PyPI are skipped, never replaced.
+| Route | Follows | Needs |
+|---|---|---|
+| `pip install adversary-gate` (PyPI) | the latest release, attested | network |
+| GitHub Release wheel | the same release | nothing but `pip` |
+| `uses: Sanflow10/adversary-gate@v3` | the latest 3.x release | GitHub Actions |
+| `pip install git+https://…adversary-gate.git` | `main` | network |
+| `PYTHONPATH=src python3 -m adversary_gate` | `main`, from a clone | nothing |
 
-Until 3.0.3 the Release workflow created the tag itself, with the workflow's
-token, and uploaded the core alone with an API token. Events from that token
-start no other workflow, so for 3.0.2 and 3.0.3 the PyPI publisher never ran:
-`uvx adversary-gate-mcp` kept serving 3.0.0, the core files carry no
-attestation, and those tags are not signed. Like every version before 3.0.4,
-they are unsupported.
-
-### PyPI
-
-Versions before 3.0.4 are unsupported. The audit this project grew from was run
-against `2.0.1`, which predates every fix in this document: `--diff` and
-`--coverage-json` did not exist yet (AG-002).
-
-**AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
-project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
-environment), and `2.4.0` went up through it — OIDC, no token — with PyPI
-provenance attestations attached to the wheel and the sdist. Until then the
-upload step had failed on every tag with `invalid-publisher: valid token, but
-no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
+How a release is built, signed and published, and what changed in that process:
+[Releasing](docs/RELEASING.md).
 
 ---
 
@@ -473,13 +426,6 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
 
 ---
 
-## 🎯 Why
-
-Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
-
-
----
-
 ## 📚 Read more
 
 | Document | What it is |
@@ -488,10 +434,25 @@ Agents write fluent, plausible code, and naive pipelines that collapse infrastru
 | 🌐 **[Language support](docs/LANGUAGE_SUPPORT.md)** | what happens on a repository that is not Python/pytest |
 | 🛡️ **[Execution boundary](docs/EXECUTION_BOUNDARY.md)** | read before running it on untrusted code: `--sandbox bwrap` and its limits |
 | ⏱️ **[Performance & compatibility](docs/PERFORMANCE_AND_COMPATIBILITY.md)** | timings, supported Pythons, deprecations |
+| 📦 **[Releasing](docs/RELEASING.md)** | how a release is signed, published and verified |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed in each version |
 | 🔐 **[SECURITY](SECURITY.md)** | report a fail-open. A wrong `MERGE` is the whole failure mode, so a bug here *is* a security bug |
 | 📋 **[Findings register](ERRORS_AND_INCONSISTENCIES.md)** | every finding against the gate itself, reproduced by real exit code before being fixed — and what is still open |
 
+
+---
+
+## 🏢 Using AdversaryGate at your company
+
+- **Running it unmodified on your own code is free**, in CI or on a laptop.
+  The AGPL asks nothing of you for that.
+- **If you modify it and offer the modified gate to others** — including as a
+  network service — you must publish your changes under the AGPL.
+- **If your legal team cannot accept the AGPL**, a commercial license is
+  available: write to sanflow086@gmail.com.
+
+This is a summary, not legal advice; the [LICENSE](LICENSE) and [NOTICE](NOTICE)
+are what apply.
 
 ---
 
@@ -500,5 +461,3 @@ Agents write fluent, plausible code, and naive pipelines that collapse infrastru
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
 Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Only the latest release is distributed: the tags, GitHub Releases and PyPI files of earlier versions are no longer published.
-
-For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.
