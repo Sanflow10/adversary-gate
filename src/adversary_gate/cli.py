@@ -14,6 +14,7 @@ Exit codes are part of the contract, because CI reads them:
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -272,6 +273,37 @@ def _too_few_mutants(mutation, args) -> Optional[int]:
     return needed if needed is not None and needed > counted else None
 
 
+def _only_appends_tests(baseline: Path, patch: Path, rel: str) -> bool:
+    """True when the patch's copy of a baseline test file is the baseline's
+    bytes followed only by new, undecorated ``test`` functions.
+
+    Such an addition reaches no other test: no decorator or fixture runs at
+    import, no module statement, no name the baseline file already defines.
+    It is as safe as a test file of its own, which merges. Anything else --
+    an edited or removed line, a deleted file, a file that is not Python --
+    changed what the baseline's tests check, and nothing measured that.
+    """
+    try:
+        old = (baseline / rel).read_bytes()
+        new = (patch / rel).read_bytes()
+    except OSError:
+        return False
+    if not rel.endswith(".py") or len(new) <= len(old) or not new.startswith(old):
+        return False
+    try:
+        added = ast.parse(new[len(old):].decode("utf-8"))
+        before = list(ast.walk(ast.parse(old.decode("utf-8"))))
+        known = {getattr(node, "name", None) or getattr(node, "id", None) for node in before
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Name))}
+    except (SyntaxError, UnicodeDecodeError, ValueError):
+        return False
+    return bool(added.body) and all(
+        isinstance(node, ast.FunctionDef) and not node.decorator_list
+        and node.name.startswith("test") and node.name not in known
+        for node in added.body
+    ) and len({node.name for node in added.body}) == len(added.body)
+
+
 def _small_change_review(decision, verdicts, full_codes, args, *, coverage_ratio,
                          mutation, fix_proven, unjudged) -> Optional[Dict[str, Any]]:
     # What a person signs, when the only gap is a change too small to measure.
@@ -491,6 +523,10 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
                                  "judge the patch; point --full-suite-path at tests that pass there"})
     if decision is Decision.BLOCK:
         return steps
+    for path in (mutation or {}).get("rewritten_tests_unmeasured", []) or []:
+        steps.append({"action": "human_review_test_edit", "file": path,
+                      "why": "the patch changed only tests the baseline shipped; a person "
+                             "checks that they still test what they did"})
     if not verdicts:
         steps.append({"action": "add_test",
                       "why": "no test executed a changed line; add a new test that does "
@@ -1553,6 +1589,25 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     # MERGE. When a claim did not verify, its own outcome
                     # already decides and strength would only add noise.
                     strength_unverified = True
+
+        # A patch that changes no source line and rewrites or deletes tests the
+        # baseline shipped leaves the mutants nothing to break. The baseline's
+        # copies judged it and held, which says nothing about the copies that
+        # would land: what those tests check was not measured, so it is not a
+        # MERGE (3.0.18). A patch that only adds tests is unaffected.
+        bent_tests = [rel for rel in rewritten_tests
+                      if not _only_appends_tests(Path(args.baseline), Path(args.patch), rel)]
+        if (all_verified and bent_tests and not strength_unverified
+                and not mutation_detail.get("changed_files")):
+            strength_unverified = True
+            mutation_detail["rewritten_tests_unmeasured"] = bent_tests
+            shown = ", ".join(bent_tests[:3]) + (
+                f" (+{len(bent_tests) - 3} more)" if len(bent_tests) > 3 else "")
+            mutation_detail["reason"] = (
+                f"the patch changes no source line and rewrote or deleted tests the baseline "
+                f"shipped ({shown}): the baseline's copies held, but what the patch's copies "
+                "check was not measured; a person reviews the test change"
+            )
 
         if full_suite_ran:
             # Only pay for the baseline run when the patch side actually failed;
