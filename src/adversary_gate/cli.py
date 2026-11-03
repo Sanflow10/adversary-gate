@@ -427,6 +427,8 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
             needed = _too_few_mutants(mutation, args)
             small = (f": the change is too small to measure at this floor, which takes "
                      f"at least {needed} killed mutants; see next_steps") if needed else ""
+            if not needed and (mutation or {}).get("survivors"):
+                small = ": see next_steps for each surviving mutant, which a test that checks that line kills"
             return (
                 f"{proven}, but suite strength's lower bound is {strength_judged:.2f}, "
                 f"below the {args.suite_strength_floor:.2f} floor{tally}{small}"
@@ -1189,6 +1191,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # Every call sets it, empty included: a previous main() in the same
         # process must not leave its declarations behind.
         set_test_support(args.test_support)
+        # A tree that is not there read as an empty one: no error, and a
+        # reason that blamed whatever the patch's tree held, a conftest.py
+        # nobody had touched (3.0.18). It is a usage error.
+        for flag, value in (("--baseline", args.baseline), ("--patch", args.patch)):
+            if not Path(value).is_dir():
+                raise ValueError(f"{flag} {value!r} is not a directory: point it at the tree "
+                                 "(for the baseline, e.g. a `git worktree add --detach` of the base)")
         if args.mutation_workers < 1:
             raise ValueError("--mutation-workers must be at least 1")
         if args.mutation_workers > 1 and args.census_min_mutants > 0 and not args.serial_sides:

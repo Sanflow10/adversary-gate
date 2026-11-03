@@ -929,6 +929,29 @@ class TestAPatchOfTestsAloneThatBendsOneIsReviewed(unittest.TestCase):
                 self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
 
 
+class TestATreeThatIsNotThereIsAUsageError(unittest.TestCase):
+    """A baseline path that did not exist read as an empty tree, and the
+    reason blamed a conftest.py the patch never touched (3.0.18)."""
+
+    def test_a_missing_baseline_or_patch_is_exit_3_and_named(self):
+        import contextlib
+        import io
+        root = _fixture()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "conftest.py").write_text("")
+        for flag, baseline, patch in (("--baseline", root / "before", root / "patch"),
+                                      ("--patch", root / "baseline", root / "after"),
+                                      ("--patch", root / "baseline", root / "change.diff")):
+            with self.subTest(flag=flag, missing=(patch if flag == "--patch" else baseline).name):
+                err = io.StringIO()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                    code = main(["--baseline", str(baseline), "--patch", str(patch),
+                                 "--claim", "test_calc.py::test_sub"])
+                self.assertEqual(code, EXIT_USAGE)
+                self.assertIn(f"{flag} ", err.getvalue())
+                self.assertIn("is not a directory", err.getvalue())
+
+
 class TestOnlyAppendsTests(unittest.TestCase):
     def _check(self, old, new, rel="tests/test_x.py"):
         from adversary_gate.cli import _only_appends_tests
