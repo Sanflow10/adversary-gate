@@ -118,6 +118,24 @@ class TestAPinIsTheOperators(unittest.TestCase):
         self.assertEqual(allowed["decision"], "merge", allowed["reason"])
         self.assertIn("ALLOW_LOCAL_PIN", policy["baseline_pin"])
 
+    def test_a_pinned_remote_ref_runs_on_its_commit_and_says_so(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = _git_repo(Path(directory))
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+            (repo / "calc.py").write_text(_clean_patch(CALC))
+            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_BASE_REF": "origin/main"}):
+                result = mcp_server.verify_repo(str(repo))
+                policy = mcp_server.gate_policy()
+            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_REQUIRE_PINNED_BASE": "1"}):
+                self.assertTrue(mcp_server._pin_required())
+        self.assertEqual(result["decision"], "merge", result["reason"])
+        self.assertEqual(result["baseline_sha"], head)
+        self.assertEqual(result["baseline_chosen_by"], "operator")
+        self.assertTrue(result["baseline_pin"].startswith("ref name, remote-tracking only"))
+        self.assertIs(result["baseline_pin_required"], False)
+        self.assertEqual(policy["baseline_pin"], result["baseline_pin"])
+
     def test_an_older_pushed_commit_is_not_the_agents_baseline(self):
         """Pushed was enough: the root commit, from before a test existed or was
         tightened, judged the patch (3.0.18)."""

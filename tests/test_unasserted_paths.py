@@ -259,14 +259,22 @@ class TestASmallChangeIsNamedOnlyWhenEverythingElseHeld(unittest.TestCase):
 
     MUTATION = {"measured": True, "mutants_counted": 1, "mutants_killed": 1, "interval": [0.2, 1.0]}
 
-    def _review(self, full_codes):
+    def _review(self, full_codes, *, outcomes=("verified",), coverage_ratio=1.0):
         import argparse
         import types
         from adversary_gate.core.types import Decision, Outcome
         args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80, coverage_floor=0.8)
+        verdicts = [types.SimpleNamespace(outcome=Outcome(o)) for o in outcomes]
         return cli._small_change_review(
-            Decision.INCONCLUSIVE, [types.SimpleNamespace(outcome=Outcome.VERIFIED)], full_codes, args,
-            coverage_ratio=1.0, mutation=dict(self.MUTATION), fix_proven=True, unjudged=False)
+            Decision.INCONCLUSIVE, verdicts, full_codes, args,
+            coverage_ratio=coverage_ratio, mutation=dict(self.MUTATION), fix_proven=True, unjudged=False)
+
+    def test_no_claim_a_claim_that_did_not_hold_or_short_coverage_drops_it(self):
+        for gap in ({"outcomes": ()}, {"outcomes": ("verified", "refuted")},
+                    {"outcomes": ("unverified",)}, {"coverage_ratio": None},
+                    {"coverage_ratio": 0.5}):
+            with self.subTest(**gap):
+                self.assertIsNone(self._review((0, 0), **gap))
 
     def test_a_suite_that_passed_on_both_sides_keeps_the_review(self):
         for full_codes in (None, (0, 0), [0, 0]):
