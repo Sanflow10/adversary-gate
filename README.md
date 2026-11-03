@@ -63,7 +63,7 @@ From the root of a git repository whose agent's change sits on top of `main`
 ```bash
 BASE=main                                         # the commit before the agent's change
 W=$(mktemp -d)
-git worktree add -q "$W/before" "$BASE"           # the baseline, exactly as committed
+git worktree add -q --detach "$W/before" "$BASE"  # the baseline, exactly as committed
 git diff --no-ext-diff "$BASE" > "$W/changes.diff"  # baseline -> your working tree
 coverage run -m pytest -q && coverage json -q -o "$W/coverage.json"
 adversary-gate --baseline "$W/before" --patch . \
@@ -74,18 +74,28 @@ python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'],
 git worktree remove --force "$W/before"
 ```
 
-Replace the `--claim` with the test that proves your fix (`path::test`). On a
-correct **one-line** fix, expect this first answer:
+Replace the `--claim` with the test that proves your fix (`path::test`).
+`--detach` is there because `git worktree add` refuses a branch that is
+already checked out, and `main` usually is.
 
-```text
-exit 2
-inconclusive - every claim held and the fix is proven, but suite strength's lower bound is 0.38,
-below the 0.75 floor (1/1 mutants killed): the change is too small to measure at this floor,
-which takes at least 5 killed mutants; see next_steps
-```
+On a correct **one-line** fix the first answer is usually `exit 2` with
+`every claim held and the fix is proven, but suite strength's lower bound is ...`.
+To measure the tests, the gate makes *mutants*: small deliberate breaks of the
+changed lines, each of which a good test should fail on. A one-line change gives
+one to three of them, and the floor (by default, a cautious lower bound of 0.75
+on the share the tests kill) takes at least 5. Then one of two things:
 
-That is not a failure: the fix *is* proven, and the gate says plainly that it
-could not measure how strong the tests are on a change this small. See
+- **Every mutant killed** (`1/1`, `3/3`): the reason ends with `the change is too
+  small to measure at this floor ...; see next_steps`. The fix is proven; a
+  person reviews the change (the Action's `small-change: review` does that).
+- **A mutant survived** (`0/3`, `2/3`): your test runs the line but does not
+  check what the break changed. `next_steps` names the line. For a fix to
+  `return max(0, price - price * pct / 100)`, `assert discount(100, 150) >= 0`
+  kills none of the three; `== 0` kills two (`price * pct * 100` is negative
+  too, and `max` hides it); adding `assert discount(100, 10) == 90` kills all
+  three.
+
+Neither is a failure of the fix. See
 [Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
 
 ### Command-Line Usage
