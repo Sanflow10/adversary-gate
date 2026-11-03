@@ -205,7 +205,10 @@ feeds the collateral full-suite run too unless you pass `--full-suite-command`.
 The default, `--sandbox auto`, uses [bubblewrap](https://github.com/containers/bubblewrap)
 wherever it can run the project's interpreter and says in the answer when it
 could not; `--sandbox bwrap` refuses to start without it; `--sandbox none`
-turns it off for tests that need the network — see
+turns it off for tests that need the network. Inside it the tests get no
+network, their own process, IPC and hostname namespaces, a private `/tmp` and
+no capabilities (`--cap-drop ALL`). There is no seccomp filter and the kernel is
+the host's: it contains a buggy patch, not a hostile one. See
 [Execution boundary](docs/EXECUTION_BOUNDARY.md)
 for exactly what it does and does not contain.
 
@@ -460,8 +463,23 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
   The AGPL asks nothing of you for that.
 - **If you modify it and offer the modified gate to others** — including as a
   network service — you must publish your changes under the AGPL.
+- **If you ship a modified copy**, the [NOTICE](NOTICE) adds the terms that
+  section 7 of the AGPL allows: keep the NOTICE and the attribution, mark the
+  copy as modified, and do not present it as AdversaryGate.
 - **If your legal team cannot accept the AGPL**, a commercial license is
   available: write to sanflow086@gmail.com.
+
+### Rolling it out
+
+1. **Advisory first.** Run the Action on pull requests with
+   `continue-on-error: true` for a few weeks and read the `INCONCLUSIVE`
+   reasons. Most first answers are a small change or an uncovered line, not a
+   bad patch, and `next_steps` says which.
+2. **Keep the policy where the agent cannot write it.** The floors and flags
+   live in the workflow file; protect it (CODEOWNERS, branch protection). An
+   agent that can edit them, or pass `--coverage-floor 0`, grades itself.
+3. **Then make it required**, and route `INCONCLUSIVE` to a person rather than
+   to a red X (`small-change: review` for changes too small to measure).
 
 This is a summary, not legal advice; the [LICENSE](LICENSE) and [NOTICE](NOTICE)
 are what apply.

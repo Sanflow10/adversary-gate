@@ -49,6 +49,8 @@ A bare `--coverage-ratio` with no `--coverage-source` is **exit 3 (usage error)*
 
 `--coverage-floor 0` disables the requirement explicitly; it is not a way to satisfy it.
 
+Of the three measurements, coverage is the weakest evidence. coverage.py runs in the same process as the patch's code, as it must to measure it, so the report is bounded (a fresh directory outside the repository, checked after the run) but not unforgeable. The claims and the mutants run in processes of their own and do not take their answer from the coverage report.
+
 ### How `suite_strength` is measured
 
 It is a **mutation score** — `mutants killed / mutants executable` — produced by breaking the lines the patch changed and re-running the claims — their node ids, not their whole test files (AG-039) — against them. Fewer tests per mutant can only lower the score; a whole file let a failing test outside the claims count every mutant as killed. Each claim meets the mutants with the copy of its test file that judged it: when the patch rewrote a test the baseline had, that is the baseline's copy (until 3.0.3 the mutants ran the patch's, and asserts the patch added to a rewritten test killed mutants the verdict never ran). It is not derived from coverage or from parsing pytest output.
