@@ -421,8 +421,10 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
 
 [Jev](https://www.datacamp.com/blog/system-one-models-jev) is a calibrated decision model: text and a schema in, a typed answer with a probability out, in ~100 ms. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
 
-- **The diff leaves the machine** (truncated to 64 KiB, `https` only). That is why it is opt-in.
-- Jev is early-access (launched 2026-09-15). The client follows TypeSafe's published request/response shape and is tested against a local server speaking it — **not** against the live API from this repository.
+- **The diff leaves the machine**, truncated to 64 KiB. That is why it is opt-in. It is the whole diff: removed lines as well as added ones, and, through the MCP server, every untracked file git does not ignore (a `.env` left outside `.gitignore` included). Nothing is filtered for secrets. TypeSafe's terms for what it keeps are in its [data processing addendum](https://typesafe.ai/legal/data-processing).
+- The endpoint must be `https`, or plain `http` to `localhost`, `127.0.0.1` or `::1` for a local test server; a URL with a user, a password or a fragment is refused (3.0.18). The key goes in the same request.
+- The request names a model: `jev-latest` unless `TYPESAFE_MODEL` or `--triage-model` says otherwise. `execution.triage` records the model asked for and the one that answered. Until 3.0.18 no model was sent, and the API, which requires one, refused every request: triage recorded an error and changed nothing.
+- **Experimental.** Jev is early-access (launched 2026-09-15). The client follows TypeSafe's published request/response shape and is tested against a local server speaking it, **not** against the live API from this repository.
 
 ---
 
