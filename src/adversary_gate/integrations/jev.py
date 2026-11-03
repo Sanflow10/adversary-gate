@@ -22,8 +22,10 @@ the artefact (``execution.triage``) either way.
 ``MAX_STATE_BYTES``) to TypeSafe's hosted API. It is opt-in for that reason.
 
 Written against TypeSafe's published request/response shape (September 2026,
-early access). Not verified against the live API from this repository: the
-client is exercised by tests against a local server that speaks that shape.
+early access), which requires a ``model`` (``jev-latest`` unless
+``TYPESAFE_MODEL`` or ``--triage-model`` names one). Not verified against the
+live API from this repository: the client is exercised by tests against a local
+server that speaks that shape. Experimental.
 """
 
 from __future__ import annotations
@@ -32,10 +34,18 @@ import json
 import os
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Mapping, Optional
 
 DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+
+#: The API requires a model name; ``GET /v1/models`` lists them. The one that
+#: answered is recorded next to the one asked for.
+DEFAULT_MODEL = "jev-latest"
+
+#: Plain HTTP is for a server on this machine, named exactly.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 #: The diff is truncated before it leaves the machine; the artefact says so.
 MAX_STATE_BYTES = 64 * 1024
@@ -82,6 +92,7 @@ class TriageError(RuntimeError):
 class Triage:
     source: str = "jev"
     model: Optional[str] = None
+    requested_model: Optional[str] = None
     risk: Optional[str] = None
     confidence: Optional[float] = None
     contract_change: Optional[float] = None
@@ -104,18 +115,23 @@ class JevClient:
         api_key: Optional[str] = None,
         endpoint: Optional[str] = None,
         timeout: float = 10.0,
+        model: Optional[str] = None,
     ) -> None:
         self.api_key = api_key if api_key is not None else os.environ.get("TYPESAFE_API_KEY")
         self.endpoint = endpoint or os.environ.get("TYPESAFE_ENDPOINT") or DEFAULT_ENDPOINT
         self.timeout = timeout
+        self.model = model or os.environ.get("TYPESAFE_MODEL") or DEFAULT_MODEL
 
     def ask(self, state: Any, questions: Mapping[str, Any]) -> Dict[str, Any]:
         if not self.api_key:
             raise TriageError("TYPESAFE_API_KEY is not set")
-        if not self.endpoint.startswith(("https://", "http://127.0.0.1", "http://localhost")):
-            # The diff is sent in the body; never over plain HTTP to a remote host.
-            raise TriageError(f"refusing to send the diff to a non-HTTPS endpoint: {self.endpoint}")
-        body = json.dumps({"state": state, "questions": questions}).encode("utf-8")
+        if not endpoint_allowed(self.endpoint):
+            # The diff and the key are sent; never over plain HTTP to a remote host.
+            raise TriageError(
+                "refusing to send the diff to this endpoint: HTTPS with no user, password or "
+                f"fragment, or plain HTTP to localhost, 127.0.0.1 or ::1 only: {self.endpoint!r}"
+            )
+        body = json.dumps({"model": self.model, "state": state, "questions": questions}).encode("utf-8")
         request = urllib.request.Request(
             self.endpoint,
             data=body,
@@ -126,7 +142,7 @@ class JevClient:
             },
         )
         try:
-            # The scheme is checked above (https, or loopback http for tests),
+            # The URL is checked above (https, or loopback http for tests),
             # so no file:// or remote plain-HTTP URL reaches urlopen.
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             with urllib.request.urlopen(request, timeout=self.timeout) as response:  # nosec B310
@@ -142,20 +158,44 @@ class JevClient:
         return payload
 
 
+def endpoint_allowed(url: str) -> bool:
+    """The URL is read the way ``urllib`` will read it, not by its first letters.
+
+    A prefix check let ``http://localhost.example.com`` and
+    ``http://localhost@example.com`` through to a remote host in plain HTTP.
+    """
+    if not isinstance(url, str) or any(ch <= " " or ch == "\x7f" for ch in url):
+        return False
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 -- a port that is not a number raises here
+    except ValueError:
+        return False
+    if parts.username is not None or parts.password is not None or parts.fragment:
+        return False
+    host = parts.hostname
+    if not host:
+        return False
+    if parts.scheme == "https":
+        return True
+    return parts.scheme == "http" and host in LOOPBACK_HOSTS
+
+
 def triage_diff(
     diff_text: str,
     client: Optional[JevClient] = None,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> Triage:
     """Ask Jev how risky ``diff_text`` is. Never raises: errors are recorded."""
-    result = Triage(threshold=threshold)
+    client = client or JevClient()
+    result = Triage(threshold=threshold, requested_model=client.model)
     raw = diff_text.encode("utf-8", errors="replace")
     result.truncated = len(raw) > MAX_STATE_BYTES
     raw = raw[:MAX_STATE_BYTES]
     result.state_bytes = len(raw)
     state = {"diff": raw.decode("utf-8", errors="ignore")}
     try:
-        payload = (client or JevClient()).ask(state, QUESTIONS)
+        payload = client.ask(state, QUESTIONS)
         answers = payload["answers"]
         risk = answers.get("risk") or {}
         result.model = payload.get("model")

@@ -139,7 +139,48 @@ class TestJevClient(unittest.TestCase):
     def test_no_key_and_no_plain_http_to_remote_hosts(self):
         self.assertIsNotNone(jev.triage_diff("+x\n", jev.JevClient(api_key="", endpoint=self.fake.url)).error)
         remote = jev.JevClient(api_key="sk", endpoint="http://example.com/v1/systemone")
-        self.assertIn("non-HTTPS", jev.triage_diff("+x\n", remote).error)
+        self.assertIn("refusing to send the diff", jev.triage_diff("+x\n", remote).error)
+
+    def test_the_model_is_sent_and_both_names_are_recorded(self):
+        """The API requires a model; without one it answers 422 and triage never ran."""
+        self.fake.status = 200
+        triage = jev.triage_diff("+x\n", self.client)
+        self.assertEqual(self.fake.requests[-1]["body"]["model"], "jev-latest")
+        self.assertEqual((triage.requested_model, triage.model), ("jev-latest", "jev-1.13.0"))
+        with mock.patch.dict(os.environ, {"TYPESAFE_MODEL": "jev-1.12.0"}):
+            env_client = jev.JevClient(api_key="sk-test", endpoint=self.fake.url)
+        pinned = jev.JevClient(api_key="sk-test", endpoint=self.fake.url, model="jev-1.13.0")
+        for client, name in ((env_client, "jev-1.12.0"), (pinned, "jev-1.13.0")):
+            with self.subTest(name):
+                self.assertEqual(jev.triage_diff("+x\n", client).requested_model, name)
+                self.assertEqual(self.fake.requests[-1]["body"]["model"], name)
+
+
+class TestJevEndpointIsReadLikeUrllibReadsIt(unittest.TestCase):
+    """A prefix check took ``http://localhost.example.com`` for this machine."""
+
+    def test_only_https_or_plain_http_to_this_machine_by_name(self):
+        for url in ("https://api.typesafe.ai/v1/systemone", "https://example.com:8443/v1",
+                    "http://localhost/v1", "HTTP://LOCALHOST/v1", "http://127.0.0.1:8765/v1",
+                    "http://[::1]:8765/v1"):
+            with self.subTest(allowed=url):
+                self.assertTrue(jev.endpoint_allowed(url))
+        for url in ("http://localhost.example.invalid/v1", "http://127.0.0.1.example.invalid/v1",
+                    "http://localhost@example.invalid/v1", "http://127.0.0.1:8765@example.invalid/v1",
+                    "https://user:pass@example.invalid/v1", "http://localhost./v1",
+                    "http://localhost\\@example.invalid/v1", "http://localhost%2eexample.invalid/v1",
+                    "http://localhost/v1#@example.invalid", "http://127.1/v1", "http://example.invalid/v1",
+                    "https:///v1", "ftp://localhost/v1", "file:///etc/passwd", " http://localhost/v1",
+                    "http://localhost:port/v1", "http://local host/v1", None):
+            with self.subTest(refused=url):
+                self.assertFalse(jev.endpoint_allowed(url))
+
+    def test_a_refused_endpoint_is_never_contacted(self):
+        with mock.patch.object(jev.urllib.request, "urlopen") as urlopen:
+            triage = jev.triage_diff("+x\n", jev.JevClient(api_key="sk", endpoint="http://localhost@example.invalid/v1"))
+        urlopen.assert_not_called()
+        self.assertIn("refusing to send the diff", triage.error)
+        self.assertEqual(triage.requested_model, "jev-latest")
 
 
 class TestEscalationOnlyGoesUp(unittest.TestCase):
@@ -180,7 +221,7 @@ class TestTriageThroughTheCli(unittest.TestCase):
         executed = sorted({n for line in lines for n in (line - 1, line)})
         (root / "cov.json").write_text(json.dumps({"files": {"calc.py": {"executed_lines": executed}}}))
 
-    def _run(self, root: Path, fake: _FakeJev):
+    def _run(self, root: Path, fake: _FakeJev, *extra: str):
         out = io.StringIO()
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "sk-test"}), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
@@ -189,6 +230,7 @@ class TestTriageThroughTheCli(unittest.TestCase):
                 "--test-path", "test_calc.py", "--test-id", "test_ops",
                 "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"),
                 "--full-suite-path", "", "--triage", "jev", "--triage-endpoint", fake.url,
+                *extra,
             ])
         return code, json.loads(out.getvalue())
 
@@ -200,6 +242,17 @@ class TestTriageThroughTheCli(unittest.TestCase):
             code, payload = self._run(Path(directory), fake)
         self.assertEqual(code, EXIT_MERGE, payload)
         self.assertFalse(payload["execution"]["triage"]["escalated"])
+
+    def test_the_operator_names_the_model(self):
+        fake = _FakeJev(_answer(risk="low", confidence=0.99))
+        self.addCleanup(fake.close)
+        with tempfile.TemporaryDirectory() as directory:
+            self._tree(Path(directory))
+            code, payload = self._run(Path(directory), fake, "--triage-model", "jev-1.12.0")
+        self.assertEqual(code, EXIT_MERGE, payload)
+        self.assertEqual(fake.requests[-1]["body"]["model"], "jev-1.12.0")
+        self.assertEqual(payload["execution"]["triage"]["requested_model"], "jev-1.12.0")
+        self.assertEqual(payload["policy"]["triage_model"], "jev-1.12.0")
 
     def test_confident_high_risk_tightens_until_five_mutants_are_not_enough(self):
         fake = _FakeJev(_answer(risk="high", confidence=0.9))

@@ -746,7 +746,7 @@ def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
     if not args.diff:
         return {"source": "jev", "error": "no --diff to triage", "escalated": False, "applied": {}}
     diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-    triage = triage_diff(diff_text, JevClient(endpoint=args.triage_endpoint), threshold)
+    triage = triage_diff(diff_text, JevClient(endpoint=args.triage_endpoint, model=args.triage_model), threshold)
     raised = escalation(
         triage,
         {"strength_confidence": args.strength_confidence, "coverage_floor": args.coverage_floor},
@@ -764,7 +764,7 @@ def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
 #: or label the record; a test keeps the two lists covering the parser, so a
 #: new option has to be put in one of them.
 POLICY_OPTIONS = (
-    "test_support", "triage", "triage_endpoint", "triage_threshold", "discover_claims",
+    "test_support", "triage", "triage_endpoint", "triage_model", "triage_threshold", "discover_claims",
     "max_claims", "bug_kind", "aggression", "max_rounds", "coverage_source", "coverage_floor",
     "suite_strength_floor", "strength_confidence", "serial_sides", "mutation_workers",
     "mutation_max", "census_min_mutants", "mutate_constants", "full_suite_path",
@@ -899,6 +899,11 @@ def build_parser() -> argparse.ArgumentParser:
         "run; nothing it says can make the decision more lenient.",
     )
     parser.add_argument("--triage-endpoint", help="override the Jev endpoint (default: TypeSafe's)")
+    parser.add_argument(
+        "--triage-model",
+        help="the Jev model to ask (default: TYPESAFE_MODEL, else jev-latest); the "
+        "model that answered is recorded in execution.triage",
+    )
     parser.add_argument(
         "--triage-threshold",
         type=float,
