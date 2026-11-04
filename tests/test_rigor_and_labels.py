@@ -762,9 +762,6 @@ class TestNextSteps(unittest.TestCase):
                          strength_judged=0.5, mutation=weak)
         self.assertIn("below the 0.75 floor (4/5 mutants killed)", reason)
         self.assertNotIn("small", reason)
-        # The survivor is named where an agent can act on it (3.0.18).
-        self.assertTrue(reason.endswith("see next_steps for each surviving mutant, which a test "
-                                        "that checks that line kills"), reason)
         self.assertNotIn("small", json.dumps(
             _next_steps(Decision.INCONCLUSIVE, held, None, args, coverage_ratio=1.0, mutation=weak)))
         # A sample that clears the floor is not small either, with nothing else to name.

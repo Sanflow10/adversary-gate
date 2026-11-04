@@ -128,8 +128,8 @@ class JevClient:
         if not endpoint_allowed(self.endpoint):
             # The diff and the key are sent; never over plain HTTP to a remote host.
             raise TriageError(
-                "refusing to send the diff to this endpoint: HTTPS with no user, password or "
-                f"fragment, or plain HTTP to localhost, 127.0.0.1 or ::1 only: {self.endpoint!r}"
+                "refusing to send the diff to a non-HTTPS endpoint (HTTPS with no user, password "
+                f"or fragment, or plain HTTP to localhost, 127.0.0.1 or ::1 only): {self.endpoint!r}"
             )
         body = json.dumps({"model": self.model, "state": state, "questions": questions}).encode("utf-8")
         request = urllib.request.Request(

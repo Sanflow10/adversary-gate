@@ -952,6 +952,27 @@ class TestATreeThatIsNotThereIsAUsageError(unittest.TestCase):
                 self.assertIn("is not a directory", err.getvalue())
 
 
+class TestASurvivorIsPointedAtNextSteps(unittest.TestCase):
+    """The reason named next_steps only when every mutant died (3.0.18)."""
+
+    def test_the_reason_says_where_the_survivors_are(self):
+        import argparse
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.types import Decision, Outcome
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.80, diff=None, coverage_json=None)
+        held = [mock.Mock(outcome=Outcome.VERIFIED)]
+        weak = {"measured": True, "mutants_counted": 5, "mutants_killed": 4,
+                "survivors": ["calc.py:2"], "interval": [0.5, 0.95]}
+        reason = _reason(Decision.INCONCLUSIVE, held, None, None, args, coverage_ratio=1.0,
+                         strength_judged=0.5, mutation=weak)
+        self.assertTrue(reason.endswith("(4/5 mutants killed): see next_steps for each surviving "
+                                        "mutant, which a test that checks that line kills"), reason)
+        weak["survivors"] = []
+        self.assertTrue(_reason(Decision.INCONCLUSIVE, held, None, None, args, coverage_ratio=1.0,
+                                strength_judged=0.5, mutation=weak).endswith("mutants killed)"))
+
+
 class TestOnlyAppendsTests(unittest.TestCase):
     def _check(self, old, new, rel="tests/test_x.py"):
         from adversary_gate.cli import _only_appends_tests
