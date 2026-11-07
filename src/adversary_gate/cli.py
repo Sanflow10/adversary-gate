@@ -266,6 +266,7 @@ def _too_few_mutants(mutation, args) -> Optional[int]:
     interval = m.get("interval") or [1.0]
     if (not m.get("measured") or m.get("survivors") or m.get("stillborn")
             or m.get("unmutated_lines") or m.get("blind_spots")
+            or m.get("foreign_changed_files") or m.get("deleted_files")
             or not counted or killed != counted
             or interval[0] >= args.suite_strength_floor):
         return None
@@ -297,6 +298,14 @@ def _only_appends_tests(baseline: Path, patch: Path, rel: str) -> bool:
                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Name))}
     except (SyntaxError, UnicodeDecodeError, ValueError):
         return False
+    # An import binds a name too: a new ``test_x`` over an imported one
+    # stops the baseline's test from running. A star import binds names
+    # nothing here can list, so the file is not a plain append.
+    for node in before:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if any(alias.name == "*" for alias in node.names):
+                return False
+            known.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
     return bool(added.body) and all(
         isinstance(node, ast.FunctionDef) and not node.decorator_list
         and node.name.startswith("test") and node.name not in known
