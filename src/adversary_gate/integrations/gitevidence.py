@@ -370,6 +370,12 @@ def prepare(
     tracked = [
         rel for rel in _git(repo, "ls-files", "--cached", "-z", env=index).split("\0") if rel
     ]
+    # An untracked file's hunk is written here, not by git, so its name is not
+    # quoted: a newline in it wrote a second header line, and every line of a
+    # .py file was credited to the .md path before it (3.0.18).
+    odd = [rel for rel in untracked if any(ch < " " or ch == "\x7f" for ch in rel)]
+    if odd:
+        raise EvidenceError(f"an untracked file name holds a control character: {odd[0]!r}")
     # The patch side is what a commit would hold: the tracked files as they
     # are now and the untracked ones git does not ignore. Until 3.0.11 it was
     # the working tree itself, so a file kept out by .gitignore or
@@ -380,7 +386,9 @@ def prepare(
     # describes, so every file is checked against this after it is copied.
     snapshot = _snapshot(repo, rels)
     diff_text = "".join(
-        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
+        # --no-renames: a move written as "rename from/to" has no ---/+++ pair,
+        # so the parser saw neither path and the path policy never ran on it.
+        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-renames", "--no-textconv", *text,
              "--no-color", commit, "--", pathspec, binary=True, env=index).decode("utf-8", "replace")
         for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
     )
