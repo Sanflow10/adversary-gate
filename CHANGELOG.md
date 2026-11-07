@@ -53,6 +53,18 @@ they said more, or other, than the code does.
   judged tree are written after it, the judged tree is checked against a
   snapshot taken before the diff (a change refuses the run), and the extractor
   runs from a directory made after the pass.
+- **Action: the coverage pass may not change the tree it measured.** In
+  `base-sha` mode it runs the pull request's tests in the workspace the gate
+  then judges as the patch, with the workspace writable. Every file is hashed
+  before and after it; a file changed or removed, or a new `.py`, `.pth`,
+  `.cfg`, `.ini` or `.toml`, fails the step (exit 4) and names it.
+- **Jev: a redirect is refused.** The client followed one with the key in its
+  header, to a URL the endpoint check never saw.
+- **Evidence: a move is a delete and an add.** `git diff` wrote a file moved
+  unchanged as a rename with no `---`/`+++` pair, so neither path reached the
+  path policy; both diffs (MCP and Action) now pass `--no-renames`. An
+  untracked file whose name holds a control character is refused: its hunk is
+  written by the gate, and the name was not quoted.
 - **Action: the setup steps no longer run from the checkout.** Creating the
   gate's venv, installing into it and probing the project's interpreter ran
   `python -m`/`-c` with the pull request's checkout as the working directory,
@@ -133,6 +145,13 @@ they said more, or other, than the code does.
 
 ### Fixes
 
+- **Only a change that is small is a small change.** A patch that also
+  deleted source, or changed source this engine cannot mutate, could be named
+  `human_review: small_change`, which the Action's `small-change: review`
+  passes with a warning. Unmeasured source keeps the step red.
+- **An appended test over an imported name is not an append.** A new
+  `test_x` in a baseline test file that imported `test_x`, or that has a star
+  import, replaced a test the baseline ran; it is reviewed now, like an edit.
 - **A signal death reads the same inside bubblewrap.** bwrap reports a child
   killed by signal N as exit 128 + N where an unsandboxed run reads -N; with
   the sandbox on by default, a mutant the CPU limit killed counted as
