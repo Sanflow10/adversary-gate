@@ -56,6 +56,10 @@ class TestAnUnmeasuredSourceIsNeverASmallChange(unittest.TestCase):
             with self.subTest(key):
                 self.assertIsNone(_too_few_mutants({**self.SMALL, key: files}, self._args()))
 
+    def test_a_bound_already_at_the_floor_is_not_a_small_change(self):
+        at_floor = {**self.SMALL, "interval": [0.75, 1.0]}
+        self.assertIsNone(_too_few_mutants(at_floor, self._args()))
+
     def test_a_fix_that_also_deletes_a_module_asks_for_no_small_change_review(self):
         bug, fixed = "def sub(a, b):\n    return a + b\n", "def sub(a, b):\n    return a - b\n"
         tests = "from calc import sub\n\n\ndef test_sub():\n    assert sub(5, 3) == 2\n"
@@ -229,6 +233,20 @@ class TestTheEvidenceDiffNamesBothSidesOfAMove(unittest.TestCase):
         with self.assertRaises(gitevidence.EvidenceError) as caught:
             gitevidence.prepare(repo, "HEAD", repo.parent / "work", python=sys.executable, coverage=False)
         self.assertIn("control character", str(caught.exception))
+
+    def test_an_untracked_name_with_del_is_refused(self):
+        repo = self._repo()
+        (repo / "note\x7f.py").write_text("X = 1\n")
+        with self.assertRaises(gitevidence.EvidenceError) as caught:
+            gitevidence.prepare(repo, "HEAD", repo.parent / "work", python=sys.executable, coverage=False)
+        self.assertIn("control character", str(caught.exception))
+
+    def test_an_untracked_name_with_a_space_is_kept(self):
+        repo = self._repo()
+        (repo / "my note.py").write_text("X = 1\n")
+        evidence = gitevidence.prepare(repo, "HEAD", repo.parent / "work", python=sys.executable,
+                                       coverage=False)
+        self.assertIn("my note.py", evidence.diff.read_text())
 
     def test_the_actions_script_asks_for_no_renames_on_both_diffs(self):
         script = (ROOT / "scripts" / "prepare_evidence.sh").read_text()
