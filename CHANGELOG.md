@@ -79,8 +79,8 @@ they said more, or other, than the code does.
   server pinned to `HEAD` or a local branch**: it fails closed and says why.
 - **MCP: an agent-chosen baseline is a remote tip or where `HEAD` left one.**
   Any pushed commit was accepted, an older one from before a test existed or
-  was tightened included. An agent that can move `HEAD` itself still chooses;
-  pin the baseline to close that (README, MCP section).
+  was tightened included. An agent still chooses among those; pin the
+  baseline to take that choice away (README, MCP section).
 - **MCP: the operator's policy spells out every flag.** The gate's parser
   accepts an abbreviated flag, the server's own checks read exact names, so
   an abbreviated `--sandbox` reached the gate but not the coverage pass, and an
