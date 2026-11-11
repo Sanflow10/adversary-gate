@@ -77,6 +77,13 @@ they said more, or other, than the code does.
   `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1` restores the old behaviour for a server
   whose agent cannot write the repository. **This changes behaviour for a
   server pinned to `HEAD` or a local branch**: it fails closed and says why.
+- **A test the full suite skips on the patch is weighed against the baseline.**
+  The suite's exit code says nothing for a test it skipped, and a test can
+  skip itself over something the patch changed. When the baseline's tests
+  skip more on the patch's code than on the baseline, the answer is
+  `inconclusive` and `execution.full_suite_skipped` carries both counts. The
+  check for rewritten test files has done this since 3.0.14; the full suite,
+  on by default, had not. A suite with skips costs one more baseline run.
 - **MCP: an agent-chosen baseline is a remote tip or where `HEAD` left one.**
   Any pushed commit was accepted, an older one from before a test existed or
   was tightened included. An agent still chooses among those; pin the

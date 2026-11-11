@@ -253,5 +253,99 @@ class TestTheEvidenceDiffNamesBothSidesOfAMove(unittest.TestCase):
         self.assertEqual(script.count("diff --no-ext-diff --no-renames --no-textconv"), 2)
 
 
+class TestASkipInTheFullSuiteIsWeighedAgainstTheBaseline(unittest.TestCase):
+    """The suite exits 0 with a test skipped: a test that looks for what the
+    patch removed skips itself. Skips are compared with the baseline's."""
+
+    BASE = ("def ident(x):\n    return x\n\n\ndef price(qty, unit):\n    return qty * unit\n"
+            "\n\ndef scale(x, k):\n    return x * k\n")
+    FIXED = "def ident(x):\n    return x\n\n\ndef price(qty, unit):\n    return qty * unit + 2\n"
+    SCALE = "\n\ndef scale(x, k):\n    return x * k\n"
+    T_IDENT = "import calc\n\n\ndef test_ident():\n    assert calc.ident(5) == 5\n"
+    T_SCALE = ("import pytest\n\nimport calc\n\n\n"
+               "@pytest.mark.skipif(not hasattr(calc, 'scale'), reason='no scale')\n"
+               "def test_scale():\n    assert calc.scale(2, 3) == 6\n")
+    T_PRICE = ("import calc\n\n\ndef test_price():\n    assert calc.price(1, 3) == 5\n"
+               "    assert calc.price(4, 5) == 22\n")
+
+    def _gate(self, patch_calc, *, base_tests=None, price_in_baseline=False, drop=None,
+              missing=()):
+        root = _tmp(self)
+        base = {"calc.py": self.BASE, "test_ident.py": self.T_IDENT, "test_scale.py": self.T_SCALE,
+                **(base_tests or {})}
+        if price_in_baseline:
+            base["test_price.py"] = self.T_PRICE
+        patch = {**base, "calc.py": patch_calc, "test_price.py": self.T_PRICE}
+        patch.pop(drop, None)
+        for side, files in (("baseline", base), ("patch", patch)):
+            (root / side).mkdir()
+            for name, text in files.items():
+                (root / side / name).write_text(text)
+        diff = "".join(difflib.unified_diff(
+            self.BASE.splitlines(True), patch_calc.splitlines(True), "a/calc.py", "b/calc.py"))
+        (root / "change.diff").write_text(diff)
+        lines = [n for n in range(1, len(patch_calc.splitlines()) + 1) if n not in missing]
+        (root / "coverage.json").write_text(json.dumps(
+            {"files": {"calc.py": {"executed_lines": lines, "missing_lines": list(missing)}}}))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            code = main(["--baseline", str(root / "baseline"), "--patch", str(root / "patch"),
+                         "--max-rounds", "1", "--rounds-used", "1",
+                         # A one-line fix: the floor reads the ratio (AG-023 has its own tests).
+                         "--strength-confidence", "0", "--claim", "test_price.py::test_price",
+                         "--diff", str(root / "change.diff"),
+                         "--coverage-json", str(root / "coverage.json")])
+        return code, json.loads(out.getvalue())
+
+    def test_a_test_that_skips_itself_on_the_patch_is_not_a_merge(self):
+        code, payload = self._gate(self.FIXED + self.SCALE)
+        self.assertEqual(code, 0, payload)
+        self.assertNotIn("full_suite_skipped", payload["execution"])
+        code, payload = self._gate(self.FIXED)
+        self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"],
+                         {"patch": 1, "baseline": 0, "baseline_exit": 0})
+        self.assertIn("skip 1 on the patch's code and 0 on the baseline (exit 0 there)",
+                      payload["reason"])
+        self.assertEqual(payload["next_steps"][-1],
+                         {"action": "see_reason", "flags": [], "why": payload["reason"]})
+
+    def test_a_test_skipped_on_both_sides_still_merges(self):
+        slow = ("import pytest\n\n\n@pytest.mark.skip(reason='slow')\n"
+                "def test_slow():\n    assert False\n")
+        code, payload = self._gate(self.FIXED + self.SCALE, base_tests={"test_slow.py": slow})
+        self.assertEqual(code, 0, payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"],
+                         {"patch": 1, "baseline": 1, "baseline_exit": 0})
+
+    def test_the_skip_counts_when_the_baseline_suite_is_red(self):
+        """The claim already sat in the baseline, failing: the usual fix."""
+        code, payload = self._gate(self.FIXED, price_in_baseline=True)
+        self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"],
+                         {"patch": 1, "baseline": 0, "baseline_exit": 1})
+        self.assertIn("(exit 1 there)", payload["reason"])
+
+    def test_a_failing_suite_is_a_block_and_its_skips_are_not_weighed(self):
+        broken = self.FIXED.replace("return x\n", "return x + 1\n", 1)
+        code, payload = self._gate(broken)
+        self.assertEqual((code, payload["decision"]), (1, "block"), payload)
+        self.assertNotIn("full_suite_skipped", payload["execution"])
+
+    def test_deleting_the_test_with_the_code_changes_nothing(self):
+        """The baseline's copy of a deleted test runs on the patch's code, and skips."""
+        code, payload = self._gate(self.FIXED, drop="test_scale.py")
+        self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"],
+                         {"patch": 1, "baseline": 0, "baseline_exit": 0})
+
+    def test_an_answer_that_was_not_a_merge_keeps_its_own_reason(self):
+        code, payload = self._gate(self.FIXED, missing=(6,))
+        self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"]["patch"], 1)
+        self.assertIn("coverage", payload["reason"])
+        self.assertNotIn("skip", payload["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1365,6 +1365,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         suite_oracle_record = (rewritten_tests, added_tests) if full_suite_ran else ((), ())
         oracle_full_code: Optional[int] = None
         suite_unsettled: Optional[str] = None
+        suite_skips: Optional[str] = None
 
         # The suite runs under its own limits (AG-033): the per-test ones killed
         # it on both sides (time) or made pytest die with MemoryError (address
@@ -1407,15 +1408,23 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # suite reports it (next_steps suggests --serial-sides).
         suite_future: Optional[Future] = None
 
-        def _patch_suite(patch_dir: Path, oracle_tree: Optional[Path]) -> Tuple[SandboxResult, Optional[int]]:
+        # The third value is how many tests the baseline's suite skipped on
+        # the patch's code: the oracle run when the patch touched the tests,
+        # the patch's own run when it did not. Either way the same tests the
+        # baseline runs, so the two counts compare.
+        def _patch_suite(
+            patch_dir: Path, oracle_tree: Optional[Path]
+        ) -> Tuple[SandboxResult, Optional[int], int]:
             if oracle_tree is None:
-                return _full_run(patch_dir), None
+                alone = _full_run(patch_dir)
+                return alone, None, _skipped(alone.stdout)
             patch_run, oracle_run = gate.pair(
                 lambda: _full_run(patch_dir), lambda: _full_run(oracle_tree)
             )
+            skipped = _skipped(oracle_run.stdout)
             if patch_run.exit_code == PYTEST_OK and oracle_run.exit_code != PYTEST_OK:
-                return oracle_run, oracle_run.exit_code
-            return patch_run, oracle_run.exit_code
+                return oracle_run, oracle_run.exit_code, skipped
+            return patch_run, oracle_run.exit_code, skipped
 
         if full_suite_ran and not args.serial_sides:
             suite_scratch = tempfile.TemporaryDirectory(prefix="adversary-suite-")
@@ -1644,7 +1653,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # pass is the *baseline's*, run against the patch's code. The
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
-            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int]]:
+            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int], int]:
                 if suite_oracle_files:
                     with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
                         tree = suite_oracle_tree(Path(args.baseline), Path(args.patch), Path(scratch))
@@ -1652,9 +1661,32 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 return _patch_suite(Path(args.patch), None)
 
             if suite_future is not None:
-                patch_full, oracle_full_code = suite_future.result()
+                patch_full, oracle_full_code, skipped_on_patch = suite_future.result()
             else:
-                patch_full, oracle_full_code = _patch_suite_alone()
+                patch_full, oracle_full_code, skipped_on_patch = _patch_suite_alone()
+            if patch_full.exit_code == PYTEST_OK and skipped_on_patch:
+                # A suite that passes says nothing for a test it skipped: a
+                # test that looks for what the patch removed (``skipif``,
+                # ``importorskip``) skips itself and the exit code stays 0.
+                # The rewritten-test route has weighed this since 3.0.14; the
+                # full suite, the default, never did.
+                base_full = _full_run(Path(args.baseline))
+                skipped_on_baseline = _skipped(base_full.stdout)
+                execution["full_suite_skipped"] = {
+                    "patch": skipped_on_patch, "baseline": skipped_on_baseline,
+                    "baseline_exit": base_full.exit_code,
+                }
+                # Whatever the baseline's exit: a suite that fails there (the
+                # test the patch fixes) still counts its skips, and one that
+                # could not run shows no skip the patch could have inherited.
+                if skipped_on_patch > skipped_on_baseline:
+                    suite_skips = (
+                        f"the full suite passes on the patch, but the baseline's tests skip "
+                        f"{skipped_on_patch} on the patch's code and {skipped_on_baseline} on the "
+                        f"baseline (exit {base_full.exit_code} there): a test outside the "
+                        "claims stopped running, so nothing shows the patch kept what it "
+                        "checked; run pytest -rs on both sides to see which"
+                    )
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
@@ -1664,7 +1696,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # failing is a regression; passing now is a suite that failed
                 # once, slow or flaky, which is not a pass either.
                 if suite_future is not None and base_full.exit_code == PYTEST_OK:
-                    again, again_oracle = _patch_suite_alone()
+                    again, again_oracle, _ = _patch_suite_alone()
                     execution["full_suite_rerun_alone"] = again.exit_code
                     if again.exit_code == PYTEST_OK:
                         full_codes = None
@@ -1771,6 +1803,12 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "patch kept what they checked; run the full suite"
                 )
                 unjudged_flags = ["--full-suite-path"]
+
+        if decision is Decision.MERGE and suite_skips:
+            decision = Decision.INCONCLUSIVE
+            unjudged_action = "see_reason"
+            unjudged_flags = []
+            unjudged_reason = suite_skips
 
         if decision is Decision.MERGE and claims_rewrote:
             decision = Decision.INCONCLUSIVE
