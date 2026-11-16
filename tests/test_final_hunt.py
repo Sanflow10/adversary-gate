@@ -269,7 +269,7 @@ class TestASkipInTheFullSuiteIsWeighedAgainstTheBaseline(unittest.TestCase):
                "    assert calc.price(4, 5) == 22\n")
 
     def _gate(self, patch_calc, *, base_tests=None, price_in_baseline=False, drop=None,
-              missing=()):
+              missing=(), extra=()):
         root = _tmp(self)
         base = {"calc.py": self.BASE, "test_ident.py": self.T_IDENT, "test_scale.py": self.T_SCALE,
                 **(base_tests or {})}
@@ -294,7 +294,7 @@ class TestASkipInTheFullSuiteIsWeighedAgainstTheBaseline(unittest.TestCase):
                          # A one-line fix: the floor reads the ratio (AG-023 has its own tests).
                          "--strength-confidence", "0", "--claim", "test_price.py::test_price",
                          "--diff", str(root / "change.diff"),
-                         "--coverage-json", str(root / "coverage.json")])
+                         "--coverage-json", str(root / "coverage.json"), *extra])
         return code, json.loads(out.getvalue())
 
     def test_a_test_that_skips_itself_on_the_patch_is_not_a_merge(self):
@@ -338,6 +338,24 @@ class TestASkipInTheFullSuiteIsWeighedAgainstTheBaseline(unittest.TestCase):
         self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
         self.assertEqual(payload["execution"]["full_suite_skipped"],
                          {"patch": 1, "baseline": 0, "baseline_exit": 0})
+
+    def test_the_suite_run_after_the_claims_weighs_the_skip_too(self):
+        # --serial-sides: the suite runs in place, after the claims, not alongside.
+        code, payload = self._gate(self.FIXED + self.SCALE, extra=("--serial-sides",))
+        self.assertEqual((code, payload["decision"]), (0, "merge"), payload)
+        self.assertIs(payload["execution"]["full_suite_alongside"], False)
+        for drop in (None, "test_scale.py"):
+            code, payload = self._gate(self.FIXED, drop=drop, extra=("--serial-sides",))
+            self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+            self.assertIs(payload["execution"]["full_suite_alongside"], False)
+            self.assertEqual(payload["execution"]["full_suite_skipped"],
+                             {"patch": 1, "baseline": 0, "baseline_exit": 0})
+            self.assertIn("skip 1 on the patch's code and 0 on the baseline", payload["reason"])
+        # The patch left the tests alone: no oracle tree, the patch's own run is counted.
+        code, payload = self._gate(self.FIXED, price_in_baseline=True, extra=("--serial-sides",))
+        self.assertEqual((code, payload["decision"]), (2, "inconclusive"), payload)
+        self.assertEqual(payload["execution"]["full_suite_skipped"],
+                         {"patch": 1, "baseline": 0, "baseline_exit": 1})
 
     def test_an_answer_that_was_not_a_merge_keeps_its_own_reason(self):
         code, payload = self._gate(self.FIXED, missing=(6,))
