@@ -25,10 +25,19 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from adversary_gate import cli  # noqa: E402
 from adversary_gate.cli import EXIT_INCONCLUSIVE, main  # noqa: E402
-from adversary_gate.integrations import action_review, mcp_server  # noqa: E402
+from adversary_gate.integrations import mcp_server  # noqa: E402
 from adversary_gate.integrations.gitevidence import _snapshot, prepare  # noqa: E402
 
 HAS_GIT = shutil.which("git") is not None
+
+
+def _action_review():
+    # Imported when a test runs, not with this file: a mutant that runs main()
+    # at import then fails these tests instead of stopping the whole collection.
+    from adversary_gate.integrations import action_review
+    return action_review
+
+
 GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
            "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": os.devnull}
 
@@ -134,11 +143,12 @@ class TestAClaimThatRewritesManyFilesSaysSo(unittest.TestCase):
 
 class TestTheReviewStepReadsOnlyAnObject(unittest.TestCase):
     def _run(self, stdin: str, *argv: str) -> tuple:
+        review = _action_review()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory, "out")
             with mock.patch.object(sys, "stdin", io.StringIO(stdin)), \
                     contextlib.redirect_stdout(io.StringIO()):
-                code = action_review.main([*argv, "--output", str(output)])
+                code = review.main([*argv, "--output", str(output)])
             return code, output.read_text()
 
     def test_an_answer_that_is_not_an_object_requires_no_review(self):
@@ -149,12 +159,13 @@ class TestTheReviewStepReadsOnlyAnObject(unittest.TestCase):
                 self.assertEqual(written, "review-required=false\n")
 
     def test_every_option_is_required(self):
+        review = _action_review()
         full = {"--exit-code": "2", "--mode": "review", "--output": "out"}
         for missing in full:
             argv = [x for k, v in full.items() if k != missing for x in (k, v)]
             with self.subTest(missing=missing), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as stop:
-                    action_review.main(argv)
+                    review.main(argv)
                 self.assertEqual(stop.exception.code, 2)
 
 

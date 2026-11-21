@@ -115,9 +115,6 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(newurl, code, "redirect refused", headers, fp)
 
 
-_NO_REDIRECTS = urllib.request.build_opener(_RefuseRedirects)
-
-
 class JevClient:
     """Minimal client for ``POST /v1/systemone``; stdlib only."""
 
@@ -152,11 +149,14 @@ class JevClient:
                 "Content-Type": "application/json",
             },
         )
+        # The opener is built here, not at import, so a broken handler fails
+        # this call and its tests instead of every import of the module.
+        opener = urllib.request.build_opener(_RefuseRedirects)
         try:
             # The URL is checked above (https, or loopback http for tests),
             # so no file:// or remote plain-HTTP URL reaches urlopen.
             # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            with _NO_REDIRECTS.open(request, timeout=self.timeout) as response:  # nosec B310
+            with opener.open(request, timeout=self.timeout) as response:  # nosec B310
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise TriageError(f"Jev answered HTTP {exc.code}") from exc

@@ -789,7 +789,12 @@ _CANARY = f"  # {secrets.token_hex(8)}"
 #: deleted on the same line: left bound, it showed up in ``locals()`` and in a
 #: class's ``vars()``, and an honest test of either failed on the copy (3.0.1).
 _PROBE = f"__p{secrets.token_hex(8)}__"
-_PROBE_LINE = f"{_PROBE} = 0; del {_PROBE}"
+
+
+def _probe_line() -> str:
+    # Built when it is used, not at import: a mutant that drops ``_PROBE`` then
+    # fails the canary's tests instead of the import, which no claim can judge.
+    return f"{_PROBE} = 0; del {_PROBE}"
 _SIMPLE = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Return, ast.Raise,
            ast.Assert, ast.Pass, ast.Delete, ast.Import, ast.ImportFrom, ast.Global,
            ast.Nonlocal, ast.Break, ast.Continue)
@@ -1039,7 +1044,7 @@ def canary_source(source: str, edited: set) -> Optional[str]:
     # Insertion points are found on the original lines; the comments do not move a line.
     inserts = []
     for side, at in sites:
-        inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _PROBE_LINE))
+        inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _probe_line()))
     # A claim can read a *piece* of a changed line, too: every mutant swaps a
     # token inside it, so a substring that spans one fails on every mutant and
     # scores 1.0 while checking nothing -- the comment at the end of the line

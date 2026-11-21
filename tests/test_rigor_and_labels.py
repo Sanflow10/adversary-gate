@@ -46,8 +46,8 @@ from adversary_gate.core.types import (
 from adversary_gate.sandbox.runner import SandboxResult
 from adversary_gate.verifiers.strength import (
     _CANARY,
-    _PROBE_LINE,
     DEFAULT_MAX_MUTANTS,
+    _probe_line,
     _spread,
     calculate_mutation_score,
     kills_to_clear,
@@ -1132,7 +1132,7 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("a = 1\nb = 2\nc = 3\n", {2})
         self.assertEqual(out.split("\n")[:4],
-                         ["a = 1", _PROBE_LINE, "b = 2" + _CANARY, "c = 3"])
+                         ["a = 1", _probe_line(), "b = 2" + _CANARY, "c = 3"])
 
     def test_a_probe_changes_the_tree_and_the_bytecode_but_not_the_result(self):
         import ast
@@ -1149,12 +1149,12 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
     def test_a_header_row_gets_its_probe_at_the_start_of_the_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("def f(a,\n      b):\n    return a + b\n", {1})
-        self.assertIn(f"    {_PROBE_LINE}\n    return a + b", out)
+        self.assertIn(f"    {_probe_line()}\n    return a + b", out)
 
     def test_a_decorator_row_gets_its_probe_in_the_decorated_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("@staticmethod\ndef f():\n    return 1\n", {1})
-        self.assertIn(f"    {_PROBE_LINE}\n    return 1", out)
+        self.assertIn(f"    {_probe_line()}\n    return 1", out)
 
     def test_a_statement_that_shares_its_line_is_probed_in_front_of_the_line(self):
         # It used to have no place, so nothing was measured; in front of the
@@ -1162,7 +1162,7 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         # has no place inside it (see TestTheProbeStaysNeutralWhereAStatementCannotGo).
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("x = 1; y = 2\n", {1})
-        self.assertTrue(out.startswith(_PROBE_LINE + "\nx = 1; y = 2"), out)
+        self.assertTrue(out.startswith(_probe_line() + "\nx = 1; y = 2"), out)
 
     def test_no_canary_when_there_is_nothing_to_probe(self):
         from adversary_gate.verifiers.strength import canary_source
