@@ -798,12 +798,21 @@ def _policy(args: argparse.Namespace) -> Dict[str, Any]:
     return policy
 
 
-def _changed_in_copy(original: Path, copy: Path) -> List[str]:
+def _changed_in_copy(original: Path, copy: Path, ignore: Sequence[Path] = ()) -> List[str]:
     """Files of ``original`` that are changed or gone in ``copy``, the tree the claims ran in.
 
     Files a run added are not counted: tests write reports and caches. A file
     the tree shipped, changed, is the tests rewriting what they are judged on.
     """
+    # ``ignore`` holds the gate's own files (its evidence log): the gate writes
+    # them into ``original`` while the claims run, so they differ from the copy.
+    root = original.resolve()
+    skip = set()
+    for path in ignore:
+        try:
+            skip.add(path.resolve().relative_to(root).as_posix())
+        except ValueError:
+            pass
     changed: List[str] = []
     for current, dirs, files in os.walk(original):
         dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".pytest_cache")]
@@ -812,6 +821,8 @@ def _changed_in_copy(original: Path, copy: Path) -> List[str]:
                 continue
             source = Path(current) / name
             rel = source.relative_to(original).as_posix()
+            if rel in skip:
+                continue
             target = copy / rel
             if source.is_symlink():
                 same = target.is_symlink() and os.readlink(source) == os.readlink(target)
@@ -1489,9 +1500,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             for claim in claims
         ]
         all_verified = bool(verdicts) and all(v.outcome is Outcome.VERIFIED for v in verdicts)
+        # The evidence log can sit inside a tree (the Action's default,
+        # ``evidence.jsonl``, is in the workspace it judges as the patch), and
+        # the gate appends to it while the claims run: that is not a rewrite.
+        own_files = log.files() if log is not None else []
         claims_rewrote = sorted(
             f"{side}/{rel}" for side, source in (("baseline", args.baseline), ("patch", args.patch))
-            for rel in _changed_in_copy(Path(source), claim_trees[side])
+            for rel in _changed_in_copy(Path(source), claim_trees[side], ignore=own_files)
         )
         execution["claims_rewrote"] = claims_rewrote
 
