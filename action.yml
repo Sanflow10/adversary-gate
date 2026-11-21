@@ -145,6 +145,9 @@ inputs:
       With 'review', that one case passes the step with a warning that a
       person must review the change, and review-required is 'true'; every
       other INCONCLUSIVE still fails. It never turns anything into a merge.
+      The step then succeeds, so auto-merge or a merge bot can merge the
+      change with no one looking, unless the branch requires an approving
+      review. Require one, or act on the review-required output.
     required: false
     default: 'fail'
   bug-kind:

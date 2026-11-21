@@ -57,26 +57,44 @@ The CLI below runs the same gate anywhere else.
 
 ### First run, in one minute
 
-From the root of a git repository whose agent's change sits on top of `main`
-(new files tracked: `git add -N` them), with `pip install adversary-gate coverage`:
+From the root of a git repository with the agent's change in the working tree,
+not committed yet (new files tracked: `git add -N` them), with
+`pip install adversary-gate coverage`.
+
+Before you paste:
+
+- **`BASE`** is the commit the agent started from. Your default branch may be
+  `master`, not `main` (git's default without `init.defaultBranch`). If the
+  agent already committed its change, use the commit before it: `main~1` or
+  `master~1`.
+- **Run the lines one at a time.** The block does not stop on an error: with no
+  baseline the gate exits 3, writes no answer, and the `python` line then fails
+  on an empty file. Stop at a git or coverage error and fix it; the gate's own
+  exit 1 or 2 is its answer, not a failure. If you stop midway, run the last
+  line (`git worktree remove`) before you start again.
 
 ```bash
-BASE=main                                         # the commit before the agent's change
+BASE=main                                         # or master: the commit before the agent's change
 W=$(mktemp -d)
 git worktree add -q --detach "$W/before" "$BASE"  # the baseline, exactly as committed
 git diff --no-ext-diff "$BASE" > "$W/changes.diff"  # baseline -> your working tree
-coverage run -m pytest -q && coverage json -q -o "$W/coverage.json"
+coverage run -m pytest -q; coverage json -q -o "$W/coverage.json"  # ';' not '&&': a failing test is the gate's to judge
 adversary-gate --baseline "$W/before" --patch . \
   --claim tests/test_shop.py::test_discount_never_negative \
   --diff "$W/changes.diff" --coverage-json "$W/coverage.json" > "$W/answer.json"
-echo "exit $?"                                    # 0 MERGE, 1 BLOCK, 2 INCONCLUSIVE
-python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'], '-', a['reason'])" "$W/answer.json"
+echo "exit $?"                                    # 0 MERGE, 1 BLOCK, 2 INCONCLUSIVE, 3 usage error (no answer written)
+python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'], '-', a['reason']); print(json.dumps(a.get('next_steps'), indent=1))" "$W/answer.json"
 git worktree remove --force "$W/before"
 ```
 
-Replace the `--claim` with the test that proves your fix (`path::test`).
-`--detach` is there because `git worktree add` refuses a branch that is
-already checked out, and `main` usually is.
+- **`--claim`**: replace it with the test that proves your fix (`path::test`).
+- **`--detach`** is there because `git worktree add` refuses a branch that is
+  already checked out, and `main` usually is.
+- **The sandbox:** where bubblewrap (`bwrap`) is installed and can start, the
+  tests run inside it; where it is not (macOS, Android/Termux, some
+  containers), they run without one, with the same network and files as you.
+  Nothing is printed about it; the answer says which ran in
+  `execution.sandbox` and `execution.sandbox_note`.
 
 On a correct **one-line** fix the first answer is usually `exit 2` with
 `every claim held and the fix is proven, but suite strength's lower bound is ...`.
@@ -87,13 +105,17 @@ on the share the tests kill) takes at least 5. Then one of two things:
 
 - **Every mutant killed** (`1/1`, `3/3`): the reason ends with `the change is too
   small to measure at this floor ...; see next_steps`. The fix is proven; a
-  person reviews the change (the Action's `small-change: review` does that).
+  person has to review the change (the Action's `small-change: review` passes
+  the step with a warning for that, so keep a required review on the branch).
 - **A mutant survived** (`0/3`, `2/3`): your test runs the line but does not
   check what the break changed. `next_steps` names the line. For a fix to
   `return max(0, price - price * pct / 100)`, `assert discount(100, 150) >= 0`
   kills none of the three; `== 0` kills two (`price * pct * 100` is negative
   too, and `max` hides it); adding `assert discount(100, 10) == 90` kills all
-  three.
+  three. It has to be in a test you name with `--claim`: only those face the
+  mutants, so the same assertion in another test of the suite does not count.
+  Name more than one with `--claim` (see
+  [Which tests?](#which-tests-name-several-or-let-coverage-say)).
 
 Neither is a failure of the fix. See
 [Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
@@ -299,7 +321,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.17` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.18` carries every fix, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -367,7 +389,7 @@ unsupported: each lacks fail-open fixes (a patch reaching `MERGE` it should
 not) that came after it. To pin the version:
 
 ```bash
-pip install adversary-gate==3.0.17
+pip install adversary-gate==3.0.18
 ```
 
 The same build is attached to the GitHub Release, at a plain public URL — no
@@ -375,7 +397,7 @@ PyPI, no GitHub login:
 
 ```bash
 # The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.17/adversary_gate-3.0.17-py3-none-any.whl
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.18/adversary_gate-3.0.18-py3-none-any.whl
 ```
 
 Or follow `main` instead of a release:

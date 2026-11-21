@@ -32,9 +32,7 @@ the Release workflow uploaded by token whenever `PYPI_API_TOKEN` existed.
 
 ## [Unreleased]
 
-A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
-correspondente é uma promessa de artefato que não existe, e o bump só acontece
-quando esta seção vira uma com versão e data.
+## [3.0.18] — 2026-11-21
 
 Holes found by a read-only review of 3.0.17 against the question "what would
 a sceptical auditor ask for", by a reader of the code and by the release's own
