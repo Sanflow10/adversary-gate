@@ -13,10 +13,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
 
 Versions before 3.0.4 are unsupported; their sections below are history.
 
-Only the latest release is distributed. The tags, GitHub Releases and PyPI
-files of earlier versions are no longer published, so the routes the sections
-below name for them (`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a
-release wheel URL) no longer resolve.
+Versions before 3.0.4 are no longer distributed: their tags, GitHub Releases
+and PyPI files were removed, so the routes the sections below name for them
+(`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a release wheel URL) no
+longer resolve. From 3.0.4 on, every release stays published; one superseded
+by a security fix is yanked on PyPI, so pip skips it unless it is pinned
+exactly, and then warns.
 
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
 no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
@@ -58,11 +60,14 @@ they said more, or other, than the code does.
   `.cfg`, `.ini` or `.toml`, fails the step (exit 4) and names it.
 - **Jev: a redirect is refused.** The client followed one with the key in its
   header, to a URL the endpoint check never saw.
-- **Evidence: a move is a delete and an add.** `git diff` wrote a file moved
-  unchanged as a rename with no `---`/`+++` pair, so neither path reached the
-  path policy; both diffs (MCP and Action) now pass `--no-renames`. An
-  untracked file whose name holds a control character is refused: its hunk is
-  written by the gate, and the name was not quoted.
+- **Jev: the endpoint is checked as urllib reads it.** It is parsed now:
+  `https` with no user, password or fragment, or plain `http` to `localhost`,
+  `127.0.0.1` or `::1` named exactly. Anything else is refused before a
+  request is built.
+- **Evidence: a move is a delete and an add.** Both diffs (MCP and Action)
+  now pass `--no-renames`, so a moved file reaches the path policy under both
+  of its paths. An untracked file whose name holds a control character is
+  refused.
 - **Action: the setup steps no longer run from the checkout.** Creating the
   gate's venv, installing into it and probing the project's interpreter ran
   `python -m`/`-c` with the pull request's checkout as the working directory,
@@ -110,14 +115,15 @@ they said more, or other, than the code does.
   assignment are drawn at random for each run, it and every mutant end in a
   comment line of a random length, and every copy keeps the times of the file
   it replaces.
-- **MCP: a file rewritten in the same second as `git add` is in the diff.** The
-  diff ran on a copy of the index that git trusted more than its own; a file
-  rewritten at the same size within that second was left out.
-- **A module imported by a name built at run time is judged as code.** The
-  import resolver reads literal names only, so a test-folder module reached
-  through `importlib.import_module` or `__import__` with a built name (`".".join(...)`)
-  stayed a test and was reverted to the baseline's copy. Both calls now count
-  as running text, like `exec`: the module they name is code.
+- **MCP: the diff reads the files themselves.** It no longer trusts a copy of
+  the index for which files changed.
+- **A module imported by a name built at run time is judged as code.**
+  `importlib.import_module` and `__import__` with a computed name now count as
+  running text, like `exec`: the module they name is code.
+- **A patch of tests alone that edits a baseline test goes to a person.** The
+  edited copy that would land is not measured, so the answer is
+  `INCONCLUSIVE`, with a `human_review_test_edit` step naming the file. New
+  test files, and plain new tests appended to a baseline file, still merge.
 
 ### Defaults
 
@@ -154,9 +160,9 @@ they said more, or other, than the code does.
   deleted source, or changed source this engine cannot mutate, could be named
   `human_review: small_change`, which the Action's `small-change: review`
   passes with a warning. Unmeasured source keeps the step red.
-- **An appended test over an imported name is not an append.** A new
-  `test_x` in a baseline test file that imported `test_x`, or that has a star
-  import, replaced a test the baseline ran; it is reviewed now, like an edit.
+- **An appended test that can replace an imported one is reviewed like an
+  edit.** A new test function in a baseline test file is no longer taken for
+  a plain append when the file imports a name it could replace.
 - **A signal death reads the same inside bubblewrap.** bwrap reports a child
   killed by signal N as exit 128 + N where an unsandboxed run reads -N; with
   the sandbox on by default, a mutant the CPU limit killed counted as
@@ -165,13 +171,21 @@ they said more, or other, than the code does.
   file's baseline tests hold on the patch was cached on the `Gate`, keyed by
   the trees' paths; it is kept for the run now, like the scans of 3.0.17.
   CLI, MCP and Action create one `Gate` per process and were not affected.
+- **Jev triage sends a model.** TypeSafe's API requires one and the client
+  sent none, so every triage answered an error and changed nothing. It sends
+  `jev-latest` unless `TYPESAFE_MODEL` or the new `--triage-model` names one;
+  `execution.triage` records the model asked for and the one that answered.
+- **A missing tree is a usage error.** A `--baseline` or `--patch` that is not
+  a directory read as an empty tree, with a reason that blamed the other one.
+  It is exit 3 now, naming the flag.
 
 ### Docs
 
 - Corrected against the code: a test that passes on the baseline and hangs on
   the patch is `REFUTED`, not unverified; blank and comment-only lines are out
-  of the coverage ratio (AG-040); the `pyvenv.cfg` rule since 3.0.11; the two
-  operator choices that relax the MERGE conditions; which resource limits
+  of the coverage ratio (AG-040); the `pyvenv.cfg` rule since 3.0.11; the
+  operator choices that relax the MERGE conditions, and the limits `next_steps`
+  can name; more of the causes of `INCONCLUSIVE`; which resource limits
   apply to which run; a module name written out in `importlib.import_module`
   or `__import__` is read; the evidence log is not tamper-evident (moved from
   the report-worthy list to the known limitations); bwrap drops capabilities
@@ -181,6 +195,13 @@ they said more, or other, than the code does.
   site. Two limits are written down: without the sandbox the gate's runs share
   the machine, and a claim that normalises the code's structure can still
   tell a mutant from the patch (SECURITY.md, Known limitations).
+- **No outside code and no CLA.** CONTRIBUTING says the code is written by the
+  maintainer alone and lists what is welcome instead: private fail-open
+  reports, bug reports with a reproduction, feature requests. `CLA.md` is
+  gone, and the release process moved to `docs/RELEASING.md`.
+- **Which releases stay published.** The README and this file said only the
+  latest release was; every release from 3.0.4 on still is. That stays, and a
+  release superseded by a security fix is yanked on PyPI instead of removed.
 
 ---
 

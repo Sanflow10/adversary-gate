@@ -213,7 +213,7 @@ adversary-gate --baseline before --patch after \
       --test-path run_tests.sh --test-command "./run_tests.sh"
 
 # 2. every run is wrapped in bubblewrap by default wherever it can run
-#    (no network, private PID//tmp, read-only system, only the repo
+#    (no network, private PID and /tmp, read-only system, only the repo
 #    writable); --sandbox bwrap refuses to start without it
 adversary-gate ... --sandbox bwrap
 
@@ -245,7 +245,9 @@ Exit Codes for CI Integration:
 ### GitHub Action Integration (`action.yml`)
 
 **One ref in.** `base-sha` derives the baseline, the diff and the coverage
-report itself, so the first thing you install is not an `INCONCLUSIVE`:
+report itself, so a first run is not `INCONCLUSIVE` for want of evidence (a
+change too small to measure still can be: see
+[Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive)):
 
 ```yaml
 name: Verification Gate
@@ -321,7 +323,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.18` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.18` is the newest release, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -440,7 +442,7 @@ Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`
 
 | Variable | Why the agent may not set it |
 |---|---|
-| `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused, and so is a flag not spelled out in full (3.0.18). |
+| `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, which sends the diff out of the machine, see below; floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused, and so is a flag not spelled out in full (3.0.18). |
 | `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the agent's `base_ref` (default `HEAD`) must already be on a remote-tracking branch — a commit the agent made locally is refused with `inconclusive` and nothing runs (3.0.11; before, any commit was taken) — and be a remote tip or the point where `HEAD` left one (3.0.18). That narrows which commits an agent can name; it does not make the choice the operator's, so pin the baseline when it matters; the answer says `"baseline_chosen_by": "agent"`. An agent that can push, write `.git/refs/remotes` or move `HEAD` itself gets past that check. **Pin a commit id or a remote-tracking ref (`origin/main`)**: a pin on a local branch, a tag or `HEAD` moves when the agent commits or tags, so it is refused with `inconclusive` unless `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1` says the agent cannot write the repository (3.0.18). Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
 | `ADVERSARY_GATE_PYTHON` | the interpreter's site-packages are harness too — a plugin installed there runs inside pytest. Use one the agent cannot write to. |
 | `ADVERSARY_GATE_REQUIRE_PINNED_BASE` | `1` makes the pin above mandatory: without `ADVERSARY_GATE_BASE_REF`, `verify_repo` answers `inconclusive` and runs nothing, rather than judge against a baseline the agent named. Off by default, so servers that rely on `base_ref` keep working; `gate_policy` reports it as `baseline_pin_required`. |
@@ -454,7 +456,7 @@ export TYPESAFE_API_KEY=sk-...
 adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70 by default
 ```
 
-[Jev](https://www.datacamp.com/blog/system-one-models-jev) is a calibrated decision model: text and a schema in, a typed answer with a probability out, in ~100 ms. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
+[Jev](https://www.datacamp.com/blog/system-one-models-jev) is a decision model: text and a schema in, a typed answer with a probability out. Its makers describe it as calibrated and answering in about 100 ms; neither is measured here. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
 
 - **The diff leaves the machine**, truncated to 64 KiB. That is why it is opt-in. It is the whole diff: removed lines as well as added ones, and, through the MCP server, every untracked file git does not ignore (a `.env` left outside `.gitignore` included). Nothing is filtered for secrets. TypeSafe's terms for what it keeps are in its [data processing addendum](https://typesafe.ai/legal/data-processing).
 - The endpoint must be `https`, or plain `http` to `localhost`, `127.0.0.1` or `::1` for a local test server; a URL with a user, a password or a fragment is refused (3.0.18). The key goes in the same request.
@@ -487,16 +489,18 @@ adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70
   network service — you must publish your changes under the AGPL.
 - **If you ship a modified copy**, the [NOTICE](NOTICE) adds the terms that
   section 7 of the AGPL allows: keep the NOTICE and the attribution, mark the
-  copy as modified, and do not present it as AdversaryGate.
+  copy as modified, do not present it as AdversaryGate, and do not use the
+  names Sanflow or Sanflow10 to promote it.
 - **If your legal team cannot accept the AGPL**, a commercial license is
   available: write to sanflow086@gmail.com.
 
 ### Rolling it out
 
 1. **Advisory first.** Run the Action on pull requests with
-   `continue-on-error: true` for a few weeks and read the `INCONCLUSIVE`
-   reasons. Most first answers are a small change or an uncovered line, not a
-   bad patch, and `next_steps` says which.
+   `continue-on-error: true` for a few weeks, which lets every answer through,
+   a `BLOCK` included, and read the `BLOCK` and `INCONCLUSIVE` reasons. Most
+   first answers are a small change or an uncovered line, not a bad patch,
+   and `next_steps` says which.
 2. **Keep the policy where the agent cannot write it.** The floors and flags
    live in the workflow file; protect it (CODEOWNERS, branch protection). An
    agent that can edit them, or pass `--coverage-floor 0`, grades itself.
@@ -512,4 +516,4 @@ are what apply.
 
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
-Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Only the latest release is distributed: the tags, GitHub Releases and PyPI files of earlier versions are no longer published.
+Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Versions before 3.0.4 are no longer distributed. From 3.0.4 on, every release stays published; one superseded by a security fix is yanked on PyPI, so pip skips it unless it is pinned exactly, and then warns.

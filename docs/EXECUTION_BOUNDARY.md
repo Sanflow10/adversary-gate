@@ -48,7 +48,7 @@ Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged us
 
 **Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
 
-The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root. Your project's dependencies are not in it, so extend it:
+The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root, and tells git to trust any repository mounted into it (`safe.directory '*'`), so mount only a throwaway copy. Your project's dependencies are not in it, so extend it:
 
 ```dockerfile
 FROM adversary-gate-mcp            # docker build -t adversary-gate-mcp .

@@ -22,6 +22,8 @@ USER 10001
 ENV HOME=/home/gate
 
 # Policy belongs to whoever runs the container, never to the agent calling it:
-#   -e ADVERSARY_GATE_BASE_REF=origin/main -e ADVERSARY_GATE_POLICY="--sandbox bwrap"
-# Mount the repository to judge, e.g. -v "$PWD":/work, and pass repo=/work.
+#   -e ADVERSARY_GATE_BASE_REF=origin/main -e ADVERSARY_GATE_POLICY="--coverage-floor 0.9"
+# This image has no bubblewrap, so the tests run unsandboxed inside it, and git
+# trusts any repository mounted into it: mount a throwaway clone, never your
+# working tree (e.g. -v "$PWD/throwaway":/work), and pass repo=/work.
 ENTRYPOINT ["adversary-gate-mcp"]
