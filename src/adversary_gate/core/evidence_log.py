@@ -47,6 +47,11 @@ class EvidenceLog:
         self.context = dict(context or {})
         self._lock = threading.Lock()
 
+    def files(self) -> List[Path]:
+        """The log and every rotated copy it may write, oldest last."""
+        return [self.path] + [self.path.with_suffix(self.path.suffix + f".{i}")
+                              for i in range(1, self.backup_count + 1)]
+
     def _rotate_if_needed(self, incoming: int) -> None:
         if self.backup_count == 0 or self.max_bytes <= 0 or not self.path.exists():
             return

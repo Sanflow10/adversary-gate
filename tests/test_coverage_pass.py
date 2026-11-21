@@ -16,11 +16,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import json
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+sys.path.insert(0, str(SRC))
 
 def _bwrap_runs_here() -> bool:
     """Raw bwrap with a network namespace, none of the gate's arguments: GitHub's
@@ -138,6 +140,86 @@ class TestTheActionRunsItsOwnGate(unittest.TestCase):
             with self.subTest(flags=flags):
                 self.assertIn(" -I", flags)
         self.assertNotIn('PYTHONPATH="${{ github.action_path }}/src"', text)
+
+    def test_no_python_runs_from_the_checkout_before_the_sandbox(self):
+        """The setup steps ran ``python -m venv``, ``-m pip`` and ``-c 'import
+        pytest'`` in the checkout, without ``-I``: a ``venv/`` or ``pip/`` at
+        the root of the PR ran in place of the module, before any sandbox and
+        with the gate's own venv in reach (3.0.18). Every ``-m``/``-c`` call
+        is isolated, or its step has left the checkout first."""
+        import re
+        text = (ROOT / "action.yml").read_text()
+        steps = text.split("    - name: ")[1:]
+        seen = 0
+        for step in steps:
+            left = step.find('cd "${RUNNER_TEMP}/adversary-gate/cwd"')
+            for call in re.finditer(r'"\$(?:[A-Z_]*PYTHON|PROJECT|found|VENV/bin/python)"((?: -[A-Za-z]+)+)', step):
+                flags = call.group(1)
+                if not re.search(r" -[mc]\b", flags):
+                    continue
+                seen += 1
+                with self.subTest(step=step.splitlines()[0], call=call.group(0)):
+                    self.assertTrue(" -I" in flags or 0 <= left < call.start())
+        self.assertGreaterEqual(seen, 6)
+
+
+class TestASmallChangeCanBeRoutedToAPerson(unittest.TestCase):
+    """small-change: review passes the step for one INCONCLUSIVE only -- a change
+    too small to measure, where every other measurement held -- and still
+    reports it; the default fails as before (3.0.18)."""
+
+    SMALL = json.dumps({"decision": "inconclusive", "human_review": {"kind": "small_change"}})
+    OTHER = json.dumps({"decision": "inconclusive", "human_review": None})
+
+    def _run(self, answer, exit_code, mode):
+        import contextlib
+        import io
+        from unittest import mock
+
+        from adversary_gate.integrations import action_review
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "out"
+            printed = io.StringIO()
+            with mock.patch("sys.stdin", io.StringIO(answer)), contextlib.redirect_stdout(printed):
+                code = action_review.main(["--exit-code", str(exit_code), "--mode", mode,
+                                           "--output", str(output)])
+            written = output.read_text() if output.exists() else ""
+        return code, written, printed.getvalue()
+
+    def test_review_passes_only_a_small_change(self):
+        self.assertEqual(self._run(self.SMALL, 2, "review")[0], 0)
+        code, written, printed = self._run(self.SMALL, 2, "review")
+        self.assertEqual(written, "review-required=true\n")
+        self.assertIn("::warning", printed)
+        self.assertEqual(self._run(self.OTHER, 2, "review")[0], 2)  # any other INCONCLUSIVE fails
+        self.assertEqual(self._run(self.SMALL, 1, "review")[0], 1)  # never over a BLOCK
+        self.assertEqual(self._run(self.SMALL, 2, "fail")[0], 2)    # the default fails
+        self.assertEqual(self._run("not json", 2, "review")[:2], (2, "review-required=false\n"))
+
+    def test_an_unknown_mode_is_a_usage_error(self):
+        code, written, printed = self._run(self.SMALL, 2, "maybe")
+        self.assertEqual(code, 3)
+        self.assertIn("::error", printed)
+
+    def test_it_runs_as_a_module(self):
+        import io
+        import runpy
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            argv = ["action_review", "--exit-code", "0", "--mode", "fail",
+                    "--output", str(Path(directory) / "out")]
+            with mock.patch("sys.argv", argv), mock.patch("sys.stdin", io.StringIO("{}")), \
+                    self.assertRaises(SystemExit) as done:
+                runpy.run_module("adversary_gate.integrations.action_review", run_name="__main__")
+        self.assertEqual(done.exception.code, 0)
+
+    def test_the_action_uses_it(self):
+        text = (ROOT / "action.yml").read_text()  # as text: PyYAML is not a dependency
+        small = text[text.index("  small-change:\n"):text.index("  bug-kind:\n")]
+        self.assertIn("default: 'fail'", small)
+        self.assertIn("  review-required:\n", text[text.index("outputs:"):text.index("runs:")])
+        self.assertIn('-I -m adversary_gate.integrations.action_review --exit-code "$EXIT_CODE"', text)
+        self.assertTrue(text.rstrip().endswith("exit $FINAL") or "exit $FINAL" in text)
 
 
 if __name__ == "__main__":

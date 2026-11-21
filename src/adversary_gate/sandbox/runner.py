@@ -33,7 +33,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 try:
     import resource
@@ -101,6 +101,41 @@ _SYSTEM_RO = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc")
 def bwrap_available() -> bool:
     """Whether an optional real sandbox can be requested at all."""
     return shutil.which("bwrap") is not None
+
+
+#: What ``auto`` came to for each interpreter: probed once per process.
+_AUTO: Dict[str, Tuple[str, str]] = {}
+_AUTO_LOCK = threading.Lock()
+
+
+def resolve_sandbox(sandbox: Optional[str], python: Optional[str] = None) -> Tuple[str, str]:
+    # ``(the sandbox a run uses, why it is not bwrap)`` for the one requested.
+    # ``auto`` is bwrap wherever bwrap can run the project's interpreter, and
+    # no sandbox elsewhere -- said in the answer, never silently (3.0.18; the
+    # default was no sandbox). A missing binary, a kernel without user
+    # namespaces or an interpreter the sandbox cannot see all fall back.
+    if sandbox != "auto":
+        return sandbox or "none", ""
+    interpreter = python or sys.executable
+    with _AUTO_LOCK:
+        if interpreter not in _AUTO:
+            _AUTO[interpreter] = _probe_bwrap(interpreter)
+        return _AUTO[interpreter]
+
+
+def _probe_bwrap(interpreter: str) -> Tuple[str, str]:
+    if not bwrap_available():
+        return "none", "bwrap is not on PATH"
+    with tempfile.TemporaryDirectory(prefix="adversary-probe-") as scratch:
+        argv = bwrap_prefix(Path(scratch), python=interpreter) + [interpreter, "-c", "pass"]
+        try:
+            probe = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return "none", f"bwrap did not start: {exc}"
+    if probe.returncode != 0:
+        detail = (probe.stderr.strip().splitlines() or [f"exit {probe.returncode}"])[-1]
+        return "none", f"bwrap could not run {interpreter}: {detail[:200]}"
+    return "bwrap", ""
 
 
 def bwrap_prefix(repo_dir: Path, python: Optional[str] = None,
@@ -292,6 +327,9 @@ def _limit_resources(
 #: child (``communicate``) is not, which is where the time goes.
 _SPAWN_LOCK = threading.Lock()
 
+#: Signal numbers a death under bwrap can report as 128 + N.
+_SIGNALS = frozenset(int(s) for s in signal.valid_signals())
+
 #: One bytecode cache per interpreter, warmed once per gate process.
 _BYTECODE_CACHES: dict = {}
 _BYTECODE_LOCK = threading.Lock()
@@ -413,6 +451,7 @@ def run_test(
     root = Path(repo_dir).resolve()
     if not root.is_dir():
         raise ValueError(f"repo_dir is not a directory: {repo_dir}")
+    sandbox, _ = resolve_sandbox(sandbox, python)
 
     safe_env = {
         "PATH": "/usr/bin:/bin",
@@ -434,7 +473,7 @@ def run_test(
         argv = bwrap_prefix(root, python=python, writable=writable,
                             readonly=[*readonly, *warm]) + argv
     elif sandbox not in (None, "", "none"):
-        raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none' or 'bwrap')")
+        raise ValueError(f"unknown sandbox: {sandbox!r} (expected 'none', 'bwrap' or 'auto')")
 
     preexec = (
         _limit_resources(cpu_seconds, mem_bytes, file_bytes, open_files, processes)
@@ -463,13 +502,21 @@ def run_test(
                 start_new_session=True,
             )
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
+        returncode = proc.returncode
+        if sandbox == "bwrap" and returncode - 128 in _SIGNALS:
+            # bwrap reports a child killed by a signal as 128 + its number;
+            # without it the same death reads -N. Read alike, a mutant the CPU
+            # limit killed was a hang without the sandbox and stillborn inside
+            # it (3.0.18). A test can exit 137 on purpose, but it can as well
+            # kill itself with SIGKILL outside bwrap: nothing new is granted.
+            returncode = 128 - returncode
         # The pytest heuristics below look for pytest's own error strings;
         # applying them to an arbitrary caller command would rewrite that
         # command's real exit code on the strength of unrelated text.
         code = (
-            proc.returncode
+            returncode
             if command
-            else _nothing_passed(_detect_harness_error(proc.returncode, stdout, stderr), stdout)
+            else _nothing_passed(_detect_harness_error(returncode, stdout, stderr), stdout)
         )
         return SandboxResult(_detect_resource_death(code, stdout, stderr), stdout, stderr, False)
     except subprocess.TimeoutExpired as exc:

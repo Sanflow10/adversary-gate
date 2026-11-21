@@ -360,7 +360,7 @@ class TestTheCanaryDoesNotRetryAFailure(unittest.TestCase):
     def test_a_claim_that_fails_once_on_the_copy_is_caught(self):
         test = ("from pathlib import Path\nfrom calc import add\n\n\ndef test_add():\n"
                 "    here = Path(__file__).parent\n"
-                "    if 'canary' in (here / 'calc.py').read_text():\n"
+                "    if '= 0; del ' in (here / 'calc.py').read_text():\n"
                 "        seen = here / '.seen'\n"
                 "        if not seen.exists():\n"
                 "            seen.write_text('1')\n"

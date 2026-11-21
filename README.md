@@ -1,6 +1,7 @@
 # AdversaryGate
 
 [![PyPI](https://img.shields.io/pypi/v/adversary-gate)](https://pypi.org/project/adversary-gate/)
+[![Downloads](https://img.shields.io/pypi/dm/adversary-gate)](https://pypistats.org/packages/adversary-gate)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![CI](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Sanflow10/adversary-gate/actions/workflows/ci.yml)
 
@@ -19,7 +20,7 @@ pip install adversary-gate
 
 ## 🎬 Watch it decide (60 seconds)
 
-![AdversaryGate — demonstração ao vivo](demo/demo.gif)
+![AdversaryGate — live demo](demo/demo.gif)
 
 **B and C are the same patch.** Same code, same tests, same execution. The only difference is that C brought evidence (`--diff` + `--coverage-json`); B brought none.
 
@@ -42,39 +43,81 @@ python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
 
 ---
 
+## 🎯 Why
+
+Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
+
+---
+
 ## 🚀 Quick Start (CLI & GitHub Action)
+
+**On GitHub, start with the [Action](#github-action-integration-actionyml)**: one input,
+`base-sha`, and it derives the baseline, the diff and the coverage report itself.
+The CLI below runs the same gate anywhere else.
 
 ### First run, in one minute
 
-From the root of a git repository whose agent's change sits on top of `main`
-(new files tracked: `git add -N` them), with `pip install adversary-gate coverage`:
+From the root of a git repository with the agent's change in the working tree,
+not committed yet (new files tracked: `git add -N` them), with
+`pip install adversary-gate coverage`.
+
+Before you paste:
+
+- **`BASE`** is the commit the agent started from. Your default branch may be
+  `master`, not `main` (git's default without `init.defaultBranch`). If the
+  agent already committed its change, use the commit before it: `main~1` or
+  `master~1`.
+- **Run the lines one at a time.** The block does not stop on an error: with no
+  baseline the gate exits 3, writes no answer, and the `python` line then fails
+  on an empty file. Stop at a git or coverage error and fix it; the gate's own
+  exit 1 or 2 is its answer, not a failure. If you stop midway, run the last
+  line (`git worktree remove`) before you start again.
 
 ```bash
-BASE=main                                         # the commit before the agent's change
+BASE=main                                         # or master: the commit before the agent's change
 W=$(mktemp -d)
-git worktree add -q "$W/before" "$BASE"           # the baseline, exactly as committed
+git worktree add -q --detach "$W/before" "$BASE"  # the baseline, exactly as committed
 git diff --no-ext-diff "$BASE" > "$W/changes.diff"  # baseline -> your working tree
-coverage run -m pytest -q && coverage json -q -o "$W/coverage.json"
+coverage run -m pytest -q; coverage json -q -o "$W/coverage.json"  # ';' not '&&': a failing test is the gate's to judge
 adversary-gate --baseline "$W/before" --patch . \
   --claim tests/test_shop.py::test_discount_never_negative \
   --diff "$W/changes.diff" --coverage-json "$W/coverage.json" > "$W/answer.json"
-echo "exit $?"                                    # 0 MERGE, 1 BLOCK, 2 INCONCLUSIVE
-python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'], '-', a['reason'])" "$W/answer.json"
+echo "exit $?"                                    # 0 MERGE, 1 BLOCK, 2 INCONCLUSIVE, 3 usage error (no answer written)
+python -c "import json,sys; a=json.load(open(sys.argv[1])); print(a['decision'], '-', a['reason']); print(json.dumps(a.get('next_steps'), indent=1))" "$W/answer.json"
 git worktree remove --force "$W/before"
 ```
 
-Replace the `--claim` with the test that proves your fix (`path::test`). On a
-correct **one-line** fix, expect this first answer:
+- **`--claim`**: replace it with the test that proves your fix (`path::test`).
+- **`--detach`** is there because `git worktree add` refuses a branch that is
+  already checked out, and `main` usually is.
+- **The sandbox:** where bubblewrap (`bwrap`) is installed and can start, the
+  tests run inside it; where it is not (macOS, Android/Termux, some
+  containers), they run without one, with the same network and files as you.
+  Nothing is printed about it; the answer says which ran in
+  `execution.sandbox` and `execution.sandbox_note`.
 
-```text
-exit 2
-inconclusive - every claim held and the fix is proven, but suite strength's lower bound is 0.38,
-below the 0.75 floor (1/1 mutants killed): the change is too small to measure at this floor,
-which takes at least 5 killed mutants; see next_steps
-```
+On a correct **one-line** fix the first answer is usually `exit 2` with
+`every claim held and the fix is proven, but suite strength's lower bound is ...`.
+To measure the tests, the gate makes *mutants*: small deliberate breaks of the
+changed lines, each of which a good test should fail on. A one-line change gives
+one to three of them, and the floor (by default, a cautious lower bound of 0.75
+on the share the tests kill) takes at least 5. Then one of two things:
 
-That is not a failure: the fix *is* proven, and the gate says plainly that it
-could not measure how strong the tests are on a change this small. See
+- **Every mutant killed** (`1/1`, `3/3`): the reason ends with `the change is too
+  small to measure at this floor ...; see next_steps`. The fix is proven; a
+  person has to review the change (the Action's `small-change: review` passes
+  the step with a warning for that, so keep a required review on the branch).
+- **A mutant survived** (`0/3`, `2/3`): your test runs the line but does not
+  check what the break changed. `next_steps` names the line. For a fix to
+  `return max(0, price - price * pct / 100)`, `assert discount(100, 150) >= 0`
+  kills none of the three; `== 0` kills two (`price * pct * 100` is negative
+  too, and `max` hides it); adding `assert discount(100, 10) == 90` kills all
+  three. It has to be in a test you name with `--claim`: only those face the
+  mutants, so the same assertion in another test of the suite does not count.
+  Name more than one with `--claim` (see
+  [Which tests?](#which-tests-name-several-or-let-coverage-say)).
+
+Neither is a failure of the fix. See
 [Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
 
 ### Command-Line Usage
@@ -91,6 +134,9 @@ adversary-gate \
   --evidence-log evidence.jsonl \
   --report
 ```
+
+`--model` (which model wrote the patch) and `--report` (the metrics report on
+stderr) are optional.
 
 Produce the two artefacts in your own pipeline, for example:
 
@@ -143,7 +189,7 @@ adversary-gate ... --python .venv/bin/python \
 | `--full-suite-timeout` | `900` | wall-clock seconds for the collateral full-suite run |
 | `--full-suite-cpu-seconds` | none | CPU seconds for the collateral full-suite run |
 | `--full-suite-memory` | `4G`; `none` on Android | address space for the collateral full-suite run |
-| `--memory` | `512M`; `none` on Android | address space per run (`K`/`M`/`G`); `none` — the JVM and Node cannot start under one |
+| `--memory` | `512M`; `none` on Android | address space per run (`K`/`M`/`G`); use `none` for the JVM and Node, which cannot start under one |
 | `--pass-env NAME` | — | copy a variable into the runs (they start from a minimal environment) |
 | `--env NAME=VALUE` | — | set one |
 | `--serial-sides` | off | run the baseline and patch sides of a check one after the other instead of together, and the full suite after the claims and mutants instead of alongside the claims; forces `--mutation-workers 1` (small machines; tests that share a fixed `/tmp` path or a port). The mutants never run beside the suite either way (AG-043) |
@@ -166,8 +212,9 @@ the harness dying, not as a failing test: it says nothing about the patch.
 adversary-gate --baseline before --patch after \
       --test-path run_tests.sh --test-command "./run_tests.sh"
 
-# 2. wrap every run in bubblewrap: no network, private PID//tmp,
-#    read-only system, only the repo writable
+# 2. every run is wrapped in bubblewrap by default wherever it can run
+#    (no network, private PID and /tmp, read-only system, only the repo
+#    writable); --sandbox bwrap refuses to start without it
 adversary-gate ... --sandbox bwrap
 
 # 3. both together -- the usual shape for a patch from someone else
@@ -177,8 +224,13 @@ adversary-gate ... --test-command "make check" --sandbox bwrap \
 
 `--test-command` needs no `--test-id` (there are no node IDs to name), and it
 feeds the collateral full-suite run too unless you pass `--full-suite-command`.
-`--sandbox bwrap` needs [bubblewrap](https://github.com/containers/bubblewrap)
-installed and refuses to start without it — see
+The default, `--sandbox auto`, uses [bubblewrap](https://github.com/containers/bubblewrap)
+wherever it can run the project's interpreter and says in the answer when it
+could not; `--sandbox bwrap` refuses to start without it; `--sandbox none`
+turns it off for tests that need the network. Inside it the tests get no
+network, their own process, IPC and hostname namespaces, a private `/tmp` and
+no capabilities (`--cap-drop ALL`). There is no seccomp filter and the kernel is
+the host's: it contains a buggy patch, not a hostile one. See
 [Execution boundary](docs/EXECUTION_BOUNDARY.md)
 for exactly what it does and does not contain.
 
@@ -193,7 +245,9 @@ Exit Codes for CI Integration:
 ### GitHub Action Integration (`action.yml`)
 
 **One ref in.** `base-sha` derives the baseline, the diff and the coverage
-report itself, so the first thing you install is not a `INCONCLUSIVE`:
+report itself, so a first run is not `INCONCLUSIVE` for want of evidence (a
+change too small to measure still can be: see
+[Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive)):
 
 ```yaml
 name: Verification Gate
@@ -269,7 +323,7 @@ the one your `setup-python` step put there — or on the interpreter you name wi
 `timeout`, `cpu-seconds`, `memory`, `pass-env` and `env` are the CLI flags
 above.
 
-> **Which ref?** `v3.0.17` carries every fix, and the Release workflow that
+> **Which ref?** `v3.0.18` is the newest release, and the Release workflow that
 > publishes it also moves the floating `v3` tag, which follows every 3.x
 > release. Versions before 3.0.4 are unsupported. `@main` follows `main` and picks up whatever lands
 > next. For
@@ -307,7 +361,7 @@ from a non-coverage.py tool — pass the paths explicitly instead:
           coverage json -o coverage.json
 
       - name: Run AdversaryGate
-        uses: Sanflow10/adversary-gate@main
+        uses: Sanflow10/adversary-gate@v3
         with:
           baseline: './baseline'
           patch: './patch'
@@ -331,101 +385,40 @@ Without `diff` + `coverage-json` (and without `base-sha` to derive them) the Act
 pip install adversary-gate
 ```
 
-Check what PyPI is serving before you trust it — `pip index versions
-adversary-gate`. Versions before 3.0.4 are unsupported: each lacks fail-open
-fixes (a patch reaching `MERGE` it should not) that came after it. PyPI gets a
-release when a signed tag is pushed (Trusted Publishing, AG-008 closed), and
-the GitHub Release below gets the same build. Every other route works too, and **none of
-them needs PyPI**:
+PyPI gets each release from a signed tag through Trusted Publishing, and every
+file carries a PyPI provenance attestation. Versions before 3.0.4 are
+unsupported: each lacks fail-open fixes (a patch reaching `MERGE` it should
+not) that came after it. To pin the version:
 
 ```bash
-# straight from the repository
-pip install git+https://github.com/Sanflow10/adversary-gate.git
+pip install adversary-gate==3.0.18
 ```
 
-```bash
-# or clone it
-git clone https://github.com/Sanflow10/adversary-gate.git
-cd adversary-gate && pip install .
-```
+The same build is attached to the GitHub Release, at a plain public URL — no
+PyPI, no GitHub login:
 
 ```bash
-# or don't install it at all
-PYTHONPATH=src python3 -m adversary_gate --help
+# The tag carries the "v", the filename does not.
+pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.18/adversary_gate-3.0.18-py3-none-any.whl
+```
+
+Or follow `main` instead of a release:
+
+```bash
+pip install git+https://github.com/Sanflow10/adversary-gate.git   # from the repository
+PYTHONPATH=src python3 -m adversary_gate --help                   # from a clone, nothing installed
 ```
 
 | Route | Follows | Needs |
 |---|---|---|
+| `pip install adversary-gate` (PyPI) | the latest release, attested | network |
+| GitHub Release wheel | the same release | nothing but `pip` |
+| `uses: Sanflow10/adversary-gate@v3` | the latest 3.x release | GitHub Actions |
 | `pip install git+https://…adversary-gate.git` | `main` | network |
-| `git clone` + `pip install .` | `main` | git |
-| `PYTHONPATH=src python3 -m adversary_gate --help` | `main` | nothing |
-| `uses: Sanflow10/adversary-gate@main` | `main` | GitHub Actions |
-| GitHub Release wheel (below) | **3.0.17** — every fix | nothing but `pip` |
-| `pip install adversary-gate` (PyPI) | whatever PyPI has — check it first | network |
+| `PYTHONPATH=src python3 -m adversary_gate` | `main`, from a clone | nothing |
 
-### Install a released wheel
-
-`git+…` always follows `main`. For a fixed, versioned build there are two, and
-today they carry the same code:
-
-```bash
-# PyPI -- 3.0.17. Versions before 3.0.4 are unsupported: each lacks fixes the
-# CHANGELOG lists after it.
-pip install adversary-gate==3.0.17
-```
-
-```bash
-# GitHub Release -- 3.0.17: every fix in this document.
-# The tag carries the "v", the filename does not.
-pip install https://github.com/Sanflow10/adversary-gate/releases/download/v3.0.17/adversary_gate-3.0.17-py3-none-any.whl
-```
-
-The second is a plain public URL — no PyPI, no GitHub login, no `git` — and it
-needs a **GitHub Release** for that tag to exist: if it answers `404`, the
-Release for `v3.0.17` has not been published yet. A release
-takes two steps, in this order, and only the first is done by hand:
-
-1. **A person pushes a signed tag**: `git tag -s vX.Y.Z -m "X.Y.Z"` and
-   `git push origin vX.Y.Z`. The push starts **Publish to PyPI**, which builds
-   the tag's own tree — the core and the MCP package, `adversary-gate-mcp` —
-   and uploads both through Trusted Publishing, so every file carries a PyPI
-   provenance attestation. It refuses a tag whose `pyproject.toml` names
-   another version, and it reads no API token. Before it builds anything it
-   checks the tag's signature with `git verify-tag` against the key in the
-   repository variable `RELEASE_ALLOWED_SIGNERS` (an `allowed_signers` line,
-   kept outside the tree so a push cannot bring its own key): a lightweight
-   tag, an annotated tag with no signature, a signature from another key, or
-   no variable at all, and nothing is published.
-2. **Actions → Release → Run workflow.** It refuses to run without that tag, or
-   with one the same signature check refuses, and refuses while PyPI lacks either
-   package. Then it runs the full test suite and **refuses to publish if it
-   fails**, builds the wheel and sdist, installs the wheel into a clean
-   interpreter, attaches them to the release, and moves the floating tag of the
-   release's major line (`v3`) — only forward, so
-   re-releasing an old version does not drag it back.
-
-**Publish to PyPI → Run workflow** with a tag finishes a run that stopped
-halfway: files already on PyPI are skipped, never replaced.
-
-Until 3.0.3 the Release workflow created the tag itself, with the workflow's
-token, and uploaded the core alone with an API token. Events from that token
-start no other workflow, so for 3.0.2 and 3.0.3 the PyPI publisher never ran:
-`uvx adversary-gate-mcp` kept serving 3.0.0, the core files carry no
-attestation, and those tags are not signed. Like every version before 3.0.4,
-they are unsupported.
-
-### PyPI
-
-Versions before 3.0.4 are unsupported. The audit this project grew from was run
-against `2.0.1`, which predates every fix in this document: `--diff` and
-`--coverage-json` did not exist yet (AG-002).
-
-**AG-008 is closed (2026-10-04).** The Trusted Publisher is registered in the PyPI
-project settings (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, no
-environment), and `2.4.0` went up through it — OIDC, no token — with PyPI
-provenance attestations attached to the wheel and the sdist. Until then the
-upload step had failed on every tag with `invalid-publisher: valid token, but
-no corresponding publisher`, and `2.2.0`/`2.3.0` never reached PyPI at all.
+How a release is built, signed and published, and what changed in that process:
+[Releasing](docs/RELEASING.md).
 
 ---
 
@@ -449,8 +442,8 @@ Tools: `verify_repo(repo, claims?, pytest_args?, base_ref?)` and `gate_policy()`
 
 | Variable | Why the agent may not set it |
 |---|---|
-| `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused. |
-| `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the agent's `base_ref` (default `HEAD`) must already be on a remote-tracking branch — a commit the agent made locally is refused with `inconclusive` and nothing runs (3.0.11; before, any commit was taken) — and the answer says `"baseline_chosen_by": "agent"`. An agent that can push, or write `.git/refs/remotes`, gets past that check. Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
+| `ADVERSARY_GATE_POLICY` | gate flags (`--sandbox bwrap`, `--triage jev`, which sends the diff out of the machine, see below; floors). An agent that can pass `--coverage-floor 0` grades itself. Evidence flags here are refused, and so is a flag not spelled out in full (3.0.18). |
+| `ADVERSARY_GATE_BASE_REF` | the baseline **is** the oracle: an agent could commit a rewritten test and name that commit as the base. Unpinned, the agent's `base_ref` (default `HEAD`) must already be on a remote-tracking branch — a commit the agent made locally is refused with `inconclusive` and nothing runs (3.0.11; before, any commit was taken) — and be a remote tip or the point where `HEAD` left one (3.0.18). That narrows which commits an agent can name; it does not make the choice the operator's, so pin the baseline when it matters; the answer says `"baseline_chosen_by": "agent"`. An agent that can push, write `.git/refs/remotes` or move `HEAD` itself gets past that check. **Pin a commit id or a remote-tracking ref (`origin/main`)**: a pin on a local branch, a tag or `HEAD` moves when the agent commits or tags, so it is refused with `inconclusive` unless `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1` says the agent cannot write the repository (3.0.18). Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
 | `ADVERSARY_GATE_PYTHON` | the interpreter's site-packages are harness too — a plugin installed there runs inside pytest. Use one the agent cannot write to. |
 | `ADVERSARY_GATE_REQUIRE_PINNED_BASE` | `1` makes the pin above mandatory: without `ADVERSARY_GATE_BASE_REF`, `verify_repo` answers `inconclusive` and runs nothing, rather than judge against a baseline the agent named. Off by default, so servers that rely on `base_ref` keep working; `gate_policy` reports it as `baseline_pin_required`. |
 
@@ -463,17 +456,12 @@ export TYPESAFE_API_KEY=sk-...
 adversary-gate ... --diff change.diff --triage jev     # --triage-threshold 0.70 by default
 ```
 
-[Jev](https://www.datacamp.com/blog/system-one-models-jev) is a calibrated decision model: text and a schema in, a typed answer with a probability out, in ~100 ms. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
+[Jev](https://www.datacamp.com/blog/system-one-models-jev) is a decision model: text and a schema in, a typed answer with a probability out. Its makers describe it as calibrated and answering in about 100 ms; neither is measured here. The gate asks it one *choice* (`low` / `medium` / `high` risk) and one *yes/no* (does this change a contract callers rely on?). A **confident `high`** raises this run's floors — strength confidence to 0.95, coverage floor to 0.90 — so a 5-of-5 mutant score that merges an ordinary change is `INCONCLUSIVE` for a risky one. A `low`, a `medium`, an unconfident `high`, an error or a timeout change **nothing**; there is no path from Jev's answer to a more lenient decision, which is what makes it safe to feed it text the patch's author wrote. The answer is recorded in `execution.triage` either way.
 
-- **The diff leaves the machine** (truncated to 64 KiB, `https` only). That is why it is opt-in.
-- Jev is early-access (launched 2026-09-15). The client follows TypeSafe's published request/response shape and is tested against a local server speaking it — **not** against the live API from this repository.
-
----
-
-## 🎯 Why
-
-Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
-
+- **The diff leaves the machine**, truncated to 64 KiB. That is why it is opt-in. It is the whole diff: removed lines as well as added ones, and, through the MCP server, every untracked file git does not ignore (a `.env` left outside `.gitignore` included). Nothing is filtered for secrets. TypeSafe's terms for what it keeps are in its [data processing addendum](https://typesafe.ai/legal/data-processing).
+- The endpoint must be `https`, or plain `http` to `localhost`, `127.0.0.1` or `::1` for a local test server; a URL with a user, a password or a fragment is refused (3.0.18). The key goes in the same request.
+- The request names a model: `jev-latest` unless `TYPESAFE_MODEL` or `--triage-model` says otherwise. `execution.triage` records the model asked for and the one that answered. Until 3.0.18 no model was sent, and the API, which requires one, refused every request: triage recorded an error and changed nothing.
+- **Experimental.** Jev is early-access (launched 2026-09-15). The client follows TypeSafe's published request/response shape and is tested against a local server speaking it, **not** against the live API from this repository.
 
 ---
 
@@ -485,6 +473,7 @@ Agents write fluent, plausible code, and naive pipelines that collapse infrastru
 | 🌐 **[Language support](docs/LANGUAGE_SUPPORT.md)** | what happens on a repository that is not Python/pytest |
 | 🛡️ **[Execution boundary](docs/EXECUTION_BOUNDARY.md)** | read before running it on untrusted code: `--sandbox bwrap` and its limits |
 | ⏱️ **[Performance & compatibility](docs/PERFORMANCE_AND_COMPATIBILITY.md)** | timings, supported Pythons, deprecations |
+| 📦 **[Releasing](docs/RELEASING.md)** | how a release is signed, published and verified |
 | 📄 **[CHANGELOG](CHANGELOG.md)** | what changed in each version |
 | 🔐 **[SECURITY](SECURITY.md)** | report a fail-open. A wrong `MERGE` is the whole failure mode, so a bug here *is* a security bug |
 | 📋 **[Findings register](ERRORS_AND_INCONSISTENCIES.md)** | every finding against the gate itself, reproduced by real exit code before being fixed — and what is still open |
@@ -492,10 +481,39 @@ Agents write fluent, plausible code, and naive pipelines that collapse infrastru
 
 ---
 
+## 🏢 Using AdversaryGate at your company
+
+- **Running it unmodified on your own code is free**, in CI or on a laptop.
+  The AGPL asks nothing of you for that.
+- **If you modify it and offer the modified gate to others** — including as a
+  network service — you must publish your changes under the AGPL.
+- **If you ship a modified copy**, the [NOTICE](NOTICE) adds the terms that
+  section 7 of the AGPL allows: keep the NOTICE and the attribution, mark the
+  copy as modified, do not present it as AdversaryGate, and do not use the
+  names Sanflow or Sanflow10 to promote it.
+- **If your legal team cannot accept the AGPL**, a commercial license is
+  available: write to sanflow086@gmail.com.
+
+### Rolling it out
+
+1. **Advisory first.** Run the Action on pull requests with
+   `continue-on-error: true` for a few weeks, which lets every answer through,
+   a `BLOCK` included, and read the `BLOCK` and `INCONCLUSIVE` reasons. Most
+   first answers are a small change or an uncovered line, not a bad patch,
+   and `next_steps` says which.
+2. **Keep the policy where the agent cannot write it.** The floors and flags
+   live in the workflow file; protect it (CODEOWNERS, branch protection). An
+   agent that can edit them, or pass `--coverage-floor 0`, grades itself.
+3. **Then make it required**, and route `INCONCLUSIVE` to a person rather than
+   to a red X (`small-change: review` for changes too small to measure).
+
+This is a summary, not legal advice; the [LICENSE](LICENSE) and [NOTICE](NOTICE)
+are what apply.
+
+---
+
 ## 📄 License
 
 Copyright © 2026 Sanflow ([Sanflow10](https://github.com/Sanflow10)).
 
-Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Only the latest release is distributed: the tags, GitHub Releases and PyPI files of earlier versions are no longer published.
-
-For a commercial license without the AGPL obligations, write to sanflow086@gmail.com.
+Releases from 3.0.0 on are distributed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`), with the additional terms that section 7 of that license allows — see [NOTICE](NOTICE). The 2.x line, up to and including 2.14.2, was published under the MIT License, and copies obtained under it keep that license. Versions before 3.0.4 are no longer distributed. From 3.0.4 on, every release stays published; one superseded by a security fix is yanked on PyPI, so pip skips it unless it is pinned exactly, and then warns.

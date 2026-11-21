@@ -526,8 +526,10 @@ class TestTheCoveragePassRunsUnderThePolicy(unittest.TestCase):
         with mock.patch.dict(os.environ, env):
             evidence = prepare(repo, "HEAD", root / "work", python=sys.executable, **kwargs)
         self.assertTrue(evidence.coverage.is_file())
-        # The coverage pass runs in the patch tree, a copy (3.0.11).
-        return (evidence.patch / "seen.txt").read_text().split("|")
+        # The coverage pass runs in a copy of its own, not in the tree the
+        # gate judges (3.0.18), which it no longer writes into.
+        self.assertFalse((evidence.patch / "seen.txt").exists())
+        return (root / "work" / "coverage-run" / "tree" / "seen.txt").read_text().split("|")
 
     def test_the_servers_environment_does_not_reach_the_tests(self):
         secret, _ = self._run()
@@ -624,12 +626,17 @@ class TestVerifyRepoTool(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             repo = _git_repo(Path(directory))
             (repo / "calc.py").write_text(_clean_patch(CALC))
-            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_BASE_REF": "HEAD"}):
+            with mock.patch.dict(os.environ, {"ADVERSARY_GATE_BASE_REF": "origin/main"}):
                 result = mcp_server.verify_repo(str(repo), base_ref="no-such-ref")
                 policy = mcp_server.gate_policy()
         self.assertEqual(result["baseline_chosen_by"], "operator")
         self.assertEqual(result["decision"], "merge", result["reason"])
         self.assertNotIn("base_ref", policy["agent_controls"])
+        # The answer carries the rules it was judged by (3.0.18).
+        self.assertIn("remote-tracking", result["baseline_pin"])
+        self.assertFalse(result["baseline_pin_required"])
+        self.assertEqual(len(result["policy_sha256"]), 64)
+        self.assertEqual(result["policy"]["coverage_floor"], 0.8)
 
     def test_a_required_pin_that_is_missing_runs_nothing(self):
         """With the pin required, an agent's own base_ref is not an oracle."""
@@ -652,7 +659,7 @@ class TestVerifyRepoTool(unittest.TestCase):
             repo = _git_repo(Path(directory))
             (repo / "calc.py").write_text(_clean_patch(CALC))
             with mock.patch.dict(os.environ, {"ADVERSARY_GATE_REQUIRE_PINNED_BASE": "1",
-                                              "ADVERSARY_GATE_BASE_REF": "HEAD"}):
+                                              "ADVERSARY_GATE_BASE_REF": "origin/main"}):
                 result = mcp_server.verify_repo(str(repo), base_ref="no-such-ref")
         self.assertEqual(result["decision"], "merge", result["reason"])
         self.assertEqual(result["baseline_chosen_by"], "operator")

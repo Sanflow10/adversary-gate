@@ -13,10 +13,12 @@ Duas regras que este arquivo obedece, e que valem mais que o formato:
 
 Versions before 3.0.4 are unsupported; their sections below are history.
 
-Only the latest release is distributed. The tags, GitHub Releases and PyPI
-files of earlier versions are no longer published, so the routes the sections
-below name for them (`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a
-release wheel URL) no longer resolve.
+Versions before 3.0.4 are no longer distributed: their tags, GitHub Releases
+and PyPI files were removed, so the routes the sections below name for them
+(`@v2`, `@v2.14.0`, `adversary-gate<3`, `==2.14.0`, a release wheel URL) no
+longer resolve. From 3.0.4 on, every release stays published; one superseded
+by a security fix is yanked on PyPI, so pip skips it unless it is pinned
+exactly, and then warns.
 
 O AG-008 está **fechado** desde 2026-10-04: o Trusted Publisher foi registrado
 no pypi.org (`Sanflow10` / `adversary-gate` / `pypi-publish.yml`, sem
@@ -32,9 +34,174 @@ the Release workflow uploaded by token whenever `PYPI_API_TOKEN` existed.
 
 ## [Unreleased]
 
-A seção fica sem número de propósito: uma versão no `pyproject.toml` sem tag
-correspondente é uma promessa de artefato que não existe, e o bump só acontece
-quando esta seção vira uma com versão e data.
+## [3.0.18] — 2026-11-21
+
+Holes found by a read-only review of 3.0.17 against the question "what would
+a sceptical auditor ask for", by a reader of the code and by the release's own
+test runs, each confirmed on a small repository and each with a test that
+fails on 3.0.17; the report now says which rules a decision
+was made under (a suggestion made in public); and the docs corrected where
+they said more, or other, than the code does.
+
+### Security
+
+- **MCP: the coverage pass writes only its own data directory.** It ran the
+  patch's tests in the tree the gate then judged, with the whole scratch
+  directory writable (under `--sandbox bwrap` too), and the report extractor
+  ran from that directory outside the sandbox. The pass now runs on a copy of
+  the tree with one empty directory writable; the baseline, the diff and the
+  judged tree are written after it, the judged tree is checked against a
+  snapshot taken before the diff (a change refuses the run), and the extractor
+  runs from a directory made after the pass.
+- **Action: the coverage pass may not change the tree it measured.** In
+  `base-sha` mode it runs the pull request's tests in the workspace the gate
+  then judges as the patch, with the workspace writable. Every file is hashed
+  before and after it; a file changed or removed, or a new `.py`, `.pth`,
+  `.cfg`, `.ini` or `.toml`, fails the step (exit 4) and names it.
+- **Jev: a redirect is refused.** The client followed one with the key in its
+  header, to a URL the endpoint check never saw.
+- **Jev: the endpoint is checked as urllib reads it.** It is parsed now:
+  `https` with no user, password or fragment, or plain `http` to `localhost`,
+  `127.0.0.1` or `::1` named exactly. Anything else is refused before a
+  request is built.
+- **Evidence: a move is a delete and an add.** Both diffs (MCP and Action)
+  now pass `--no-renames`, so a moved file reaches the path policy under both
+  of its paths. An untracked file whose name holds a control character is
+  refused.
+- **Action: the setup steps no longer run from the checkout.** Creating the
+  gate's venv, installing into it and probing the project's interpreter ran
+  `python -m`/`-c` with the pull request's checkout as the working directory,
+  which Python searches first. They now run from an empty directory under
+  `RUNNER_TEMP`; a relative `python` input is still resolved in the checkout.
+- **MCP: a pinned baseline is a commit id or one remote-tracking ref.** A pin
+  on a local branch, a tag or `HEAD` moves when the agent commits or tags, and
+  a local tag or branch named like the remote ref won git's lookup; such a pin
+  now answers `inconclusive` and runs nothing, naming the fix.
+  `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1` restores the old behaviour for a server
+  whose agent cannot write the repository. **This changes behaviour for a
+  server pinned to `HEAD` or a local branch**: it fails closed and says why.
+- **A test the full suite skips on the patch is weighed against the baseline.**
+  The suite's exit code says nothing for a test it skipped, and a test can
+  skip itself over something the patch changed. When the baseline's tests
+  skip more on the patch's code than on the baseline, the answer is
+  `inconclusive` and `execution.full_suite_skipped` carries both counts. The
+  check for rewritten test files has done this since 3.0.14; the full suite,
+  on by default, had not. A suite with skips costs one more baseline run.
+- **MCP: an agent-chosen baseline is a remote tip or where `HEAD` left one.**
+  Any pushed commit was accepted, an older one from before a test existed or
+  was tightened included. An agent still chooses among those; pin the
+  baseline to take that choice away (README, MCP section).
+- **MCP: the operator's policy spells out every flag.** The gate's parser
+  accepts an abbreviated flag, the server's own checks read exact names, so
+  an abbreviated `--sandbox` reached the gate but not the coverage pass, and an
+  abbreviated evidence flag passed the refusal. It is refused now.
+- **CLI: a missing network isolation or bwrap is refused before triage.** With
+  `--triage jev --require-network-isolation`, the diff was sent to the triage
+  endpoint before the run was refused.
+
+- **The whole suite is judged by the baseline's tests alone.** One run of the
+  whole suite collects every test module in one process, and the baseline's
+  copy of the tests was used only when the patch rewrote one, with the test
+  files the patch added kept beside it. That run now uses the baseline's tests
+  without the added files whenever the patch changed or added any;
+  `full_suite_oracle.added_test_files` lists them. The same holds for the run
+  of rewritten tests when the full suite is off. **Cost:** a patch that adds a
+  test runs the suite twice, side by side. Reported privately.
+- **The claims run in copies of the trees.** Every later measurement read the
+  trees the claims had run in. A file the trees shipped that a claim's run
+  changed or removed is now recorded (`execution.claims_rewrote`) and keeps
+  the answer from `MERGE`; the trees handed to the gate are not written.
+- **The neutral copy cannot be told from the mutants.** Its comment and
+  assignment are drawn at random for each run, it and every mutant end in a
+  comment line of a random length, and every copy keeps the times of the file
+  it replaces.
+- **MCP: the diff reads the files themselves.** It no longer trusts a copy of
+  the index for which files changed.
+- **A module imported by a name built at run time is judged as code.**
+  `importlib.import_module` and `__import__` with a computed name now count as
+  running text, like `exec`: the module they name is code.
+- **A patch of tests alone that edits a baseline test goes to a person.** The
+  edited copy that would land is not measured, so the answer is
+  `INCONCLUSIVE`, with a `human_review_test_edit` step naming the file. New
+  test files, and plain new tests appended to a baseline file, still merge.
+
+### Defaults
+
+- **The sandbox is on by default where it can run.** `--sandbox` defaults to
+  `auto` in the CLI, the MCP server and the Action: bubblewrap wherever a
+  probe shows it can run the project's interpreter, no sandbox elsewhere, and
+  the answer says which (`execution.sandbox`, `sandbox_requested`,
+  `sandbox_note`). Until now the default was no sandbox. `--sandbox bwrap`
+  still refuses to start without it; `--sandbox none` turns it off for tests
+  that need the network. **This changes how tests run by default.**
+- **A change too small to measure can go to a person instead of failing.**
+  A correct one-line fix kills its one mutant, and 1 of 1 cannot clear the
+  strength floor, so most small fixes were INCONCLUSIVE and a team's way out
+  was `continue-on-error`. The decision is unchanged; when every claim held,
+  coverage met the floor and every mutant was killed, the answer now carries
+  `human_review` (`kind: small_change`), and the Action's new
+  `small-change: review` passes the step for that one case with a warning and
+  `review-required: true`. The default (`fail`) behaves as before.
+  Suggested in a public review of the README.
+
+### Under which rules (report)
+
+- **Every report records the rules it was judged by.** The decision JSON and
+  each decision record in the evidence log carry `coverage_floor` (until now
+  it appeared only in a failing reason), `gate_version`, a `policy` block with
+  every option that decides an answer as it stood after triage (`--env` by
+  name only, never a value) and `policy_sha256`. The MCP answer carries the
+  same, and the kind of baseline pin. A test keeps every CLI option classified
+  as policy or evidence. Suggested in a public comment on the launch post.
+
+### Fixes
+
+- **Only a change that is small is a small change.** A patch that also
+  deleted source, or changed source this engine cannot mutate, could be named
+  `human_review: small_change`, which the Action's `small-change: review`
+  passes with a warning. Unmeasured source keeps the step red.
+- **An appended test that can replace an imported one is reviewed like an
+  edit.** A new test function in a baseline test file is no longer taken for
+  a plain append when the file imports a name it could replace.
+- **A signal death reads the same inside bubblewrap.** bwrap reports a child
+  killed by signal N as exit 128 + N where an unsandboxed run reads -N; with
+  the sandbox on by default, a mutant the CPU limit killed counted as
+  stillborn instead of a hang, and a measured suite lost kills.
+- **A `Gate` used again as a library re-checks a file's old tests.** Whether a
+  file's baseline tests hold on the patch was cached on the `Gate`, keyed by
+  the trees' paths; it is kept for the run now, like the scans of 3.0.17.
+  CLI, MCP and Action create one `Gate` per process and were not affected.
+- **Jev triage sends a model.** TypeSafe's API requires one and the client
+  sent none, so every triage answered an error and changed nothing. It sends
+  `jev-latest` unless `TYPESAFE_MODEL` or the new `--triage-model` names one;
+  `execution.triage` records the model asked for and the one that answered.
+- **A missing tree is a usage error.** A `--baseline` or `--patch` that is not
+  a directory read as an empty tree, with a reason that blamed the other one.
+  It is exit 3 now, naming the flag.
+
+### Docs
+
+- Corrected against the code: a test that passes on the baseline and hangs on
+  the patch is `REFUTED`, not unverified; blank and comment-only lines are out
+  of the coverage ratio (AG-040); the `pyvenv.cfg` rule since 3.0.11; the
+  operator choices that relax the MERGE conditions, and the limits `next_steps`
+  can name; more of the causes of `INCONCLUSIVE`; which resource limits
+  apply to which run; a module name written out in `importlib.import_module`
+  or `__import__` is read; the evidence log is not tamper-evident (moved from
+  the report-worthy list to the known limitations); bwrap drops capabilities
+  but keeps the user id; stale links after the README was slimmed; the Action's
+  full-suite limit and strength floor; the test-command exit table; the
+  performance page's run count; supported Pythons; the findings range on the
+  site. Two limits are written down: without the sandbox the gate's runs share
+  the machine, and a claim that normalises the code's structure can still
+  tell a mutant from the patch (SECURITY.md, Known limitations).
+- **No outside code and no CLA.** CONTRIBUTING says the code is written by the
+  maintainer alone and lists what is welcome instead: private fail-open
+  reports, bug reports with a reproduction, feature requests. `CLA.md` is
+  gone, and the release process moved to `docs/RELEASING.md`.
+- **Which releases stay published.** The README and this file said only the
+  latest release was; every release from 3.0.4 on still is. That stays, and a
+  release superseded by a security fix is yanked on PyPI instead of removed.
 
 ---
 

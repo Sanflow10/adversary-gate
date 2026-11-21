@@ -178,6 +178,37 @@ def transplant_tree(baseline_dir: Path, patch_dir: Path, into: Path) -> Path:
     return _transplant(baseline_dir, patch_dir, None, into)
 
 
+def added_test_files(baseline_dir: Path, patch_dir: Path) -> List[str]:
+    """Public: the test files the patch added, which the baseline does not have."""
+    base, patch = Path(baseline_dir), Path(patch_dir)
+    disguised = production_imported_tests(patch)
+    added = []
+    for current, dirs, files in os.walk(patch):
+        dirs[:] = [d for d in dirs if d not in _TREE_SKIP and not (Path(current) / d / "pyvenv.cfg").is_file()]
+        for name in files:
+            rel = (Path(current) / name).relative_to(patch).as_posix()
+            if is_test_rel(rel, disguised) and not os.path.lexists(base / rel):
+                added.append(rel)
+    return sorted(added)
+
+
+def suite_oracle_tree(baseline_dir: Path, patch_dir: Path, into: Path) -> Path:
+    """Public: the patch's code with the baseline's tests only, for the whole suite.
+
+    :func:`transplant_tree` keeps the test files the patch added. One run of
+    the whole suite collects them all in one process, and a new test module
+    loads a plugin or replaces a function at import: the baseline's tests then
+    passed on code that fails them, and a regression reached MERGE (3.0.18).
+    The baseline's tests passed without those files; here they run without them.
+    """
+    tree = _transplant(baseline_dir, patch_dir, None, into)
+    for rel in added_test_files(baseline_dir, patch_dir):
+        target = tree / rel
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+    return tree
+
+
 @dataclass(frozen=True)
 class GateConfig:
     coverage_floor: float = 0.80
@@ -641,6 +672,7 @@ class Gate:
                 claim, baseline_dir, tree, policy, {**limits, **(file_limits or {})},
                 key=(str(Path(baseline_dir).resolve()), str(Path(patch_dir).resolve()),
                      claim.test_path, policy.runs),
+                scans=scans,
             )
         if kept is not None:
             return finish(kept)
@@ -846,7 +878,8 @@ class Gate:
                       if _bytes_differ(source, Path(patch_dir) / rel))
 
     def _baseline_file_holds(
-        self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None
+        self, claim, baseline_dir: Path, tree: Path, policy, limits, *, key=None,
+        scans: Optional[dict] = None,
     ) -> Optional[GateVerdict]:
         """``None`` when the baseline's whole test file passes on both sides.
 
@@ -857,7 +890,9 @@ class Gate:
         # The answer depends on the baseline, the patch and the file -- not on
         # which new test in it asked. Several new tests in one file used to
         # rerun the whole file for each (more-itertools def2dab: 452 s of 782).
-        cache = self.__dict__.setdefault("_file_holds_cache", {})
+        # Kept for the run, in ``scans``, not on the Gate: a Gate used again on
+        # new trees at the same paths answered from the old ones (3.0.18).
+        cache = scans.setdefault(("baseline-file-holds",), {}) if scans is not None else {}
         if key is not None and key in cache:
             base_codes, base_out, tree_codes, tree_out = cache[key]
         else:

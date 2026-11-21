@@ -20,15 +20,45 @@ measured at all.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import os
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from adversary_gate.cli import _run_environment
 from adversary_gate.sandbox.runner import run_test
 
 #: As in the MCP's pass: a whole suite's data file outgrows the per-test 16 MiB.
 _FILE_BYTES = 4 * 1024 * 1024 * 1024
+
+#: What a test run leaves behind on its own; never what the gate judges.
+_SCRATCH_DIRS = frozenset({".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+#: A new file with one of these names can change what the gate's runs do.
+_JUDGED_SUFFIXES = (".py", ".pth", ".cfg", ".ini", ".toml")
+
+
+def _snapshot(repo: Path) -> Dict[str, str]:
+    # The pass runs the patch's tests in the tree the gate then judges as the
+    # patch (3.0.18): a test that rewrote a file there made the gate judge
+    # bytes no commit holds. Every file and its hash, before and after.
+    files: Dict[str, str] = {}
+    for top, dirs, names in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SCRATCH_DIRS]
+        for name in names:
+            path = Path(top, name)
+            rel = path.relative_to(repo).as_posix()
+            if path.is_symlink():
+                files[rel] = "link:" + os.readlink(path)
+            elif path.is_file():
+                files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
+
+
+def _rewritten(before: Dict[str, str], after: Dict[str, str]) -> List[str]:
+    changed = [rel for rel, digest in before.items() if after.get(rel) != digest]
+    added = [rel for rel in after if rel not in before and rel.endswith(_JUDGED_SUFFIXES)]
+    return sorted(changed + added)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -68,6 +98,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         env["PATH"] = f"{args.tools_bin}:{env.get('PATH', '/usr/bin:/bin')}"
         readonly.append(args.tools_bin.parent)
 
+    before = _snapshot(args.repo)
     try:
         run = run_test(args.repo, "", command=args.command, sandbox=args.sandbox,
                        python=args.python, env=env, timeout_seconds=args.timeout,
@@ -80,6 +111,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 4
     sys.stdout.write(run.stdout)
     sys.stderr.write(run.stderr)
+    rewritten = _rewritten(before, _snapshot(args.repo))
+    if rewritten:
+        shown = ", ".join(rewritten[:3]) + (f" (+{len(rewritten) - 3} more)" if len(rewritten) > 3 else "")
+        print(f"adversary-gate: coverage-command changed the tree the gate judges ({shown}); "
+              "the diff no longer describes it", file=sys.stderr)
+        return 4
     if run.timed_out:
         print(f"adversary-gate: coverage-command ran past {args.timeout} s", file=sys.stderr)
         return 4

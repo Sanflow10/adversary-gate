@@ -21,7 +21,7 @@ environment:
 
 | Variable | What it sets |
 |---|---|
-| `ADVERSARY_GATE_BASE_REF` | the baseline (e.g. `origin/main`). Unset, the agent may pick it, and whoever picks the baseline picks the oracle. Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
+| `ADVERSARY_GATE_BASE_REF` | the baseline: a commit id or a remote-tracking ref (`origin/main`); a local branch, tag or `HEAD` is refused unless `ADVERSARY_GATE_ALLOW_LOCAL_PIN=1`. Unset, the agent may pick it, and whoever picks the baseline picks the oracle. Pinning names the baseline; it is not a defence against an agent that can write the repository's `.git` (its refs, objects or configuration) — run such an agent where it cannot, as with any code that runs with your privileges. |
 | `ADVERSARY_GATE_PYTHON` | the interpreter that runs the tests; one the agent cannot write to |
 | `ADVERSARY_GATE_POLICY` | extra gate flags; evidence flags are refused |
 

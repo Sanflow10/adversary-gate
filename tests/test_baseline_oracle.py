@@ -311,8 +311,10 @@ class TestNewTestInAnExistingFile(unittest.TestCase):
                 return real_runs(directory, test_path, test_id, policy, limits)
 
             gate._runs = counting
+            scans = {}  # one run's, as the CLI passes it
             verdicts = [
-                gate.verify_claim(CriticClaim("test_calc.py", t), root / "baseline", root / "patch")
+                gate.verify_claim(CriticClaim("test_calc.py", t), root / "baseline", root / "patch",
+                                  scans=scans)
                 for t in ("test_sub_negative", "test_sub_zero")
             ]
             for verdict in verdicts:

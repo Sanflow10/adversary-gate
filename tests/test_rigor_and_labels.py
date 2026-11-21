@@ -45,7 +45,9 @@ from adversary_gate.core.types import (
 )
 from adversary_gate.sandbox.runner import SandboxResult
 from adversary_gate.verifiers.strength import (
+    _CANARY,
     DEFAULT_MAX_MUTANTS,
+    _probe_line,
     _spread,
     calculate_mutation_score,
     kills_to_clear,
@@ -353,7 +355,10 @@ class TestMutantsInParallel(unittest.TestCase):
                     import time as _t
                     _t.sleep(reference_seconds)
                 return SandboxResult(0, "", "", False)
-            source = (Path(directory) / "calc.py").read_text()
+            # A mutant is known by its code, not by the comment line of a
+            # random length every copy ends in (3.0.18).
+            source = "\n".join(line for line in (Path(directory) / "calc.py").read_text().splitlines()
+                               if not line.startswith("#"))
             if seen.get(source):
                 return SandboxResult(0, "", "", False)
             seen[source] = 1
@@ -636,6 +641,10 @@ class TestNextSteps(unittest.TestCase):
             self.assertIn("operator", steps[0]["why"])
             self.assertIn("too small to measure", payload["reason"])
             self._assert_safe(steps, root)
+            # Named for a person to sign (3.0.18), never a merge.
+            self.assertEqual(payload["decision"], "inconclusive")
+            self.assertEqual(payload["human_review"]["kind"], "small_change")
+            self.assertEqual(payload["human_review"]["kills_needed"], 5)
 
             with self.subTest("a survivor is weak tests, not a small change"):
                 body = (root / "patch" / "calc.py").read_text().replace(
@@ -648,6 +657,16 @@ class TestNextSteps(unittest.TestCase):
                 self.assertNotIn("too small", payload["reason"])
                 self.assertNotIn("too small", json.dumps(payload["next_steps"]))
                 self.assertNotIn("is small", json.dumps(payload["next_steps"]))
+                self.assertIsNone(payload["human_review"])
+
+            with self.subTest("a coverage shortfall is not a small change"):
+                _tree(root, 1)
+                cov = json.loads((root / "cov.json").read_text())
+                cov["files"]["calc.py"]["executed_lines"] = []
+                (root / "cov.json").write_text(json.dumps(cov))
+                _, payload = _cli(root)
+                self.assertEqual(payload["decision"], "inconclusive")
+                self.assertIsNone(payload["human_review"])
 
     def test_the_count_follows_the_operators_floor(self):
         """5/5 clears 0.75 and is too small for 0.99: the count is the floor's, not fixed."""
@@ -1106,14 +1125,14 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         out = canary_source(source, {2, 3, 4, 5, 6, 7, 8})
         self.assertIsNotNone(out)
         self.assertEqual(ast.dump(_WithoutProbes().visit(ast.parse(out))), ast.dump(ast.parse(source)))
-        self.assertIn('# not a comment\ntwo"""  # adversary-gate canary', out)
-        self.assertNotIn("# not a comment  # adversary-gate canary", out)
+        self.assertIn('# not a comment\ntwo"""' + _CANARY, out)
+        self.assertNotIn("# not a comment" + _CANARY, out)
 
     def test_only_lines_the_patch_wrote_get_a_comment_and_a_probe(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("a = 1\nb = 2\nc = 3\n", {2})
         self.assertEqual(out.split("\n")[:4],
-                         ["a = 1", "__adversary_probe__ = 0; del __adversary_probe__", "b = 2  # adversary-gate canary", "c = 3"])
+                         ["a = 1", _probe_line(), "b = 2" + _CANARY, "c = 3"])
 
     def test_a_probe_changes_the_tree_and_the_bytecode_but_not_the_result(self):
         import ast
@@ -1130,12 +1149,12 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
     def test_a_header_row_gets_its_probe_at_the_start_of_the_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("def f(a,\n      b):\n    return a + b\n", {1})
-        self.assertIn("    __adversary_probe__ = 0; del __adversary_probe__\n    return a + b", out)
+        self.assertIn(f"    {_probe_line()}\n    return a + b", out)
 
     def test_a_decorator_row_gets_its_probe_in_the_decorated_body(self):
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("@staticmethod\ndef f():\n    return 1\n", {1})
-        self.assertIn("    __adversary_probe__ = 0; del __adversary_probe__\n    return 1", out)
+        self.assertIn(f"    {_probe_line()}\n    return 1", out)
 
     def test_a_statement_that_shares_its_line_is_probed_in_front_of_the_line(self):
         # It used to have no place, so nothing was measured; in front of the
@@ -1143,7 +1162,7 @@ class TestTheCanaryChangesNothingTheCodeDoes(unittest.TestCase):
         # has no place inside it (see TestTheProbeStaysNeutralWhereAStatementCannotGo).
         from adversary_gate.verifiers.strength import canary_source
         out = canary_source("x = 1; y = 2\n", {1})
-        self.assertTrue(out.startswith("__adversary_probe__ = 0; del __adversary_probe__\nx = 1; y = 2"), out)
+        self.assertTrue(out.startswith(_probe_line() + "\nx = 1; y = 2"), out)
 
     def test_no_canary_when_there_is_nothing_to_probe(self):
         from adversary_gate.verifiers.strength import canary_source

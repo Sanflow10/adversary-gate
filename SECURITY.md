@@ -13,12 +13,10 @@ Concretely, the report-worthy class includes:
 - any path where a patch reaches `MERGE` while its evidence does not support it
   (this is exactly how AG-012, AG-013, AG-014 and AG-015 were found);
 - a way to make `UNVERIFIED` or `INCONCLUSIVE` render as `verified`;
-- a way to forge, truncate, reorder or drop entries from `evidence.jsonl`
-  without the artefact showing it;
 - a `diff` or coverage input that parses into a *different* file set than the
   patch actually contains (parser confusion is fail-open by construction);
 - code execution, file write or network access **outside** the boundary
-  described in [README → Execution boundary](docs/EXECUTION_BOUNDARY.md),
+  described in [Execution boundary](docs/EXECUTION_BOUNDARY.md),
   reached by a test the gate ran;
 - a way to bypass `--require-network-isolation` or `--sandbox bwrap` such that
   the run proceeds while the property does not hold.
@@ -45,12 +43,14 @@ Concretely, the report-worthy class includes:
 These are open, deliberate, and are **not** reports unless you can show one of
 them produces a `MERGE` it should not:
 
-- **The test code runs with your privileges.** `--sandbox bwrap` adds no
+- **The test code runs with your privileges.** The sandbox (on by default
+  where bubblewrap can run, `--sandbox bwrap` to require it) adds no
   network, a private PID namespace, a private `/tmp`, a read-only system tree
   and a repository that is the only writable path (the coverage pass of the
   MCP tool and of the Action's `base-sha` mode also writes one fresh directory
-  outside it, for the coverage data). It has no seccomp profile
-  and does not drop privileges. It is containment for opportunistic code, not
+  outside it, for the coverage data). It drops every capability
+  (`--cap-drop ALL`, in a user namespace when the kernel allows one) but keeps
+  your user id, and has no seccomp profile. It is containment for opportunistic code, not
   for code written to escape. For hostile input, run the whole gate in a
   container or VM.
 - **`self_deception_index` measures decisions, not correctness** — and on logs
@@ -59,8 +59,20 @@ them produces a `MERGE` it should not:
 - **Code under test shares the runner's process.** The patch can no longer
   configure pytest (AG-032), but a source module the tests import can still
   tamper with pytest in-process, or behave differently when it detects a test
-  run. That is out of reach of any test-based gate; see *What a test cannot
-  see* in the README.
+  run. That is out of reach of any test-based gate; see
+  [What a test cannot see](docs/EXECUTION_BOUNDARY.md#what-a-test-cannot-see-by-construction).
+- **Without the sandbox, the gate's runs share your machine.** The claims and
+  the measurement run in copies of the trees (3.0.18), but a test can still
+  write outside them -- a file in `/tmp`, the bytecode cache the runs share --
+  and a later run can read it. With bubblewrap each run has its own `/tmp` and
+  the cache is read-only. When `--sandbox auto` falls back to none, the answer
+  says so (`sandbox_note`); for untrusted patches require `--sandbox bwrap`.
+- **A claim written to recognise the measurement can still pass it.** The
+  neutral copy that catches a claim reading the code has markers drawn at
+  random, a random size and the file's own times (3.0.18), but a claim that
+  normalises the code's structure before comparing it can tell a mutant from
+  the patch without running either. Mutation testing assumes the claims test
+  behaviour; the copy narrows how far a claim that does not can go.
 - **Only pytest and `--test-command` are executed.** There is no mutation
   adapter yet, so non-Python stacks cannot reach `MERGE` at all — that is a
   missing feature, not a bypass.
@@ -68,17 +80,22 @@ them produces a `MERGE` it should not:
   From `3.0.6`, a Python module that wears a test's name (`test_*`/`*_test.py`,
   or a `tests` directory) but that the code under test imports is judged as
   source, not reverted to the baseline as a test (before `3.0.6` it was not, a
-  fail-open an audit raised). The detection reads imports from the AST: a module
-  reached only through an import path the resolver does not match, or through a
-  dynamic import (`importlib`, `__import__`), is not caught. Declare a real test
+  fail-open an audit raised). The detection reads imports from the AST, and a
+  name written out as a string in `importlib.import_module` or `__import__` is
+  read too: a module reached only through a name built at run time, or an
+  import path the resolver does not match, is not caught. Declare a real test
   helper with `--test-support`; do not place product code under a test path.
+- **The evidence log is not tamper-evident.** `evidence.jsonl` is plain JSON
+  lines, rotated at 20 MiB with the oldest file dropped; whoever can write it
+  can edit it, and nothing in it shows that. Each decision record carries
+  `policy_sha256` (3.0.18), so a record's rules can be compared; to keep a
+  record as evidence, hash or sign it outside the run.
 - **Releases are not signed with a project key.** PyPI uploads go through
-  Trusted Publishing (AG-008 closed) and carry PyPI provenance attestations
-  tying each file to `pypi-publish.yml` in this repository — from `2.4.0`,
-  with one gap: the core files of `3.0.1`, `3.0.2` and `3.0.3` went up with an
-  API token and carry **no attestation** (that route is gone; see the
-  README's release steps). Versions before 3.0.4 are unsupported. The GitHub
-  Release artefacts carry no signature either. Verify them against the tag.
+  Trusted Publishing (AG-008 closed), and every file published today (3.0.4
+  onward; earlier versions are no longer distributed) carries a PyPI
+  provenance attestation tying it to `pypi-publish.yml` in this repository.
+  The GitHub Release artefacts carry no signature; verify them against the
+  signed tag.
   Release tags are SSH-signed, and both release workflows refuse a tag that is
   not signed by the key in the repository variable `RELEASE_ALLOWED_SIGNERS`
   (before this, a tag's name was all `pypi-publish.yml` checked). The release

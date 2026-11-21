@@ -887,5 +887,127 @@ class TestPrepareEvidenceContract(unittest.TestCase):
         self.assertNotIn("coverage json --rcfile", self.text)
 
 
+class TestAPatchOfTestsAloneThatBendsOneIsReviewed(unittest.TestCase):
+    """A patch that changes no source line and rewrites a test the baseline
+    shipped: the baseline's copy judges it and holds, and the patch's copy --
+    the one that would land -- was never measured. Until 3.0.18 that read as
+    MERGE; a person reviews it now. Adding tests still merges."""
+
+    def _run(self, patch_tests: str):
+        import difflib
+        root = _tree({"baseline/calc.py": CALC, "baseline/test_calc.py": TESTS,
+                      "patch/calc.py": CALC, "patch/test_calc.py": patch_tests})
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "change.diff").write_text("".join(difflib.unified_diff(
+            TESTS.splitlines(True), patch_tests.splitlines(True), "a/test_calc.py", "b/test_calc.py")))
+        (root / "cov.json").write_text(json.dumps(_contexts_report({"2": ["test_calc.test_sub"]})))
+        return _run_cli(root, "--claim", "test_calc.py::test_sub",
+                        "--diff", str(root / "change.diff"), "--coverage-json", str(root / "cov.json"))
+
+    def test_a_test_rewritten_to_check_less_is_not_a_merge(self):
+        code, payload = self._run(TESTS.replace("assert sub(5, 3) == 2", "assert sub(5, 3) == sub(5, 3)"))
+        self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+        self.assertIn("a person reviews the test change", payload["reason"])
+        self.assertEqual(payload["mutation"]["rewritten_tests_unmeasured"], ["test_calc.py"])
+        self.assertIn({"action": "human_review_test_edit", "file": "test_calc.py",
+                       "why": "the patch changed only tests the baseline shipped; a person "
+                              "checks that they still test what they did"}, payload["next_steps"])
+
+    def test_tests_appended_to_a_baseline_file_still_merge(self):
+        code, payload = self._run(TESTS + "\n\ndef test_sub_zero():\n    assert sub(0, 0) == 0\n")
+        self.assertEqual(code, EXIT_MERGE, payload)
+        self.assertNotIn("rewritten_tests_unmeasured", payload["mutation"])
+
+    def test_an_append_that_reaches_the_old_tests_is_reviewed(self):
+        for name, tail in (
+            ("a fixture", "\n\nimport pytest\n\n\n@pytest.fixture(autouse=True)\ndef test_quiet():\n    yield\n"),
+            ("an old name again", "\n\ndef test_sub():\n    pass\n"),
+            ("a module statement", "\n\nsub = lambda a, b: 2\n"),
+        ):
+            with self.subTest(name):
+                code, payload = self._run(TESTS + tail)
+                self.assertEqual(code, EXIT_INCONCLUSIVE, payload)
+
+
+class TestATreeThatIsNotThereIsAUsageError(unittest.TestCase):
+    """A baseline path that did not exist read as an empty tree, and the
+    reason blamed a conftest.py the patch never touched (3.0.18)."""
+
+    def test_a_missing_baseline_or_patch_is_exit_3_and_named(self):
+        import contextlib
+        import io
+        root = _fixture()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "conftest.py").write_text("")
+        for flag, baseline, patch in (("--baseline", root / "before", root / "patch"),
+                                      ("--patch", root / "baseline", root / "after"),
+                                      ("--patch", root / "baseline", root / "change.diff")):
+            with self.subTest(flag=flag, missing=(patch if flag == "--patch" else baseline).name):
+                err = io.StringIO()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                    code = main(["--baseline", str(baseline), "--patch", str(patch),
+                                 "--claim", "test_calc.py::test_sub"])
+                self.assertEqual(code, EXIT_USAGE)
+                self.assertIn(f"{flag} ", err.getvalue())
+                self.assertIn("is not a directory", err.getvalue())
+
+
+class TestASurvivorIsPointedAtNextSteps(unittest.TestCase):
+    """The reason named next_steps only when every mutant died (3.0.18)."""
+
+    def test_the_reason_says_where_the_survivors_are(self):
+        import argparse
+        from adversary_gate.cli import _reason
+        from adversary_gate.core.types import Decision, Outcome
+        args = argparse.Namespace(suite_strength_floor=0.75, strength_confidence=0.80,
+                                  coverage_floor=0.80, diff=None, coverage_json=None)
+        held = [mock.Mock(outcome=Outcome.VERIFIED)]
+        weak = {"measured": True, "mutants_counted": 5, "mutants_killed": 4,
+                "survivors": ["calc.py:2"], "interval": [0.5, 0.95]}
+        reason = _reason(Decision.INCONCLUSIVE, held, None, None, args, coverage_ratio=1.0,
+                         strength_judged=0.5, mutation=weak)
+        self.assertTrue(reason.endswith("(4/5 mutants killed): see next_steps for each surviving "
+                                        "mutant, which a test that checks that line kills"), reason)
+        weak["survivors"] = []
+        self.assertTrue(_reason(Decision.INCONCLUSIVE, held, None, None, args, coverage_ratio=1.0,
+                                strength_judged=0.5, mutation=weak).endswith("mutants killed)"))
+
+
+class TestOnlyAppendsTests(unittest.TestCase):
+    def _check(self, old, new, rel="tests/test_x.py"):
+        from adversary_gate.cli import _only_appends_tests
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for side, text in (("baseline", old), ("patch", new)):
+                if text is not None:
+                    (root / side / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (root / side / rel).write_text(text)
+            return _only_appends_tests(root / "baseline", root / "patch", rel)
+
+    def test_what_counts_as_an_append(self):
+        old = "def test_a():\n    assert 1\n"
+        self.assertTrue(self._check(old, old + "\n\ndef test_b():\n    assert 2\n"))
+        self.assertTrue(self._check(old, old + "def test_b():\n    pass\n\n\ndef test_c():\n    pass\n"))
+        for why, new, rel in (
+            ("unchanged", old, "tests/test_x.py"),
+            ("deleted", None, "tests/test_x.py"),
+            ("not python", old + "more\n", "tests/data.txt"),
+            ("an edit", old.replace("1", "0") + "def test_b():\n    pass\n", "tests/test_x.py"),
+            ("a line that continues the old test", old + "    assert 0\n", "tests/test_x.py"),
+            ("a helper, not a test", old + "def helper():\n    pass\n", "tests/test_x.py"),
+            ("a decorated test", old + "@pytest.fixture(autouse=True)\ndef test_b():\n    yield\n",
+             "tests/test_x.py"),
+            ("an async test", old + "async def test_b():\n    pass\n", "tests/test_x.py"),
+            ("a class", old + "class TestB:\n    pass\n", "tests/test_x.py"),
+            ("the same new name twice", old + "def test_b():\n    pass\ndef test_b():\n    pass\n",
+             "tests/test_x.py"),
+            ("not valid", old + "def test_b(:\n", "tests/test_x.py"),
+        ):
+            with self.subTest(why):
+                self.assertFalse(self._check(old, new, rel))
+        named = "test_b = 1\n" + old
+        self.assertFalse(self._check(named, named + "def test_b():\n    pass\n"))
+
+
 if __name__ == "__main__":
     unittest.main()

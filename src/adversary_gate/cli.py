@@ -14,6 +14,8 @@ Exit codes are part of the contract, because CI reads them:
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
 import os
 import re
@@ -27,7 +29,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from adversary_gate import __version__
 from adversary_gate.core.exitmap import PYTEST_NO_TESTS, PYTEST_OK, PYTEST_TESTS_FAILED
-from adversary_gate.core.gate import Gate, GateConfig, rewritten_test_files, transplant_tree
+from adversary_gate.core.gate import (
+    Gate, GateConfig, added_test_files, rewritten_test_files, suite_oracle_tree, transplant_tree,
+)
 from adversary_gate.core.metrics import compute_metrics, format_report
 from adversary_gate.core.types import (
     AcceptanceCriterion,
@@ -38,7 +42,8 @@ from adversary_gate.core.types import (
     GateVerdict,
     Outcome,
 )
-from adversary_gate.sandbox.runner import SandboxResult, build_target, bwrap_available, run_test
+from adversary_gate.sandbox.runner import (SandboxResult, build_target, bwrap_available,
+                                           resolve_sandbox, run_test)
 from adversary_gate.sandbox.runner import _SUMMARY as _PYTEST_SUMMARY
 from adversary_gate.verifiers.coverage import (
     UnparseableDiff,
@@ -261,11 +266,79 @@ def _too_few_mutants(mutation, args) -> Optional[int]:
     interval = m.get("interval") or [1.0]
     if (not m.get("measured") or m.get("survivors") or m.get("stillborn")
             or m.get("unmutated_lines") or m.get("blind_spots")
+            or m.get("foreign_changed_files") or m.get("deleted_files")
             or not counted or killed != counted
             or interval[0] >= args.suite_strength_floor):
         return None
     needed = kills_to_clear(args.suite_strength_floor, args.strength_confidence)
     return needed if needed is not None and needed > counted else None
+
+
+def _only_appends_tests(baseline: Path, patch: Path, rel: str) -> bool:
+    """True when the patch's copy of a baseline test file is the baseline's
+    bytes followed only by new, undecorated ``test`` functions.
+
+    Such an addition reaches no other test: no decorator or fixture runs at
+    import, no module statement, no name the baseline file already defines.
+    It is as safe as a test file of its own, which merges. Anything else --
+    an edited or removed line, a deleted file, a file that is not Python --
+    changed what the baseline's tests check, and nothing measured that.
+    """
+    try:
+        old = (baseline / rel).read_bytes()
+        new = (patch / rel).read_bytes()
+    except OSError:
+        return False
+    if not rel.endswith(".py") or len(new) <= len(old) or not new.startswith(old):
+        return False
+    try:
+        added = ast.parse(new[len(old):].decode("utf-8"))
+        before = list(ast.walk(ast.parse(old.decode("utf-8"))))
+        known = {getattr(node, "name", None) or getattr(node, "id", None) for node in before
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Name))}
+    except (SyntaxError, UnicodeDecodeError, ValueError):
+        return False
+    # An import binds a name too: a new ``test_x`` over an imported one
+    # stops the baseline's test from running. A star import binds names
+    # nothing here can list, so the file is not a plain append.
+    for node in before:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if any(alias.name == "*" for alias in node.names):
+                return False
+            known.update((alias.asname or alias.name).split(".")[0] for alias in node.names)
+    return bool(added.body) and all(
+        isinstance(node, ast.FunctionDef) and not node.decorator_list
+        and node.name.startswith("test") and node.name not in known
+        for node in added.body
+    ) and len({node.name for node in added.body}) == len(added.body)
+
+
+def _small_change_review(decision, verdicts, full_codes, args, *, coverage_ratio,
+                         mutation, fix_proven, unjudged) -> Optional[Dict[str, Any]]:
+    # What a person signs, when the only gap is a change too small to measure.
+    # A correct one-line fix kills its one mutant, yet 1 of 1
+    # cannot clear the strength floor, so the answer is INCONCLUSIVE -- and a
+    # team that sees that on every small fix turns the gate off (a reviewer of
+    # 3.0.17). It stays INCONCLUSIVE; this names the one case where every
+    # other measurement held, so a workflow can route it to a person instead
+    # (the Action's small-change: review). Never a MERGE (3.0.18).
+    needed = _too_few_mutants(mutation, args)
+    if (decision is not Decision.INCONCLUSIVE or unjudged or needed is None
+            or not verdicts
+            or any(v.outcome is not Outcome.VERIFIED for v in verdicts)
+            or coverage_ratio is None or coverage_ratio < args.coverage_floor
+            or (full_codes is not None and tuple(full_codes) != (0, 0))):
+        return None
+    killed = mutation["mutants_killed"]  # a needed count means a measured mutation
+    return {
+        "kind": "small_change",
+        "why": (f"every claim held, coverage met and every mutant was killed, but {killed} of "
+                f"{killed} is too few to measure the tests at this floor ({needed} needed): "
+                "a person reviews the change instead"),
+        "fix_proven": bool(fix_proven),
+        "mutants_killed": killed,
+        "kills_needed": needed,
+    }
 
 
 def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=None,
@@ -363,6 +436,8 @@ def _reason(decision, verdicts, decisive, full_codes, args, *, coverage_ratio=No
             needed = _too_few_mutants(mutation, args)
             small = (f": the change is too small to measure at this floor, which takes "
                      f"at least {needed} killed mutants; see next_steps") if needed else ""
+            if not needed and (mutation or {}).get("survivors"):
+                small = ": see next_steps for each surviving mutant, which a test that checks that line kills"
             return (
                 f"{proven}, but suite strength's lower bound is {strength_judged:.2f}, "
                 f"below the {args.suite_strength_floor:.2f} floor{tally}{small}"
@@ -459,6 +534,10 @@ def _next_steps(decision, verdicts, full_codes, args, *, coverage_ratio, mutatio
                                  "judge the patch; point --full-suite-path at tests that pass there"})
     if decision is Decision.BLOCK:
         return steps
+    for path in (mutation or {}).get("rewritten_tests_unmeasured", []) or []:
+        steps.append({"action": "human_review_test_edit", "file": path,
+                      "why": "the patch changed only tests the baseline shipped; a person "
+                             "checks that they still test what they did"})
     if not verdicts:
         steps.append({"action": "add_test",
                       "why": "no test executed a changed line; add a new test that does "
@@ -678,7 +757,7 @@ def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
     if not args.diff:
         return {"source": "jev", "error": "no --diff to triage", "escalated": False, "applied": {}}
     diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-    triage = triage_diff(diff_text, JevClient(endpoint=args.triage_endpoint), threshold)
+    triage = triage_diff(diff_text, JevClient(endpoint=args.triage_endpoint, model=args.triage_model), threshold)
     raised = escalation(
         triage,
         {"strength_confidence": args.strength_confidence, "coverage_floor": args.coverage_floor},
@@ -690,13 +769,82 @@ def _run_triage(args: argparse.Namespace) -> Dict[str, Any]:
     return triage.to_dict()
 
 
-def _full_oracle(rewritten: Sequence[str], exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
+#: The options that decide an answer, recorded with it (3.0.18): two reports
+#: judged under different floors, limits or sandboxes say so, and
+#: ``policy_sha256`` tells them apart at a glance. The rest name the evidence
+#: or label the record; a test keeps the two lists covering the parser, so a
+#: new option has to be put in one of them.
+POLICY_OPTIONS = (
+    "test_support", "triage", "triage_endpoint", "triage_model", "triage_threshold", "discover_claims",
+    "max_claims", "bug_kind", "aggression", "max_rounds", "coverage_source", "coverage_floor",
+    "suite_strength_floor", "strength_confidence", "serial_sides", "mutation_workers",
+    "mutation_max", "census_min_mutants", "mutate_constants", "full_suite_path",
+    "full_suite_timeout", "full_suite_cpu_seconds", "full_suite_memory", "test_command",
+    "full_suite_command", "sandbox", "python", "timeout", "cpu_seconds", "memory", "pass_env",
+    "env", "require_network_isolation",
+)
+EVIDENCE_OPTIONS = (
+    "help", "version", "baseline", "patch", "test_path", "test_id", "claim", "claim_json",
+    "criterion_id", "criterion", "rationale", "changed_path", "coverage_ratio", "diff",
+    "coverage_json", "rounds_used", "evidence_log", "model", "commit", "report",
+)
+
+
+def _policy(args: argparse.Namespace) -> Dict[str, Any]:
+    # The deciding options as they stood when the decision was made (after triage).
+    policy = {name: getattr(args, name) for name in POLICY_OPTIONS}
+    # Names only: a value given with --env may be a secret.
+    policy["env"] = sorted(item.split("=", 1)[0] for item in args.env)
+    return policy
+
+
+def _changed_in_copy(original: Path, copy: Path, ignore: Sequence[Path] = ()) -> List[str]:
+    """Files of ``original`` that are changed or gone in ``copy``, the tree the claims ran in.
+
+    Files a run added are not counted: tests write reports and caches. A file
+    the tree shipped, changed, is the tests rewriting what they are judged on.
+    """
+    # ``ignore`` holds the gate's own files (its evidence log): the gate writes
+    # them into ``original`` while the claims run, so they differ from the copy.
+    root = original.resolve()
+    skip = set()
+    for path in ignore:
+        try:
+            skip.add(path.resolve().relative_to(root).as_posix())
+        except ValueError:
+            pass
+    changed: List[str] = []
+    for current, dirs, files in os.walk(original):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".pytest_cache")]
+        for name in files:
+            if name.endswith(".pyc"):
+                continue
+            source = Path(current) / name
+            rel = source.relative_to(original).as_posix()
+            if rel in skip:
+                continue
+            target = copy / rel
+            if source.is_symlink():
+                same = target.is_symlink() and os.readlink(source) == os.readlink(target)
+            else:
+                same = (not target.is_symlink() and target.is_file()
+                        and source.stat().st_size == target.stat().st_size
+                        and source.read_bytes() == target.read_bytes())
+            if not same:
+                changed.append(rel)
+    return changed
+
+
+def _full_oracle(rewritten: Sequence[str], added: Sequence[str],
+                 exit_code: Optional[int]) -> Optional[Dict[str, Any]]:
     """What the collateral run judged the patch's code with, when it was not the patch's tests."""
-    if not rewritten:
+    if not rewritten and not added:
         return None
     return {
         "source": "baseline",
         "rewritten_test_files": list(rewritten),
+        # Left out of that run, not judged by it (3.0.18).
+        "added_test_files": list(added),
         "exit_code": exit_code,
     }
 
@@ -773,6 +921,11 @@ def build_parser() -> argparse.ArgumentParser:
         "run; nothing it says can make the decision more lenient.",
     )
     parser.add_argument("--triage-endpoint", help="override the Jev endpoint (default: TypeSafe's)")
+    parser.add_argument(
+        "--triage-model",
+        help="the Jev model to ask (default: TYPESAFE_MODEL, else jev-latest); the "
+        "model that answered is recorded in execution.triage",
+    )
     parser.add_argument(
         "--triage-threshold",
         type=float,
@@ -951,12 +1104,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sandbox",
-        default="none",
-        choices=["none", "bwrap"],
+        default="auto",
+        choices=["auto", "none", "bwrap"],
         help="wrap every test run in bubblewrap: no network, private PID and "
-        "/tmp, read-only system, read-write only the repository. Opt-in "
-        "defence in depth -- it needs 'bwrap' installed, and it is not a "
-        "substitute for running the whole gate inside a container or VM. "
+        "/tmp, read-only system, read-write only the repository. 'auto' (the "
+        "default since 3.0.18) uses it wherever bwrap can run the interpreter "
+        "and says in the answer when it could not; 'bwrap' refuses to start "
+        "without it; 'none' turns it off. Defence in depth, not a substitute "
+        "for running the whole gate inside a container or VM. "
         "When you use it, --require-network-isolation becomes truthful: the "
         "network really is gone, so ADVERSARY_NETWORK_ISOLATED=1 is no longer "
         "a wish.",
@@ -972,7 +1127,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_limit,
         default=30,
         metavar="SECONDS|none",
-        help="wall-clock limit for each test run, mutants and full suite included (default 30)",
+        help="wall-clock limit for each claim and mutant run (default 30); the full suite has --full-suite-timeout",
     )
     parser.add_argument(
         "--cpu-seconds",
@@ -1056,6 +1211,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # Every call sets it, empty included: a previous main() in the same
         # process must not leave its declarations behind.
         set_test_support(args.test_support)
+        # A tree that is not there read as an empty one: no error, and a
+        # reason that blamed whatever the patch's tree held, a conftest.py
+        # nobody had touched (3.0.18). It is a usage error.
+        for flag, value in (("--baseline", args.baseline), ("--patch", args.patch)):
+            if not Path(value).is_dir():
+                raise ValueError(f"{flag} {value!r} is not a directory: point it at the tree "
+                                 "(for the baseline, e.g. a `git worktree add --detach` of the base)")
         if args.mutation_workers < 1:
             raise ValueError("--mutation-workers must be at least 1")
         if args.mutation_workers > 1 and args.census_min_mutants > 0 and not args.serial_sides:
@@ -1102,12 +1264,35 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # suite alike (AG-024, AG-025). One set of choices, recorded once, so
         # the artefact says what the numbers were measured under.
         python = _resolve_python(args.python)
+        # ``auto`` decided once, here, so every run and the record agree.
+        sandbox_requested = args.sandbox
+        args.sandbox, sandbox_note = resolve_sandbox(args.sandbox, python)
         run_env, env_record = _run_environment(args)
         limits = {
             "timeout_seconds": args.timeout,
             "cpu_seconds": args.cpu_seconds,
             "mem_bytes": args.memory,
         }
+        if args.require_network_isolation and os.environ.get(
+            "ADVERSARY_NETWORK_ISOLATED"
+        ) != "1":
+            # Fail fast instead of letting the first run_test raise halfway
+            # through the measurements -- and before triage, which sends the
+            # diff over the network (3.0.18: it ran first).
+            raise ValueError(
+                "--require-network-isolation was given but ADVERSARY_NETWORK_ISOLATED "
+                "is not '1'; run inside an outer sandbox that has isolated the network"
+            )
+
+        if args.sandbox == "bwrap" and not bwrap_available():
+            # Checked before anything executes: asking for isolation and
+            # quietly not getting it is the failure mode this flag exists to
+            # prevent.
+            raise ValueError(
+                "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
+                "install bubblewrap (apt install bubblewrap) or drop the flag"
+            )
+
         triage_record: Optional[Dict[str, Any]] = None
         if args.triage == "jev":
             triage_record = _run_triage(args)
@@ -1124,6 +1309,9 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # the default on Android (#4).
             "android": _on_android(),
             "sandbox": args.sandbox,
+            "sandbox_requested": sandbox_requested,
+            # Why ``auto`` came to no sandbox, when it did: not hidden.
+            "sandbox_note": sandbox_note or None,
             # Whether the two sides of each check overlapped: it changes how
             # likely a wall-clock limit is to fire, so it belongs with them.
             "serial_sides": args.serial_sides,
@@ -1145,25 +1333,6 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             added = [node for node in found if node not in named]
             claims.extend(_claim(args, path, test_id) for path, test_id in added)
             discovery["claims_added"] = [f"{path}::{test_id}" for path, test_id in added]
-
-        if args.require_network_isolation and os.environ.get(
-            "ADVERSARY_NETWORK_ISOLATED"
-        ) != "1":
-            # Fail fast instead of letting the first run_test raise halfway
-            # through the measurements.
-            raise ValueError(
-                "--require-network-isolation was given but ADVERSARY_NETWORK_ISOLATED "
-                "is not '1'; run inside an outer sandbox that has isolated the network"
-            )
-
-        if args.sandbox == "bwrap" and not bwrap_available():
-            # Checked before anything executes: asking for isolation and
-            # quietly not getting it is the failure mode this flag exists to
-            # prevent.
-            raise ValueError(
-                "--sandbox bwrap was requested but 'bwrap' is not on PATH; "
-                "install bubblewrap (apt install bubblewrap) or drop the flag"
-            )
 
         log = None
         if args.evidence_log:
@@ -1200,8 +1369,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         full_command = args.full_suite_command or args.test_command
         full_suite_ran = bool(full_command) or bool(args.full_suite_path)
         rewritten_tests = rewritten_test_files(Path(args.baseline), Path(args.patch))
+        # The whole suite is judged by the baseline's tests alone whenever the
+        # patch touched the tests at all: see :func:`suite_oracle_tree`.
+        added_tests = added_test_files(Path(args.baseline), Path(args.patch))
+        suite_oracle_files = [*rewritten_tests, *added_tests]
+        suite_oracle_record = (rewritten_tests, added_tests) if full_suite_ran else ((), ())
         oracle_full_code: Optional[int] = None
         suite_unsettled: Optional[str] = None
+        suite_skips: Optional[str] = None
 
         # The suite runs under its own limits (AG-033): the per-test ones killed
         # it on both sides (time) or made pytest die with MemoryError (address
@@ -1244,15 +1419,23 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         # suite reports it (next_steps suggests --serial-sides).
         suite_future: Optional[Future] = None
 
-        def _patch_suite(patch_dir: Path, oracle_tree: Optional[Path]) -> Tuple[SandboxResult, Optional[int]]:
+        # The third value is how many tests the baseline's suite skipped on
+        # the patch's code: the oracle run when the patch touched the tests,
+        # the patch's own run when it did not. Either way the same tests the
+        # baseline runs, so the two counts compare.
+        def _patch_suite(
+            patch_dir: Path, oracle_tree: Optional[Path]
+        ) -> Tuple[SandboxResult, Optional[int], int]:
             if oracle_tree is None:
-                return _full_run(patch_dir), None
+                alone = _full_run(patch_dir)
+                return alone, None, _skipped(alone.stdout)
             patch_run, oracle_run = gate.pair(
                 lambda: _full_run(patch_dir), lambda: _full_run(oracle_tree)
             )
+            skipped = _skipped(oracle_run.stdout)
             if patch_run.exit_code == PYTEST_OK and oracle_run.exit_code != PYTEST_OK:
-                return oracle_run, oracle_run.exit_code
-            return patch_run, oracle_run.exit_code
+                return oracle_run, oracle_run.exit_code, skipped
+            return patch_run, oracle_run.exit_code, skipped
 
         if full_suite_ran and not args.serial_sides:
             suite_scratch = tempfile.TemporaryDirectory(prefix="adversary-suite-")
@@ -1264,8 +1447,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
             )
             oracle_tree = (
-                transplant_tree(Path(args.baseline), Path(args.patch), scratch / "oracle")
-                if rewritten_tests else None
+                suite_oracle_tree(Path(args.baseline), Path(args.patch), scratch / "oracle")
+                if suite_oracle_files else None
             )
             suite_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="adversary-suite")
             background.append(suite_pool)
@@ -1278,11 +1461,22 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
 
         # Which files of each tree are tests, read once for all the claims (F-004).
         scans: Dict[str, Any] = {}
+        # The claims run in copies of the trees (3.0.18). They ran in the trees
+        # every later measurement reads -- mutation, its oracle, the serial
+        # suite -- and a claim that rewrote the patch's source had the rest of
+        # the gate measure other code: the source put back to the baseline's
+        # bytes read as "no source changed" and reached MERGE.
+        claims_scratch = tempfile.TemporaryDirectory(prefix="adversary-claims-")
+        background.append(claims_scratch)
+        claim_trees = {side: Path(claims_scratch.name) / side for side in ("baseline", "patch")}
+        for side, source in (("baseline", args.baseline), ("patch", args.patch)):
+            shutil.copytree(Path(source), claim_trees[side], symlinks=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
         verdicts: List[GateVerdict] = [
             gate.verify_claim(
                 claim,
-                Path(args.baseline),
-                Path(args.patch),
+                claim_trees["baseline"],
+                claim_trees["patch"],
                 # ``--changed-path`` used to be the *only* input to the path
                 # policy, and the Action never passes it -- so the protection for
                 # conftest.py, pytest config and the like existed and was never
@@ -1306,6 +1500,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             for claim in claims
         ]
         all_verified = bool(verdicts) and all(v.outcome is Outcome.VERIFIED for v in verdicts)
+        # The evidence log can sit inside a tree (the Action's default,
+        # ``evidence.jsonl``, is in the workspace it judges as the patch), and
+        # the gate appends to it while the claims run: that is not a rewrite.
+        own_files = log.files() if log is not None else []
+        claims_rewrote = sorted(
+            f"{side}/{rel}" for side, source in (("baseline", args.baseline), ("patch", args.patch))
+            for rel in _changed_in_copy(Path(source), claim_trees[side], ignore=own_files)
+        )
+        execution["claims_rewrote"] = claims_rewrote
 
         # ------------------------------------------------------------------
         # Patch-level measurements. Both used to be parameters that defaulted
@@ -1434,6 +1637,25 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     # already decides and strength would only add noise.
                     strength_unverified = True
 
+        # A patch that changes no source line and rewrites or deletes tests the
+        # baseline shipped leaves the mutants nothing to break. The baseline's
+        # copies judged it and held, which says nothing about the copies that
+        # would land: what those tests check was not measured, so it is not a
+        # MERGE (3.0.18). A patch that only adds tests is unaffected.
+        bent_tests = [rel for rel in rewritten_tests
+                      if not _only_appends_tests(Path(args.baseline), Path(args.patch), rel)]
+        if (all_verified and bent_tests and not strength_unverified
+                and not mutation_detail.get("changed_files")):
+            strength_unverified = True
+            mutation_detail["rewritten_tests_unmeasured"] = bent_tests
+            shown = ", ".join(bent_tests[:3]) + (
+                f" (+{len(bent_tests) - 3} more)" if len(bent_tests) > 3 else "")
+            mutation_detail["reason"] = (
+                f"the patch changes no source line and rewrote or deleted tests the baseline "
+                f"shipped ({shown}): the baseline's copies held, but what the patch's copies "
+                "check was not measured; a person reviews the test change"
+            )
+
         if full_suite_ran:
             # Only pay for the baseline run when the patch side actually failed;
             # a passing patch side is not a collateral regression either way.
@@ -1446,17 +1668,40 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             # pass is the *baseline's*, run against the patch's code. The
             # patch's own copy alone would let a bent test vouch for itself
             # outside the claims, where no claim was looking.
-            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int]]:
-                if rewritten_tests:
+            def _patch_suite_alone() -> Tuple[SandboxResult, Optional[int], int]:
+                if suite_oracle_files:
                     with tempfile.TemporaryDirectory(prefix="adversary-oracle-") as scratch:
-                        tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                        tree = suite_oracle_tree(Path(args.baseline), Path(args.patch), Path(scratch))
                         return _patch_suite(Path(args.patch), tree)
                 return _patch_suite(Path(args.patch), None)
 
             if suite_future is not None:
-                patch_full, oracle_full_code = suite_future.result()
+                patch_full, oracle_full_code, skipped_on_patch = suite_future.result()
             else:
-                patch_full, oracle_full_code = _patch_suite_alone()
+                patch_full, oracle_full_code, skipped_on_patch = _patch_suite_alone()
+            if patch_full.exit_code == PYTEST_OK and skipped_on_patch:
+                # A suite that passes says nothing for a test it skipped: a
+                # test that looks for what the patch removed (``skipif``,
+                # ``importorskip``) skips itself and the exit code stays 0.
+                # The rewritten-test route has weighed this since 3.0.14; the
+                # full suite, the default, never did.
+                base_full = _full_run(Path(args.baseline))
+                skipped_on_baseline = _skipped(base_full.stdout)
+                execution["full_suite_skipped"] = {
+                    "patch": skipped_on_patch, "baseline": skipped_on_baseline,
+                    "baseline_exit": base_full.exit_code,
+                }
+                # Whatever the baseline's exit: a suite that fails there (the
+                # test the patch fixes) still counts its skips, and one that
+                # could not run shows no skip the patch could have inherited.
+                if skipped_on_patch > skipped_on_baseline:
+                    suite_skips = (
+                        f"the full suite passes on the patch, but the baseline's tests skip "
+                        f"{skipped_on_patch} on the patch's code and {skipped_on_baseline} on the "
+                        f"baseline (exit {base_full.exit_code} there): a test outside the "
+                        "claims stopped running, so nothing shows the patch kept what it "
+                        "checked; run pytest -rs on both sides to see which"
+                    )
             if patch_full.exit_code != PYTEST_OK:
                 base_full = _full_run(Path(args.baseline))
                 full_codes = (base_full.exit_code, patch_full.exit_code)
@@ -1466,7 +1711,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 # failing is a regression; passing now is a suite that failed
                 # once, slow or flaky, which is not a pass either.
                 if suite_future is not None and base_full.exit_code == PYTEST_OK:
-                    again, again_oracle = _patch_suite_alone()
+                    again, again_oracle, _ = _patch_suite_alone()
                     execution["full_suite_rerun_alone"] = again.exit_code
                     if again.exit_code == PYTEST_OK:
                         full_codes = None
@@ -1525,7 +1770,8 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             for claim in claims:
                 deselected += ["--deselect", build_target(claim.test_path, claim.test_id)]
             with tempfile.TemporaryDirectory(prefix="adversary-rewritten-") as scratch:
-                tree = transplant_tree(Path(args.baseline), Path(args.patch), Path(scratch))
+                # Without the test files the patch added: see suite_oracle_tree.
+                tree = suite_oracle_tree(Path(args.baseline), Path(args.patch), Path(scratch))
                 ran = run_test(
                     tree, "", targets=rewritten_runnable,
                     require_network_isolation=args.require_network_isolation,
@@ -1573,6 +1819,26 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                 )
                 unjudged_flags = ["--full-suite-path"]
 
+        if decision is Decision.MERGE and suite_skips:
+            decision = Decision.INCONCLUSIVE
+            unjudged_action = "see_reason"
+            unjudged_flags = []
+            unjudged_reason = suite_skips
+
+        if decision is Decision.MERGE and claims_rewrote:
+            decision = Decision.INCONCLUSIVE
+            unjudged_action = "see_reason"
+            unjudged_flags = []
+            unjudged_reason = (
+                f"the claims' runs changed or removed {', '.join(claims_rewrote[:5])}"
+                + (f" (+{len(claims_rewrote) - 5} more)" if len(claims_rewrote) > 5 else "")
+                + ": a test that rewrites the tree it is judged in makes its own passing "
+                "say nothing about the code as shipped; review those tests"
+            )
+
+        policy = _policy(args)
+        policy_sha256 = hashlib.sha256(
+            json.dumps(policy, sort_keys=True, default=str).encode("utf-8")).hexdigest()
         summary = _summary(verdicts, mutation_detail)
         if log is not None:
             log.append_decision(
@@ -1596,9 +1862,13 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                     "mutation": mutation_detail,
                     "full_suite_ran": full_suite_ran,
                     "full_suite_exit_codes": list(full_codes) if full_codes else None,
-                    "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
+                    "full_suite_oracle": _full_oracle(*suite_oracle_record, oracle_full_code),
                     "execution": execution,
                     "discovery": discovery,
+                    "coverage_floor": args.coverage_floor,
+                    "gate_version": __version__,
+                    "policy": policy,
+                    "policy_sha256": policy_sha256,
                 },
             )
 
@@ -1627,6 +1897,10 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "claims_total": summary["claims_total"],
             "claims_fixed": summary["claims_fixed"],
             "fix_proven": summary["fix_proven"],
+            "human_review": _small_change_review(
+                decision, verdicts, full_codes, args, coverage_ratio=coverage_ratio,
+                mutation=mutation_detail, fix_proven=summary["fix_proven"],
+                unjudged=bool(unjudged_reason)),
             "claims": [_verdict_record(v) for v in verdicts],
             # None means "not measured", never "perfect".
             "suite_strength": strength,
@@ -1639,9 +1913,14 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
             "diff_coverage_source": coverage_source,
             "diff_coverage": coverage_detail,
             "full_suite_ran": full_suite_ran,
-            "full_suite_oracle": _full_oracle(rewritten_tests if full_suite_ran else (), oracle_full_code),
+            "full_suite_oracle": _full_oracle(*suite_oracle_record, oracle_full_code),
             "measurement_seconds": round(mutation_seconds, 6),
             "execution": execution,
+            # Under which rules: every deciding option, and one hash of them.
+            "coverage_floor": args.coverage_floor,
+            "gate_version": __version__,
+            "policy": policy,
+            "policy_sha256": policy_sha256,
         }
         if discovery is not None:
             payload["discovery"] = discovery

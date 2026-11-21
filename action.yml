@@ -122,18 +122,34 @@ inputs:
       Scope it to the project the patch belongs to: a repository that hosts
       another project as a fixture should have *that* project's suite judged,
       not its own. Left at the default, the collateral run is this repository's
-      entire test suite, which does not fit the gate's 30-second execution
-      budget and therefore reports INCONCLUSIVE instead of a result.
+      entire test suite, under the gate's full-suite limit (900 s of wall
+      clock; the Action does not change it): a suite that runs longer reports
+      INCONCLUSIVE instead of a result.
     required: false
   sandbox:
     description: >-
-      'none' (default) or 'bwrap'. bwrap wraps every run in bubblewrap: no
-      network, private PID and /tmp, read-only system, only the repository
-      writable. Requires bubblewrap on the runner; the gate refuses to start
-      without it rather than running unsandboxed. Not a substitute for a
-      container or VM -- see "Execution boundary" in the README.
+      'auto' (default since 3.0.18), 'bwrap' or 'none'. bwrap wraps every run
+      in bubblewrap: no network, private PID and /tmp, read-only system, only
+      the repository writable. 'auto' uses it wherever bubblewrap can run the
+      project's interpreter and says in the answer when it could not; 'bwrap'
+      refuses to start without it rather than running unsandboxed; 'none'
+      turns it off (tests that need the network). Not a substitute for a
+      container or VM -- see docs/EXECUTION_BOUNDARY.md.
     required: false
-    default: 'none'
+    default: 'auto'
+  small-change:
+    description: >-
+      'fail' (default) or 'review'. A change too small to measure -- every
+      claim held, coverage met, all its mutants killed, but too few of them
+      for the strength floor -- is INCONCLUSIVE (exit 2).
+      With 'review', that one case passes the step with a warning that a
+      person must review the change, and review-required is 'true'; every
+      other INCONCLUSIVE still fails. It never turns anything into a merge.
+      The step then succeeds, so auto-merge or a merge bot can merge the
+      change with no one looking, unless the branch requires an approving
+      review. Require one, or act on the review-required output.
+    required: false
+    default: 'fail'
   bug-kind:
     description: 'Bug category: deterministic, concurrency, or performance'
     required: false
@@ -181,7 +197,7 @@ inputs:
     required: false
     default: '0.80'
   suite-strength-floor:
-    description: 'Minimum required suite strength ratio (0.0 to 1.0)'
+    description: 'Minimum suite strength (0.0 to 1.0), applied to the Wilson lower bound of the mutation score at strength-confidence, not to the plain ratio'
     required: false
     default: '0.75'
   evidence-log:
@@ -217,6 +233,11 @@ outputs:
   claims-total:
     description: 'How many claims were verified in this run'
     value: ${{ steps.gate.outputs.claims-total }}
+  review-required:
+    description: >-
+      'true' when the answer is a change too small to measure, which a
+      person has to review (see small-change); 'false' otherwise.
+    value: ${{ steps.gate.outputs.review-required }}
   python:
     description: 'The interpreter the tests ran on'
     value: ${{ steps.python.outputs.python }}
@@ -248,6 +269,10 @@ runs:
         AG_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+        # Not from the checkout: ``-m`` and ``-c`` put the working directory
+        # first on sys.path, so a ``venv/`` or ``pip/`` at the root of the pull
+        # request ran here, before any sandbox, with this venv in reach (3.0.18).
+        mkdir -p "${RUNNER_TEMP}/adversary-gate/cwd" && cd "${RUNNER_TEMP}/adversary-gate/cwd"
         VENV="${RUNNER_TEMP}/adversary-gate/venv"
         "$AG_SETUP_PYTHON" -m venv "$VENV"
         "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$AG_ACTION_PATH" coverage
@@ -267,11 +292,20 @@ runs:
         AG_TEST_COMMAND: ${{ inputs.test-command }}
       run: |
         set -euo pipefail
+        # A relative 'python' input names a path in the checkout; resolved
+        # there, then every probe below runs from a directory of the gate's
+        # own, as in the step above.
+        WORKSPACE="$PWD"
+        mkdir -p "${RUNNER_TEMP}/adversary-gate/cwd" && cd "${RUNNER_TEMP}/adversary-gate/cwd"
         TOOLS="${RUNNER_TEMP}/adversary-gate/tools"
         mkdir -p "$TOOLS/bin"
         PROJECT=""
         if [ -n "$AG_PYTHON_IN" ]; then
-          PROJECT="$(command -v "$AG_PYTHON_IN" || true)"
+          PROJECT="$(cd "$WORKSPACE" && command -v "$AG_PYTHON_IN" || true)"
+          case "$PROJECT" in
+            /*|"") ;;
+            *) PROJECT="$WORKSPACE/$PROJECT" ;;
+          esac
           if [ -z "$PROJECT" ] || [ ! -x "$PROJECT" ]; then
             echo "::error::python: '$AG_PYTHON_IN' is not an executable interpreter"
             exit 3
@@ -459,6 +493,7 @@ runs:
         AG_FULL_SUITE_COMMAND: ${{ inputs.full-suite-command }}
         AG_FULL_SUITE_PATH: ${{ inputs.full-suite-path }}
         AG_SANDBOX: ${{ inputs.sandbox }}
+        AG_SMALL_CHANGE: ${{ inputs.small-change }}
         AG_BUG_KIND: ${{ inputs.bug-kind }}
         AG_COVERAGE_FLOOR: ${{ inputs.coverage-floor }}
         AG_COVERAGE_SOURCE: ${{ inputs.coverage-source }}
@@ -612,4 +647,9 @@ runs:
         echo "claims-total=${CLAIMS_TOTAL}" >> "$GITHUB_OUTPUT"
         echo "exit-code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
 
-        exit $EXIT_CODE
+        # The one INCONCLUSIVE a person can sign, routed to review only when
+        # asked; never a merge (3.0.18). In Python, so the tests reach it.
+        FINAL=0
+        "$AG_GATE_PYTHON" -I -m adversary_gate.integrations.action_review --exit-code "$EXIT_CODE" \
+          --mode "$AG_SMALL_CHANGE" --output "$GITHUB_OUTPUT" <<< "$JSON_OUT" || FINAL=$?
+        exit $FINAL

@@ -4,15 +4,25 @@ Read this before trusting the gate with untrusted code. Back to the [README](../
 
 ## 🛡️ Execution boundary (read this before trusting it with untrusted code)
 
-`src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
+`src/adversary_gate/sandbox/runner.py` applies POSIX resource limits on every run: `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, plus a timeout that kills the process group; and `RLIMIT_CPU` and `RLIMIT_AS` unless the limit is `none` — which is the default for the full-suite CPU limit (`--full-suite-cpu-seconds`), for both limits in the coverage pass (MCP and Action), and for memory on Android. A limit above what the process inherited is lowered to the inherited hard limit. By itself that is a **resource-limited runner, not a security sandbox** — it bounds how *much* a test can do, not *what*.
 
 **Android / Termux.** On Android, `RLIMIT_AS` (`--memory`, `--full-suite-memory`) aborts some processes at start, because of how the runtime reserves address space; in the runs reported in issue #4, no finite address-space limit worked there. Since 3.0.5 neither limit is set on Android unless you pass one: the gate recognises it (`sys.platform == "android"`, or `sys.getandroidapilevel` present) and the artefact records `execution.android`. The other limits still apply.
 
-### `--sandbox bwrap` — opt-in, and what it honestly buys
+### `--sandbox` — on by default where it can run, and what it honestly buys
 
 ```bash
-adversary-gate ... --sandbox bwrap
+adversary-gate ...                  # 'auto' (the default since 3.0.18)
+adversary-gate ... --sandbox bwrap  # refuse to start without it
+adversary-gate ... --sandbox none   # off: tests that need the network
 ```
+
+`auto` probes once whether bubblewrap can run the project's interpreter. If it
+can, every run is wrapped; if it cannot -- no `bwrap` on the runner, a kernel
+that refuses user namespaces, an interpreter outside what the sandbox binds
+(a `uv`-managed Python under `~/.local/share` is one) -- the runs go without it
+and the answer says so: `execution.sandbox` is `none`, `execution.sandbox_requested`
+is `auto`, and `execution.sandbox_note` says why. Until 3.0.18 the default was
+no sandbox at all. Use `--sandbox bwrap` when running without it must not happen.
 
 Wraps every claim run and the collateral suite in [bubblewrap](https://github.com/containers/bubblewrap):
 
@@ -38,7 +48,7 @@ Network namespaces beyond bwrap, seccomp, chroot, containers, an unprivileged us
 
 **Run hostile patches inside an outer sandbox you control** — rootless container, VM, or an ephemeral isolated runner. AdversaryGate verifies test outcomes; it does not contain hostile code.
 
-The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root. Your project's dependencies are not in it, so extend it:
+The GitHub Action already runs on an ephemeral runner: the job's VM is thrown away when it ends, which is that outer sandbox, as long as the job holds no secret the patch could read. Off GitHub, the repository's image is a starting point. It runs as an unprivileged user (uid 10001), never as root, and tells git to trust any repository mounted into it (`safe.directory '*'`), so mount only a throwaway copy. Your project's dependencies are not in it, so extend it:
 
 ```dockerfile
 FROM adversary-gate-mcp            # docker build -t adversary-gate-mcp .
@@ -73,4 +83,4 @@ Both are deliberate deception, not accidents, and both are reasons `MERGE` means
 Two more that the branch mutants narrow but do not close, measured on the case they were built for:
 
 - **A special case kept in data, not in syntax.** `return {0: 999}.get(x, x + 1)` has no conditional for a branch mutant to remove, and the gate never changes a literal. If no claim passes `0`, nothing the gate does reaches the `999`: next to honest, tested changes that bring the sample to five kills, it merges.
-- **A hidden branch whose body has its own line, with an operator on it.** Coverage sees that body — it counts against the ratio — and the default floor (`--coverage-floor 0.80`) tolerates up to one changed line in five that no claim executed. A body with no operator (`return 999`) is broken outright and blocks; one with an operator (`return x + 998`) is a single surviving operator mutant in the ratio, which enough honest kills elsewhere can outweigh (eleven against one, at the defaults). `--coverage-floor 1.0` refuses any changed line that never ran.
+- **A hidden branch whose body has its own line, with an operator on it.** Coverage sees that body — it counts against the ratio — and the default floor (`--coverage-floor 0.80`) tolerates up to one changed line in five that no claim executed. A body with no operator (`return 999`) leaves a statement-level mutant that survives, a blind spot, so the answer is not `MERGE`; one with an operator (`return x + 998`) is a single surviving operator mutant in the ratio, which enough honest kills elsewhere can outweigh (eleven against one, at the defaults). `--coverage-floor 1.0` refuses any changed line that never ran.

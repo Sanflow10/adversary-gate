@@ -54,7 +54,10 @@ import difflib
 import io
 import keyword
 import math
+import os
+import secrets
 import shutil
+import string
 import tempfile
 import time
 import tokenize
@@ -547,7 +550,8 @@ def changed_foreign_source_files(
         if not rel.endswith(".py") and _is_non_source(rel) and rel in patch \
                 and (loads_text or _is_python(patch[rel])):
             code.add(rel)
-    # A test folder is no hiding place for text a module runs, changed or not:
+    # No folder is a hiding place for text a module runs -- the whole tree is
+    # read, test folders included, whether the module changed or not:
     # ``exec(open("tests/data/rules.txt").read())`` reached MERGE (3.0.15), and
     # so did a patch that changed only that text, its module already there.
     runners = _resident_runners(Path(patch_dir))
@@ -617,7 +621,12 @@ _TEXT_RUNNERS = frozenset({"exec", "eval", "compile", "run_path", "run_module",
                            "execlp", "execlpe", "spawnv", "spawnve", "spawnvp",
                            "spawnvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe",
                            "posix_spawn", "posix_spawnp", "startfile",
-                           "create_subprocess_exec", "create_subprocess_shell"})
+                           "create_subprocess_exec", "create_subprocess_shell",
+                           # A module imported by a name built at run time
+                           # (``".".join(["tests", "rules"])``) is run text
+                           # too: the import resolver reads only literal names,
+                           # and the module looked like a test (3.0.18).
+                           "import_module", "__import__"})
 
 
 def _runs_text(source: bytes) -> bool:
@@ -771,17 +780,37 @@ def changed_lines(baseline_text: str, patch_text: str) -> set:
 
 
 #: Appended to the end of every logical line the patch wrote, in the canary copy.
-_CANARY = "  # adversary-gate canary"
+#: Drawn once per process (3.0.18): a fixed marker was one a claim could look
+#: for, pass on, and fail on every mutant -- every mutant killed.
+_CANARY = f"  # {secrets.token_hex(8)}"
 #: The statement the canary adds after (or before) code the patch wrote. Assigning
 #: it changes the tree and the bytecode of the function that holds it, and nothing
 #: the code computes. The name ends in ``__``, so a class does not mangle it. It is
 #: deleted on the same line: left bound, it showed up in ``locals()`` and in a
 #: class's ``vars()``, and an honest test of either failed on the copy (3.0.1).
-_PROBE = "__adversary_probe__"
-_PROBE_LINE = f"{_PROBE} = 0; del {_PROBE}"
+_PROBE = f"__p{secrets.token_hex(8)}__"
+
+
+def _probe_line() -> str:
+    # Built when it is used, not at import: a mutant that drops ``_PROBE`` then
+    # fails the canary's tests instead of the import, which no claim can judge.
+    return f"{_PROBE} = 0; del {_PROBE}"
 _SIMPLE = (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Return, ast.Raise,
            ast.Assert, ast.Pass, ast.Delete, ast.Import, ast.ImportFrom, ast.Global,
            ast.Nonlocal, ast.Break, ast.Continue)
+
+
+def _padding(length: int) -> str:
+    """A comment line of about ``length`` characters, nothing else."""
+    return "#" + "".join(secrets.choice(string.ascii_letters) for _ in range(max(1, length))) + "\n"
+
+
+def _write_like(target: Path, text: str, like: Path) -> None:
+    """Write ``text`` with the times of ``like``: a fresh mtime told a mutant
+    from the reference, whose copies keep theirs (3.0.18)."""
+    target.write_text(text, encoding="utf-8")
+    stat = like.stat()
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 class CanaryUnavailable(Exception):
@@ -1015,7 +1044,7 @@ def canary_source(source: str, edited: set) -> Optional[str]:
     # Insertion points are found on the original lines; the comments do not move a line.
     inserts = []
     for side, at in sites:
-        inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _PROBE_LINE))
+        inserts.append((at if side == "after" else at - 1, sites[(side, at)] + _probe_line()))
     # A claim can read a *piece* of a changed line, too: every mutant swaps a
     # token inside it, so a substring that spans one fails on every mutant and
     # scores 1.0 while checking nothing -- the comment at the end of the line
@@ -1803,11 +1832,17 @@ def measure_mutation_score(
         # The unmutated claims passed (checked above), so a claim that fails on
         # the neutral copy is reading the code, not running it.
         trees = [work] if twin is None else [work, twin]
+        # The canary and every mutant end in a comment line of a random length,
+        # the mutants' drawn over the canary's sizes: a claim that passes on the
+        # canary's size passes on the mutants' as well (3.0.18).
+        grown = {rel: len(neutral) - len(originals[rel]) for rel, neutral in canary_files.items()}
         if canary_files:
             _fresh(work)
             for rel, neutral in canary_files.items():
+                padded = neutral + ("" if neutral.endswith("\n") else "\n") + _padding(
+                    secrets.randbelow(64))
                 for tree in trees:
-                    (tree / rel).write_text(neutral, encoding="utf-8")
+                    _write_like(tree / rel, padded, pristine / rel)
             try:
                 probe = _run()
                 if probe.timed_out or probe.exit_code < 0:
@@ -1819,7 +1854,7 @@ def measure_mutation_score(
             finally:
                 for rel in canary_files:
                     for tree in trees:
-                        (tree / rel).write_text(originals[rel], encoding="utf-8")
+                        _write_like(tree / rel, originals[rel], pristine / rel)
             detail["canary"] = {"files": sorted(canary_files), "exit_code": probe.exit_code}
             if probe.exit_code != PYTEST_OK:
                 sensitive = probe.exit_code == PYTEST_TESTS_FAILED
@@ -1873,15 +1908,17 @@ def measure_mutation_score(
                     shutil.copytree(pristine, directory)
                 else:
                     _fresh(directory)
+                padded = mutant_source + ("" if mutant_source.endswith("\n") else "\n") + _padding(
+                    grown.get(rel.as_posix(), 0) + secrets.randbelow(64))
                 for target in targets_:
-                    target.write_text(mutant_source, encoding="utf-8")
+                    _write_like(target, padded, pristine / rel)
                 return _run(directory)
             except Exception as exc:  # noqa: BLE001 - a broken harness is not suite evidence
                 return exc
             finally:
                 for target in targets_:
                     if target.exists():
-                        target.write_text(original, encoding="utf-8")
+                        _write_like(target, original, pristine / rel)
 
         # (outcome, contended): contended runs had a neighbour.
         outcomes: List[Tuple[Any, bool]] = []

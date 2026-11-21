@@ -112,6 +112,9 @@ rm -rf "$BASE_INDEX_DIR"
 # Three-dot, so it is the merge-base against HEAD rather than a diff against a
 # base branch that may have moved -- the same range a pull request shows.
 #
+# --no-renames: a move written as "rename from/to" has no ---/+++ pair, so
+# the parser saw neither path and the path policy never ran on it (3.0.18).
+#
 # --no-color is not cosmetic: this file is parsed, not read. With
 # `color.ui=always` set anywhere in the caller's config, git pastes ANSI codes
 # into it and the test's grep for the added line stops matching -- the artefact
@@ -136,9 +139,9 @@ fi
 if git --attr-source="$EMPTY_TREE" version >/dev/null 2>&1; then
   ATTRS=(--attr-source="$EMPTY_TREE")
 fi
-git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-textconv --no-color "$BASE_SHA...HEAD" \
+git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-renames --no-textconv --no-color "$BASE_SHA...HEAD" \
   -- ':(exclude,glob)**/*.py' > "$DIFF_FILE"
-git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-textconv --text --no-color "$BASE_SHA...HEAD" \
+git ${ATTRS[@]+"${ATTRS[@]}"} -C "$WORKSPACE" diff --no-ext-diff --no-renames --no-textconv --text --no-color "$BASE_SHA...HEAD" \
   -- ':(glob)**/*.py' >> "$DIFF_FILE"
 if [ ! -s "$DIFF_FILE" ]; then
   echo "adversary-gate: warning: the diff is empty; the gate will see no changed lines" >&2

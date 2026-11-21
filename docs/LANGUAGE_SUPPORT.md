@@ -145,9 +145,10 @@ side. The convention is the table below with the pytest names stripped out:
 | Exit | Meaning | ExecState |
 | --- | --- | --- |
 | `0` | passed | `PASS` |
-| `1` | failed | `FAIL` — the only code that counts as evidence |
+| `1` | failed | `FAIL` — the code that counts as evidence |
 | `2`/`3`/`4` | the harness itself broke | `UNRUNNABLE` → `UNVERIFIED` |
-| timeout | gave up | `TIMED_OUT` → `UNVERIFIED` |
+| any other non-zero | neither a pass nor a failure | not evidence → `UNVERIFIED` |
+| timeout | gave up | `TIMED_OUT` → `UNVERIFIED`, except on the patch side when the baseline passed: a hang the patch introduced → `REFUTED` |
 
 `--test-id` is no longer required when `--test-command` is given: a suite that
 is one command has no node IDs to name, so the claim is labelled

@@ -274,6 +274,26 @@ def _copy_files(repo: Path, dest: Path, rels: Sequence[str]) -> None:
             shutil.copy2(source, target)
 
 
+def _fresh(path: Path) -> Path:
+    # ``path``, which nothing may have made yet: the coverage pass ran before it.
+    if os.path.lexists(path):
+        raise EvidenceError(f"{path.name} already exists in the scratch directory: something "
+                            "wrote there while the patch's tests ran")
+    return path
+
+
+def _snapshot(root: Path, rels: Sequence[str]) -> dict:
+    # What each of ``rels`` holds under ``root``: content hash, link target, or absent.
+    held = {}
+    for rel in rels:
+        path = root / rel
+        if path.is_symlink():
+            held[rel] = ("link", os.readlink(path))
+        elif path.is_file():
+            held[rel] = ("file", hashlib.sha256(path.read_bytes()).hexdigest())
+    return held
+
+
 def _private_index(repo: Path, workdir: Path) -> dict:
     """``GIT_INDEX_FILE`` for a copy of the index with no file hidden from git.
 
@@ -297,6 +317,13 @@ def _private_index(repo: Path, workdir: Path) -> dict:
         # One mark per call: given both, ``update-index`` applies only one.
         for flag in ("--no-assume-unchanged", "--no-skip-worktree"):
             _git(repo, "update-index", flag, "--", *hidden, env=env)
+    # git trusts a file whose size and times match its index entry, and checks
+    # its bytes only when the file is not older than the index itself. The
+    # copy is newer than the index git wrote, so a file rewritten in the same
+    # clock tick as ``git add``, at the same size, was in no diff -- one run
+    # in a hundred (3.0.18). Dated 1970, every entry the stat check passes is
+    # compared by content.
+    os.utime(index, (1, 1))
     return env
 
 
@@ -326,10 +353,7 @@ def prepare(
         raise EvidenceError(f"{base_ref!r} does not name a commit")
     object_format = _git(repo, "rev-parse", "--show-object-format").strip()
 
-    baseline = workdir / "baseline"
-    baseline.mkdir(parents=True)
-    _write_tree(repo, commit, baseline, object_format)
-
+    workdir.mkdir(parents=True, exist_ok=True)
     # --text only for Python files: `-diff` or `binary` in .gitattributes must not
     # hide their lines (C), but on an image --text writes bytes that are not text,
     # and decoding them stopped the run (a UnicodeDecodeError in 3.0.0). Read as
@@ -339,45 +363,61 @@ def prepare(
     # source leaves git's own content test: binary only with a NUL byte.
     attrs = ("--attr-source=" + _empty_tree(object_format),) if _attr_source_works(repo) else ()
     index = _private_index(repo, workdir)
-    diff_text = "".join(
-        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-textconv", *text,
-             "--no-color", commit, "--", pathspec, binary=True, env=index).decode("utf-8", "replace")
-        for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
-    )
     untracked = [
         line for line in _git(repo, "ls-files", "--others", "--exclude-standard", "-z", env=index).split("\0")
         if line and "__pycache__" not in line.split("/")
     ]
-    diff_text += "".join(_new_file_hunk(rel, repo / rel) for rel in sorted(untracked))
-    diff = workdir / "change.diff"
-    diff.write_text(diff_text, encoding="utf-8")
-
+    tracked = [
+        rel for rel in _git(repo, "ls-files", "--cached", "-z", env=index).split("\0") if rel
+    ]
+    # An untracked file's hunk is written here, not by git, so its name is not
+    # quoted: a newline in it wrote a second header line, and every line of a
+    # .py file was credited to the .md path before it (3.0.18).
+    odd = [rel for rel in untracked if any(ch < " " or ch == "\x7f" for ch in rel)]
+    if odd:
+        raise EvidenceError(f"an untracked file name holds a control character: {odd[0]!r}")
     # The patch side is what a commit would hold: the tracked files as they
     # are now and the untracked ones git does not ignore. Until 3.0.11 it was
     # the working tree itself, so a file kept out by .gitignore or
     # .git/info/exclude ran in every test yet was in no diff, no coverage and
     # no denylist -- and a MERGE judged code that would never be committed.
-    patch = workdir / "patch"
-    patch.mkdir()
-    tracked = [
-        rel for rel in _git(repo, "ls-files", "--cached", "-z", env=index).split("\0") if rel
-    ]
-    _copy_files(repo, patch, sorted(set(tracked) | set(untracked)))
+    rels = sorted(set(tracked) | set(untracked))
+    # Taken before the diff: the tree the gate judges must be the one the diff
+    # describes, so every file is checked against this after it is copied.
+    snapshot = _snapshot(repo, rels)
+    diff_text = "".join(
+        # --no-renames: a move written as "rename from/to" has no ---/+++ pair,
+        # so the parser saw neither path and the path policy never ran on it.
+        _git(repo, *attrs, "-c", "color.ui=never", "diff", "--no-ext-diff", "--no-renames", "--no-textconv", *text,
+             "--no-color", commit, "--", pathspec, binary=True, env=index).decode("utf-8", "replace")
+        for text, pathspec in (((), ":(exclude,glob)**/*.py"), (("--text",), ":(glob)**/*.py"))
+    )
+    diff_text += "".join(_new_file_hunk(rel, repo / rel) for rel in sorted(untracked))
 
     coverage_path: Optional[Path] = None
+    measured: Optional[Path] = None
     if coverage:
-        rc = workdir / "coveragerc"
-        rc.write_text("[run]\ndynamic_context = test_function\n")
-        coverage_path = workdir / "coverage.json"
         # The patch's tests run here, before the gate does, so under the same
         # boundary as the gate's own runs: the operator's sandbox, the runner's
         # resource limits and its scrubbed environment. Until 3.0.7 this was a
         # bare subprocess with the server's whole environment, outside
         # ``--sandbox bwrap``. CPU time and memory are not capped, as for the
-        # gate's full-suite run; the data file is the one path outside the
-        # repository the run may write.
+        # gate's full-suite run.
+        # What this run can write is suspect afterwards. Until 3.0.18 it ran in
+        # the tree the gate then judged, with the whole scratch directory
+        # writable -- the baseline and the diff included, under bwrap too -- so
+        # a test could rewrite the oracle or the code before the gate read
+        # them. It gets a copy of the tree and one empty directory for its
+        # data; the baseline, the diff and the judged tree are written after it.
+        measured = workdir / "coverage-run" / "tree"
+        out = workdir / "coverage-run" / "out"
+        measured.mkdir(parents=True)
+        out.mkdir()
+        _copy_files(repo, measured, rels)
+        rc = out / "coveragerc"
+        rc.write_text("[run]\ndynamic_context = test_function\n")
         env = {
-            "COVERAGE_FILE": str(workdir / ".coverage"),
+            "COVERAGE_FILE": str(out / ".coverage"),
             "COVERAGE_RCFILE": str(rc),
             # No __pycache__ left behind in somebody else's working tree.
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -385,33 +425,49 @@ def prepare(
         command = shlex.join([python, "-m", "coverage", "run", "--rcfile", str(rc), "-m", "pytest",
                               "-q", "-p", "no:cacheprovider", *pytest_args])
         try:
-            run = run_test(patch, "", command=command, sandbox=sandbox, python=python, env=env,
+            run = run_test(measured, "", command=command, sandbox=sandbox, python=python, env=env,
                            timeout_seconds=timeout, cpu_seconds=None, mem_bytes=None,
                            file_bytes=_COVERAGE_FILE_BYTES, open_files=4096,
                            require_network_isolation=require_network_isolation,
-                           writable=[workdir])
+                           writable=[out])
         except (RuntimeError, ValueError) as exc:
             raise EvidenceError(f"the coverage pass could not run under the policy: {exc}") from exc
         if run.timed_out:
             raise EvidenceError(f"the coverage pass ran past {timeout} s")
         if "No module named coverage" in run.stderr:
             raise EvidenceError(f"coverage.py is not installed for {python}")
+
+    baseline, diff, patch, extract = (_fresh(workdir / name)
+                                      for name in ("baseline", "change.diff", "patch", "extract"))
+    baseline.mkdir()
+    _write_tree(repo, commit, baseline, object_format)
+    diff.write_text(diff_text, encoding="utf-8")
+    patch.mkdir()
+    _copy_files(repo, patch, rels)
+    if _snapshot(patch, rels) != snapshot:
+        raise EvidenceError("the working tree changed while the evidence was taken (a test of the "
+                            "coverage pass, or another writer): the diff no longer describes it")
+
+    if measured is not None:
         # Not ``coverage json --show-contexts``: it writes every line of every
         # measured file with every test that ran it -- on more-itertools 193 s
         # and 312 MB, for a report of which discovery and diff coverage read
         # the changed lines only. Read those from the database instead.
-        wanted = workdir / "changed-lines.json"
+        extract.mkdir()
+        wanted = extract / "changed-lines.json"
         wanted.write_text(json.dumps({
             path: sorted(lines) for path, lines in validate_diff(diff_text).items()
             if path.endswith(".py")
         }), encoding="utf-8")
+        coverage_path = workdir / "coverage.json"
         report = subprocess.run(
-            [python, "-c", _EXTRACT, str(workdir / ".coverage"), str(wanted),
-             str(patch), str(coverage_path)],
-            # Not from the repository: ``-c`` puts the working directory first
-            # on sys.path, and a ``json.py`` the patch added would run here, in
-            # the gate's own process, outside any sandbox.
-            cwd=workdir, capture_output=True, text=True, timeout=timeout,
+            [python, "-c", _EXTRACT, str(out / ".coverage"), str(wanted),
+             str(measured), str(coverage_path)],
+            # Not from the repository, nor from a directory the coverage pass
+            # could write: ``-c`` puts the working directory first on sys.path,
+            # and a ``json.py`` planted there would run here, in the gate's own
+            # process, outside any sandbox. A directory made after the pass.
+            cwd=extract, capture_output=True, text=True, timeout=timeout,
         )
         if report.returncode != 0 or not coverage_path.is_file():
             raise EvidenceError(
