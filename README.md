@@ -77,7 +77,7 @@ Before you paste:
 BASE=main                                         # or master: the commit before the agent's change
 W=$(mktemp -d)
 git worktree add -q --detach "$W/before" "$BASE"  # the baseline, exactly as committed
-git diff --no-ext-diff "$BASE" > "$W/changes.diff"  # baseline -> your working tree
+git diff --no-ext-diff --no-renames "$BASE" > "$W/changes.diff"  # baseline -> your working tree
 coverage run -m pytest -q; coverage json -q -o "$W/coverage.json"  # ';' not '&&': a failing test is the gate's to judge
 adversary-gate --baseline "$W/before" --patch . \
   --claim tests/test_shop.py::test_discount_never_negative \
@@ -141,7 +141,7 @@ stderr) are optional.
 Produce the two artefacts in your own pipeline, for example:
 
 ```bash
-git diff --no-ext-diff baseline...patch > changes.diff
+git diff --no-ext-diff --no-renames baseline...patch > changes.diff
 coverage json -o coverage.json          # after: coverage run -m pytest
 ```
 
@@ -336,7 +336,7 @@ What that does, and where each piece comes from:
 | Artefact | Derived from |
 |---|---|
 | `baseline` | `<base-sha>`'s tree through a private index (`read-tree` + `checkout-index`) — every file as committed, no worktree leftovers; not `git archive`, which applies the repository's export attributes (AG-044) |
-| `diff` | `git diff --no-ext-diff <base-sha>...HEAD` |
+| `diff` | `git diff --no-ext-diff --no-renames --no-textconv <base-sha>...HEAD`, with `--text` for the `.py` files; on git 2.40 and later, without the `.gitattributes` the pull request may carry |
 | `coverage-json` | `coverage-command`, run in the checkout under the gate's own boundary: the `sandbox` input, the minimal environment plus `pass-env`/`env`, and one fresh writable directory outside the repository (until 3.0.7 it ran as a bare shell step with the job's whole environment) |
 | `patch` | the checkout itself |
 
@@ -348,14 +348,14 @@ coverage.py on *your* interpreter — installed beside it, not into it, when it
 is missing. Override it to point at your own suite, or pass `coverage-json` to
 supply the artefact yourself.
 
-**Everything it derived is one `git diff` you could have run by hand.** When
+**Everything it derived is plain `git` and coverage.py you could run by hand.** When
 you would rather assemble it yourself — a monorepo, a generated diff, coverage
 from a non-coverage.py tool — pass the paths explicitly instead:
 
 ```yaml
       - name: Collect coverage evidence
         run: |
-          git diff --no-ext-diff ${{ github.event.pull_request.base.sha }}...HEAD > changes.diff
+          git diff --no-ext-diff --no-renames ${{ github.event.pull_request.base.sha }}...HEAD > changes.diff
           python -m pip install pytest coverage
           coverage run -m pytest
           coverage json -o coverage.json

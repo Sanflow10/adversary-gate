@@ -37,7 +37,10 @@ jobs:
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+      # v4.0.0 pins the actions/upload-artifact it calls to a commit SHA; v3.0.1
+      # names it by tag, and this repository allows only actions pinned by SHA.
+      # v4 leaves dotfiles out of the artifact; site/ has none.
+      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: site
 
