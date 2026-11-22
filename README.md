@@ -8,7 +8,23 @@
 > **High AI usage ≠ high confidence.** The cost of an agentic coding pipeline is
 > not the model's intelligence — it is the pipeline's self-deception.
 
-A fail-closed verification gate for patches written by AI coding agents. It runs your tests on the baseline and on the patch, mutation-tests only the lines the patch wrote, and answers `MERGE`, `BLOCK` or `INCONCLUSIVE` — where **uncertainty is a first-class result** instead of a silent approval. CLI, GitHub Action and MCP server.
+Coding agents write code that looks right, and CI goes green. Green can mean
+less than it looks: the test that should catch the bug may never have run, may
+have been skipped, or may have been rewritten to agree with the bug. A pipeline
+that reads "no failure" as "pass" merges the patch anyway.
+
+AdversaryGate is a check that runs before the merge. It runs the tests on the
+code before the change (the **baseline**) and on the change (the **patch**): a
+test that fails on the baseline and passes on the patch proves the fix, and a
+test that breaks on the patch blocks it. Then it breaks the lines the patch
+wrote on purpose, one small edit at a time (**mutants**), and checks that the
+tests notice. Tests that still pass on broken code are not checking that code.
+
+It answers `MERGE`, `BLOCK` or `INCONCLUSIVE`. When it could not measure
+something, the answer is `INCONCLUSIVE` with the reason, never a silent pass:
+that is what *fail-closed* means here. There is no LLM in the verifier: the
+same harness judges every patch, whichever model wrote it. CLI, GitHub Action
+and MCP server.
 
 **Python only, for now.** It measures Python/pytest repositories; on other stacks it runs your suite via `--test-command` but answers `INCONCLUSIVE`, never `MERGE` — see [Language support](docs/LANGUAGE_SUPPORT.md).
 
@@ -30,7 +46,7 @@ pip install adversary-gate
 | **B** | clean | none — never measured | `INCONCLUSIVE` | 2 |
 | **C** | clean | measured, both artefacts SHA-256'd | `MERGE` | 0 |
 
-That middle row is the whole product. An unproduced measurement is not a measurement, so it cannot clear a floor — and a number nobody can re-derive is an opinion with a false precision label.
+That middle row is the whole product: the gate does not pass what nobody measured.
 
 ```bash
 python3 demo/demo.py          # runs the three scenarios; exits non-zero if one regresses
@@ -40,12 +56,6 @@ python3 demo/render_gif.py    # rebuilds demo/demo.gif from the captured frames
 `demo/demo.py` is an **acceptance test**, not a screenshot: it builds the fixtures, runs the real CLI as a subprocess, reads the real exit codes, and fails if any of the three decisions changes. Its evidence artefacts are checked in under `demo/out/`.
 
 > **`INCONCLUSIVE` is not an error.** It is the gate saying *"I did not measure that"*, and it is exit 2 so CI treats it as "do not merge yet", not as "pass". See [How `diff_coverage` gets its value](docs/HOW_IT_DECIDES.md#how-diff_coverage-gets-its-value) for the one-step path from `INCONCLUSIVE` to `MERGE`.
-
----
-
-## 🎯 Why
-
-Agents write fluent, plausible code, and naive pipelines that collapse infrastructure errors into "pass" approve patches whose tests are broken, never ran, or were rewritten to agree with the bug. Switching models does not fix that; deterministic verification does. AdversaryGate puts no LLM in the verifier: the same harness judges every patch, whichever model wrote it, and when it did not measure something it says so instead of showing a green check.
 
 ---
 
@@ -96,29 +106,20 @@ git worktree remove --force "$W/before"
   Nothing is printed about it; the answer says which ran in
   `execution.sandbox` and `execution.sandbox_note`.
 
-On a correct **one-line** fix the first answer is usually `exit 2` with
-`every claim held and the fix is proven, but suite strength's lower bound is ...`.
-To measure the tests, the gate makes *mutants*: small deliberate breaks of the
-changed lines, each of which a good test should fail on. A one-line change gives
-one to three of them, and the floor (by default, a cautious lower bound of 0.75
-on the share the tests kill) takes at least 5. Then one of two things:
+On a correct **one-line** fix the first answer is often `exit 2`, and that is
+not a failure of the fix. The gate measures the tests with mutants, and by
+default it needs at least 5 of them killed; a one-line change gives one to
+three. The reason says which of two cases it is:
 
-- **Every mutant killed** (`1/1`, `3/3`): the reason ends with `the change is too
-  small to measure at this floor ...; see next_steps`. The fix is proven; a
-  person has to review the change (the Action's `small-change: review` passes
-  the step with a warning for that, so keep a required review on the branch).
-- **A mutant survived** (`0/3`, `2/3`): your test runs the line but does not
-  check what the break changed. `next_steps` names the line. For a fix to
-  `return max(0, price - price * pct / 100)`, `assert discount(100, 150) >= 0`
-  kills none of the three; `== 0` kills two (`price * pct * 100` is negative
-  too, and `max` hides it); adding `assert discount(100, 10) == 90` kills all
-  three. It has to be in a test you name with `--claim`: only those face the
-  mutants, so the same assertion in another test of the suite does not count.
-  Name more than one with `--claim` (see
-  [Which tests?](#which-tests-name-several-or-let-coverage-say)).
+- **Every mutant killed:** the fix is proven, but the change is too small to
+  measure. A person reviews it (the Action's `small-change: review` passes the
+  step with a warning for this case alone; keep a required review on the branch).
+- **A mutant survived:** your test runs the line but does not check what the
+  break changed, and `next_steps` names the line. Only the tests you name with
+  `--claim` face the mutants, so the assertion that kills it has to be in one of
+  them (see [Which tests?](#which-tests-name-several-or-let-coverage-say)).
 
-Neither is a failure of the fix. See
-[Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
+More in [Small changes](docs/HOW_IT_DECIDES.md#small-changes-why-a-correct-one-line-fix-is-inconclusive).
 
 ### Command-Line Usage
 
